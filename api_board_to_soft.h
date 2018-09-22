@@ -7,6 +7,28 @@
 
 #pragma once
 
+
+typedef struct __attribute__((packed))
+{
+	uint32_t a;
+	uint32_t b;
+	uint8_t  c;
+	uint16_t d;
+} test_msg1_t;
+
+typedef struct __attribute__((packed))
+{
+	uint8_t buf[1024];
+} test_msg2_t;
+
+typedef struct __attribute__((packed))
+{
+	uint8_t buf[40000];
+} test_msg3_t;
+
+
+#if 0
+
 #define TOF_FLAG_CERTAINTY_MASK 0b111
 
 typedef struct __attribute__((packed))
@@ -104,3 +126,5 @@ const board_to_soft_entry_t BOARD_TO_SOFT_MSGS[256] =
 	"3DTOF development data"
 #endif
 }
+
+#endif
