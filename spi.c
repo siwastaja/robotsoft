@@ -145,10 +145,15 @@ static int deinit_spi()
 // Correct type removes compiler warnings of the cast.
 typedef uint64_t spidev_buf_t;
 
-static int is_available()
+/*
+ < 0 error
+   0 no data available
+   1 data is available (*p_paylen set to reflect number of payload bytes available)
+*/
+static int is_available(int* p_paylen)
 {
 	struct spi_ioc_transfer xfer;
-	struct response { uint16_t header; uint16_t reserved1; uint32_t reserved2;} __attribute__((packed)) response;
+	b2s_header_t response;
 
 	memset(&xfer, 0, sizeof(xfer)); // unused fields need to be initialized zero.
 	//xfer.tx_buf left at NULL - documented spidev feature to send out zeroes - we don't have anything to send, just want to get what the sensor wants to send us!
@@ -164,50 +169,74 @@ static int is_available()
 
 //	printf("avail response: header=0x%04x, res1=0x%04x, res2=0x%08x\n", response.header, response.reserved1, response.reserved2);
 
-	if((response.header & 0xff00) == 0)
+	if((response.magic & 0xff00) == 0)
 	{
-		if(response.reserved1 != 0 || response.reserved2 != 0)
-		{
-			printf("WARN: Corrupted \"no data available\" message, header=0x%04x, res1=0x%04x, res2=0x%08x\n", response.header, response.reserved1, response.reserved2);
-		}
-		return 0;
+		return 0; // no data avail
 	}
-	else if(response.header != 0xabcd)
+	else if(response.magic != 0xabcd)
 	{
-		printf("ERROR: Illegal header in the SPI message: header=0x%04x\n", response.header);
+		printf("ERROR: Illegal magic number in the SPI message header: 0x%04x\n", response.magic);
 		return -1;
 	}
 	else
 	{
+		*p_paylen = response.payload_len;
 		return 1;
 	}
 }
 
-#define MAX_SPI_FRAME_LEN 65536 // Keep sanely aligned for best cache performance
+#define MAX_SPI_FRAME_LEN 65536  // Keep sanely aligned for best cache performance
 
 #define SPI_RX_FIFO_DEPTH 32
+//#define SPI_TX_FIFO_DEPTH 8
 
 static uint8_t spi_rx_fifo[SPI_RX_FIFO_DEPTH][MAX_SPI_FRAME_LEN];
 
 static int rx_fifo_wr;
 static int rx_fifo_rd;
 
-static int spi_rx_frame_len = 1000; // depends on subscriptions
+//static uint8_t spi_tx_fifo[SPI_TX_FIFO_DEPTH][MAX_SPI_FRAME_LEN];
 
+//static int tx_fifo_wr;
+//static int tx_fifo_rd;
+
+
+static int cur_tx_frame_offs;
 static uint8_t spi_tx_frame[MAX_SPI_FRAME_LEN];
 
-static int spi_tx_frame_len = 1000;
+/*
+	Allocates space from the tx frame, giving a pointer to the area reserved for the
+	command-specific struct.
+*/
+void* spi_init_cmd(uint8_t msgid)
+{
+	if(!p_p_s2b_msgs[msgid])
+	{
+		printf("ERROR: spi_init_cmd tries to initialize a non-existing message id (msgid=%u)\n", msgid);
+		return NULL;
+	}
+	int size = s2b_msg_sizes[msgid];
 
+	int next_start = cur_tx_frame_offs + sizeof(s2b_cmdheader_t) + size;
 
-#define SUBS_START_OFFSET 16
-#define FOOTER_LEN 4
+	if(next_start > RX_MAX_LEN)
+	{
+		printf("ERROR: spi_init_cmd ran out of max RX buffer length (msgid=%u, size=%u, cur offset=%u, would end at=%u.\n", msgid, size, cur_tx_frame_offs, next_start);
+		return NULL;
+	}
 
-// Enabled subscriptions, 1 bit per message ID, [0] LSb = id0, [0] MSb = id63, [1] LSb = id64, and so on:
-uint64_t subs[4];
+	return &spi_tx_frame[cur_tx_frame_offs+sizeof(s2b_cmdheader_t)];
+}
+
+int spi_queue_cmd()
+{
+
+}
+
 
 uint8_t* p_footer;
 
-static void update_subs(uint64_t *subs_vector)
+static void update_expected_subs(uint64_t *subs_vector)
 {
 	for(int i=0; i<256; i++)
 	{
@@ -242,9 +271,8 @@ static void update_subs(uint64_t *subs_vector)
 
 	p_footer = &tx_fifo[i][offs];
 	spi_rx_frame_len = offs + FOOTER_LEN;
-	printf("INFO: Updated subscriptions, spi_rx_frame_len=%d\n", spi_rx_frame_len);
+	printf("INFO: Updated expected subscriptions, spi_rx_frame_len=%d\n", spi_rx_frame_len);
 }
-
 
 
 uint8_t* spi_rx_pop()
@@ -257,14 +285,19 @@ uint8_t* spi_rx_pop()
 	return ret;
 }
 
-static int transact()
+/*
+< 0 error
+  0 transaction ok, no more data on the FIFO
+  1 transaction ok, more data on the FIFO that can be read right away, p_paylen is set to reflect the number of payload bytes of the next transaction
+*/
+static int transact(int len)
 {
 	struct spi_ioc_transfer xfer;
 
 	memset(&xfer, 0, sizeof(xfer)); // unused fields need to be initialized zero.
 	xfer.tx_buf = (spidev_buf_t)spi_tx_frame;
 	xfer.rx_buf = (spidev_buf_t)spi_rx_fifo[rx_fifo_wr];
-	xfer.len = (spi_rx_frame_len>spi_tx_frame_len)?spi_rx_frame_len:spi_tx_frame_len;
+	xfer.len = len;
 
 	if(ioctl(spi_fd, SPI_IOC_MESSAGE(1), &xfer) < 0)
 	{
@@ -281,26 +314,24 @@ static int transact()
 	}
 	printf("\n");
 */
-	uint16_t header = *(uint16_t*)&spi_rx_fifo[rx_fifo_wr][0];
-	uint8_t  fifo_flags = *(uint8_t*)&spi_rx_fifo[rx_fifo_wr][2];
 
-//	printf("header=%04x fifo_flags=%02x\n", header, fifo_flags);
+	b2s_header_t p_header = (b2s_header_t*)&spi_rx_fifo[rx_fifo_wr][0];
 
-	if((header & 0xff00) == 0)
+	if((p_header->magic & 0xff00) == 0)
 	{
 		printf("ERROR: RobotBoard SPI comms returned \"no data available\" message, when data was supposedly available\n");
 		return -1;
 	}
-	else if(header != 0xabcd)
+	else if(p_header->magic != 0xabcd)
 	{
-		printf("ERROR: Illegal header in the SPI message: header=0x%04x\n", header);
+		printf("ERROR: Illegal header in the SPI message: magic=0x%04x\n", p_header->magic);
 		return -1;
 	}
 	else
 	{
 		rx_fifo_wr++; if(rx_fifo_wr >= SPI_RX_FIFO_DEPTH) rx_fifo_wr = 0;
 
-		if(fifo_flags&1) // Next read WILL give next FIFO item - no polling necessary.
+		if(p_header->fifo_status&1) // Next read WILL give the next FIFO item - no polling necessary.
 			return 1;
 
 		return 0;
@@ -326,11 +357,30 @@ void* spi_comm_thread()
 			continue;
 		}
 
-		int avail = is_available();
+		int paylen = -1;
+		int avail = is_available(&paylen);
 		if(avail > 0)
 		{
+			// Polling told us we will get this much data by calling transact():
+			int rxlen = paylen+B2S_TOTAL_OVERHEAD;
+
+			int txlen = 0;
+			// Do we have something to send as well? Let's do it on the same pass.
+			if(tx_fifo_wr != tx_fifo_rd)
+			{
+			
+				txlen = spi_tx_frame_len+S2B_TOTAL_OVERHEAD;
+			}
+
+
+
+			// Transfer needs to be long enough to account for tx and rx sides, whichever is longer:
+			int len = (txlen>rxlen)?txlen:rxlen;
+
+			// Read as many packets as the RobotBoard wants to give.
+			// These no-polling-inbetween multipackets are guaranteed to be of same length.
 			int timeout = 16;
-			while(transact() == 1)
+			while(transact(len) == 1)
 			{
 				if(timeout-- == 0)
 				{
@@ -343,7 +393,7 @@ void* spi_comm_thread()
 		}
 		else if(avail < 0)
 		{
-			// Error condition
+			// Error condition, let's hope it gets resolved by waiting.
 			sleep(1);
 		}
 		else

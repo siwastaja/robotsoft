@@ -32,6 +32,28 @@
 #endif
 
 
+#define B2S_MAX_LEN 55000
+
+
+#define B2S_MAX_MSGIDS 128
+#if (B2S_MAX_MSGIDS%64 != 0)
+#error "B2S_MAX_MSGIDS must be multiple of 64"
+#endif
+
+#define B2S_SUBS_U64_ITEMS (B2S_MAX_MSGIDS/64)
+#define B2S_SUBS_LEN (B2S_SUBS_U64_ITEMS*8)
+
+#define HEADER_LEN 8
+#define SUBS_START_OFFSET (HEADER_LEN+B2S_SUBS_LEN)
+#define FOOTER_LEN 4
+
+#define B2S_TOTAL_OVERHEAD (HEADER_LEN+B2S_SUBS_LEN+FOOTER_LEN)
+
+#if (HEADER_LEN%8 != 0)
+#error "HEADER_LEN must be multiple of 8"
+#endif
+
+
 typedef struct __attribute__((packed))
 {
 	uint32_t a;
@@ -51,6 +73,27 @@ typedef struct __attribute__((packed))
 } test_msg3_t;
 
 
+
+typedef struct __attribute__((packed))
+{
+	/*
+		magic:
+		for "no data avail": 0x00?? little endian (? = don't care)
+		when data is available: 0xabcd little endian
+	*/
+	uint16_t magic;
+
+	/*
+		fifo_status:
+		bit0: fifo occupancy more than 1 (if you are getting this with a full read, you are guaranteed to
+		      be able to do another full read with another packet, without needing to poll inbetween)
+		rest: reserved
+	*/
+	uint8_t fifo_status;
+	uint8_t reserved1;
+	uint16_t payload_len; // in bytes, not including header, subscription list and footer
+	uint16_t reserved2;
+} b2s_header_t;
 
 /*
 	The pointers
@@ -88,7 +131,7 @@ Only the .c module responsible of handling the data needs to know about these ta
 */
 
 #ifdef DEFINE_API_VARIABLES
-void * * const p_p_tx_msgs[256]  =
+void * * const p_p_b2s_msgs[B2S_MAX_MSGIDS]  =
 {
 	0,
 	(void**)&test_msg1,
@@ -97,7 +140,7 @@ void * * const p_p_tx_msgs[256]  =
 	0
 };
 
-uint16_t const tx_msg_sizes[256] =
+uint16_t const b2s_msg_sizes[B2S_MAX_MSGIDS] =
 {
 	0,
 	sizeof(test_msg1_t),
