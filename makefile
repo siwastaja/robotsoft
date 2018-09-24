@@ -4,7 +4,7 @@
 # and run:
 # ./robotsoft
 
-DEVIP = 192.168.1.5
+DEVIP = 192.168.1.6
 
 CC = gcc
 LD = gcc
@@ -39,5 +39,5 @@ cp:
 	scp *.c *.h makefile $(DEVIP):~/robotsoft_dev
 
 e:
-	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
+	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h boardmon.c `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
 
