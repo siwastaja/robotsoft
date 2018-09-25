@@ -49,6 +49,7 @@
 
 #define DEFINE_API_VARIABLES
 #include "api_board_to_soft.h"
+#include "api_soft_to_board.h"
 #undef DEFINE_API_VARIABLES
 
 
@@ -167,7 +168,7 @@ static int is_available(int* p_paylen)
 		return -1;
 	}
 
-//	printf("avail response: header=0x%04x, res1=0x%04x, res2=0x%08x\n", response.header, response.reserved1, response.reserved2);
+//	printf("avail response: magic=0x%04x, fifo_status=0x%02x, payload_len=%u\n", response.magic, response.fifo_status, response.payload_len);
 
 	if((response.magic & 0xff00) == 0)
 	{
@@ -190,10 +191,13 @@ static int is_available(int* p_paylen)
 #define SPI_RX_FIFO_DEPTH 32
 //#define SPI_TX_FIFO_DEPTH 8
 
-static uint8_t spi_rx_fifo[SPI_RX_FIFO_DEPTH][MAX_SPI_FRAME_LEN];
+#define BIGGER_BUF_LEN B2S_MAX_LEN
+static uint8_t spi_rx_fifo[SPI_RX_FIFO_DEPTH][BIGGER_BUF_LEN];
 
 static int rx_fifo_wr;
 static int rx_fifo_rd;
+
+static uint8_t spi_tx_frame[BIGGER_BUF_LEN];
 
 //static uint8_t spi_tx_fifo[SPI_TX_FIFO_DEPTH][MAX_SPI_FRAME_LEN];
 
@@ -202,7 +206,47 @@ static int rx_fifo_rd;
 
 
 static int cur_tx_frame_offs;
-static uint8_t spi_tx_frame[MAX_SPI_FRAME_LEN];
+
+volatile int send_pending;
+
+int spi_init_cmd_queue();
+void* spi_init_cmd(uint8_t msgid);
+int spi_send_queue();
+
+
+int subscribe_to(uint64_t* subs_vector)
+{
+	if(send_pending)
+		return 1;
+
+	if(spi_init_cmd_queue() < 0)
+		return -1;
+
+	s2b_subscribe_t *p_msg = spi_init_cmd(CMD_SUBSCRIBE);
+
+	if(!p_msg)
+		return -1;
+
+	memcpy(p_msg->subs_vector, subs_vector, sizeof(uint64_t)*B2S_SUBS_U64_ITEMS);
+	spi_send_queue();
+
+	return 0;
+}
+
+int spi_init_cmd_queue()
+{
+	if(send_pending)
+	{
+		printf("WARN: spi_init_cmd: send is already pending.\n");
+		return -1;
+	}
+
+	((s2b_header_t*)spi_tx_frame)->magic = 0x2345;
+	((s2b_header_t*)spi_tx_frame)->n_cmds = 0;
+	cur_tx_frame_offs = S2B_HEADER_LEN;
+	return 0;
+}
+
 
 /*
 	Allocates space from the tx frame, giving a pointer to the area reserved for the
@@ -210,6 +254,12 @@ static uint8_t spi_tx_frame[MAX_SPI_FRAME_LEN];
 */
 void* spi_init_cmd(uint8_t msgid)
 {
+	if(send_pending)
+	{
+		printf("WARN: spi_init_cmd: send is already pending.\n");
+		return NULL;
+	}
+
 	if(!p_p_s2b_msgs[msgid])
 	{
 		printf("ERROR: spi_init_cmd tries to initialize a non-existing message id (msgid=%u)\n", msgid);
@@ -219,59 +269,36 @@ void* spi_init_cmd(uint8_t msgid)
 
 	int next_start = cur_tx_frame_offs + sizeof(s2b_cmdheader_t) + size;
 
-	if(next_start > RX_MAX_LEN)
+	if(next_start > S2B_MAX_LEN)
 	{
 		printf("ERROR: spi_init_cmd ran out of max RX buffer length (msgid=%u, size=%u, cur offset=%u, would end at=%u.\n", msgid, size, cur_tx_frame_offs, next_start);
 		return NULL;
 	}
 
-	return &spi_tx_frame[cur_tx_frame_offs+sizeof(s2b_cmdheader_t)];
+	void* ret = &spi_tx_frame[cur_tx_frame_offs+sizeof(s2b_cmdheader_t)];
+
+	printf("spi_init_cmd offset before=%d ", cur_tx_frame_offs);
+
+	((s2b_cmdheader_t*)&spi_tx_frame[cur_tx_frame_offs])->msgid=msgid;
+	((s2b_cmdheader_t*)&spi_tx_frame[cur_tx_frame_offs])->paylen=size;
+
+	cur_tx_frame_offs = next_start;
+	((s2b_header_t*)spi_tx_frame)->n_cmds++;
+
+
+	printf(" after=%d\n", cur_tx_frame_offs);
+
+	return ret;
 }
 
-int spi_queue_cmd()
+int spi_send_queue()
 {
-
-}
-
-
-uint8_t* p_footer;
-
-static void update_expected_subs(uint64_t *subs_vector)
-{
-	for(int i=0; i<256; i++)
-	{
-		if(p_p_tx_msgs[i])
-			*p_p_tx_msgs[i] = 0;
-	}
-
-	int offs = SUBS_START_OFFSET;
-
-	for(int i=0; i<4; i++)
-	{
-		subs[i] = 0;
-		uint64_t t = subs_vector[i];
-		for(int s=i*64; s<(i+1)*64; s++)
-		{
-			if(t & 1)
-			{
-				// id #s is enabled
-				if(offs + tx_msg_sizes[s] > TX_MAX_LEN-TX_FOOTER_LEN)
-				{
-					// requested subscription doesn't fit: stop adding subscriptions.
-					break;
-				}
-
-				subs[i] |= 1ULL<<(s-i*64);
-				*p_p_tx_msgs[s] = tx_fifo[tx_fifo_cpu] + offs;
-				offs += tx_msg_sizes[s];
-			}
-			t >>= 1;
-		}
-	}
-
-	p_footer = &tx_fifo[i][offs];
-	spi_rx_frame_len = offs + FOOTER_LEN;
-	printf("INFO: Updated expected subscriptions, spi_rx_frame_len=%d\n", spi_rx_frame_len);
+	printf("spi_send_queue()\n");
+	for(int i=0; i<16; i++)
+		printf("%02x ", spi_tx_frame[i]);
+	printf("\n");
+	send_pending = 1;
+	return 0;
 }
 
 
@@ -290,12 +317,13 @@ uint8_t* spi_rx_pop()
   0 transaction ok, no more data on the FIFO
   1 transaction ok, more data on the FIFO that can be read right away, p_paylen is set to reflect the number of payload bytes of the next transaction
 */
-static int transact(int len)
+
+static int transact(int len, int send)
 {
 	struct spi_ioc_transfer xfer;
 
 	memset(&xfer, 0, sizeof(xfer)); // unused fields need to be initialized zero.
-	xfer.tx_buf = (spidev_buf_t)spi_tx_frame;
+	xfer.tx_buf = send?((spidev_buf_t)spi_tx_frame):0;
 	xfer.rx_buf = (spidev_buf_t)spi_rx_fifo[rx_fifo_wr];
 	xfer.len = len;
 
@@ -304,6 +332,8 @@ static int transact(int len)
 		printf("ERROR: spi ioctl transfer operation failed: %d (%s)\n", errno, strerror(errno));
 		return -1;
 	}
+
+	if(send) printf("Transact() with send!\n");
 
 /*
 	printf("\n");
@@ -315,7 +345,7 @@ static int transact(int len)
 	printf("\n");
 */
 
-	b2s_header_t p_header = (b2s_header_t*)&spi_rx_fifo[rx_fifo_wr][0];
+	b2s_header_t *p_header = (b2s_header_t*)&spi_rx_fifo[rx_fifo_wr][0];
 
 	if((p_header->magic & 0xff00) == 0)
 	{
@@ -365,14 +395,13 @@ void* spi_comm_thread()
 			int rxlen = paylen+B2S_TOTAL_OVERHEAD;
 
 			int txlen = 0;
+			int send = 0;
 			// Do we have something to send as well? Let's do it on the same pass.
-			if(tx_fifo_wr != tx_fifo_rd)
+			if(send_pending)
 			{
-			
-				txlen = spi_tx_frame_len+S2B_TOTAL_OVERHEAD;
+				send = 1;
+				txlen = cur_tx_frame_offs;
 			}
-
-
 
 			// Transfer needs to be long enough to account for tx and rx sides, whichever is longer:
 			int len = (txlen>rxlen)?txlen:rxlen;
@@ -380,8 +409,9 @@ void* spi_comm_thread()
 			// Read as many packets as the RobotBoard wants to give.
 			// These no-polling-inbetween multipackets are guaranteed to be of same length.
 			int timeout = 16;
-			while(transact(len) == 1)
+			while(transact(len, send) == 1)
 			{
+				send = 0;
 				if(timeout-- == 0)
 				{
 					printf("ERROR: RobotBoard keeps reporting more readable content on FIFO over and over again, which is impossible.\n");
@@ -389,6 +419,7 @@ void* spi_comm_thread()
 					break;
 				}
 			}
+			send_pending = 0;
 			usleep(10000);
 		}
 		else if(avail < 0)

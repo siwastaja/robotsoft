@@ -3,12 +3,17 @@
 /*
 	robotsoft -> robotboard SPI messages
 
-	First 4 bytes: header
+	First 8 bytes: header
 
 		u32 little endian 0x9876fedb: 	Reserved maintenance magic code (runs the flasher)
+		u32 don't care
+
+		OR
+
 		u16 little endian 0x2345:     	Packet will include something (don't ignore it)
-			u8:			Reserved
-			u8: # of commands	Number of command messages in the packet
+		u8: Reserved
+		u8: # of commands		Number of command messages in the packet
+		u32 Reserved
 
 	Then: The commands. Each one has a 4-byte header:
 		u8: msgid			Message id (what the command is about)
@@ -22,6 +27,13 @@
 #define S2B_HEADER_LEN 8
 #define S2B_TOTAL_OVERHEAD (S2B_HEADER_LEN)
 
+typedef struct __attribute__((packed))
+{
+	uint16_t magic;
+	uint8_t reserved1;
+	uint8_t n_cmds;
+	uint32_t reserved2;
+} s2b_header_t;
 
 typedef struct __attribute__((packed))
 {
@@ -32,13 +44,14 @@ typedef struct __attribute__((packed))
 
 
 
-
+#define CMD_SUBSCRIBE 1
 typedef struct __attribute__((packed))
 {
-	uint64_t subs_vector[4]; // 1 bit per message ID (1 = on, 0 = off), [0] LSb = id0, [0] MSb = id63, [1] LSb = id64, and so on.
+	uint64_t subs_vector[B2S_SUBS_U64_ITEMS]; // 1 bit per message ID (1 = on, 0 = off), [0] LSb = id0, [0] MSb = id63, [1] LSb = id64, and so on.
 
 } s2b_subscribe_t;
 
+#define CMD_MOVE_REL 2
 typedef struct __attribute__((packed))
 {
 	int32_t dx;

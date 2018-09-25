@@ -4,7 +4,7 @@
 # and run:
 # ./robotsoft
 
-DEVIP = 192.168.1.6
+DEVIP = 192.168.1.3
 
 CC = gcc
 LD = gcc
@@ -12,7 +12,7 @@ LD = gcc
 ROBOTSOFT_OBJ = main.o tcp_comm.o tpc_parser.o spi.o
 BOARDMON_OBJ = boardmon.o spi.o
 
-CFLAGS = -Wall -Winline -std=c99
+CFLAGS = -Wall -Winline -std=c99 -DROBOTSOFT
 
 CFLAGS += -g
 

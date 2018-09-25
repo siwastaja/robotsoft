@@ -44,7 +44,8 @@
 #define B2S_SUBS_LEN (B2S_SUBS_U64_ITEMS*8)
 
 #define HEADER_LEN 8
-#define SUBS_START_OFFSET (HEADER_LEN+B2S_SUBS_LEN)
+#define SUBLIST_START_OFFSET (HEADER_LEN)
+#define MSGS_START_OFFSET (HEADER_LEN+B2S_SUBS_LEN)
 #define FOOTER_LEN 4
 
 #define B2S_TOTAL_OVERHEAD (HEADER_LEN+B2S_SUBS_LEN+FOOTER_LEN)
@@ -62,15 +63,71 @@ typedef struct __attribute__((packed))
 	uint16_t d;
 } test_msg1_t;
 
+void print_test_msg1(void* m)
+#ifdef DEFINE_API_VARIABLES
+{
+	test_msg1_t* mm = m;
+	printf("a =%u  b =%u  c=%u  d=%u\n", mm->a, mm->b, mm->c, mm->d);
+}
+#else
+;
+#endif
+
 typedef struct __attribute__((packed))
 {
 	uint8_t buf[1024];
 } test_msg2_t;
 
+void print_test_msg2(void* m)
+#ifdef DEFINE_API_VARIABLES
+{
+	test_msg2_t* mm = m;
+
+	int i;
+	for(i=0; i < sizeof(mm->buf); i++)
+	{
+		printf("%02x", mm->buf[i]);
+		if(i%4 == 3) printf(" ");
+		if(i%16 == 15) printf(" ");
+		if(i%32 == 31) printf("\n");
+	}
+	printf("\n");
+}
+#else
+;
+#endif
+
 typedef struct __attribute__((packed))
 {
 	uint8_t buf[40000];
 } test_msg3_t;
+void print_test_msg3(void* m)
+#ifdef DEFINE_API_VARIABLES
+{
+	test_msg3_t* mm = m;
+
+	int i;
+	for(i=0; i < 256; i++)
+	{
+		printf("%02x", mm->buf[i]);
+		if(i%4 == 3) printf(" ");
+		if(i%16 == 15) printf(" ");
+		if(i%32 == 31) printf("\n");
+	}
+	printf("\n...\n");
+	for(i=sizeof(mm->buf)-256; i < sizeof(mm->buf); i++)
+	{
+		printf("%02x", mm->buf[i]);
+		if(i%4 == 3) printf(" ");
+		if(i%16 == 15) printf(" ");
+		if(i%32 == 31) printf("\n");
+	}
+	printf("\n");
+
+}
+#else
+;
+#endif
 
 
 
@@ -95,6 +152,17 @@ typedef struct __attribute__((packed))
 	uint16_t reserved2;
 } b2s_header_t;
 
+typedef struct __attribute__((packed))
+{
+	uint16_t magic;
+	uint8_t fifo_status;
+	uint8_t reserved1;
+	uint16_t payload_len; // in bytes, not including header, subscription list and footer
+	uint16_t reserved2;
+	uint64_t subs[B2S_SUBS_U64_ITEMS];
+} b2s_header_and_subs_t;
+
+
 /*
 	The pointers
 */
@@ -103,6 +171,30 @@ MAYBE_EXTERN test_msg1_t* test_msg1;
 MAYBE_EXTERN test_msg2_t* test_msg2;
 MAYBE_EXTERN test_msg3_t* test_msg3;
 
+
+
+#ifdef ROBOTSOFT
+typedef struct
+{
+	char *name;
+	char *comment;
+	void (*p_print)(void*);
+} b2s_meta_t;
+
+#ifdef DEFINE_API_VARIABLES
+const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS] =
+{
+	{},
+	{"test_msg1", "Test message 1", &print_test_msg1},
+	{"test_msg2", "Test message 2", &print_test_msg2},
+	{"test_msg3", "Test message 3", &print_test_msg3},
+	{}
+};
+#else
+extern const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS];
+#endif
+
+#endif
 
 
 /*
@@ -139,7 +231,11 @@ void * * const p_p_b2s_msgs[B2S_MAX_MSGIDS]  =
 	(void**)&test_msg3,
 	0
 };
+#else
+extern void * * const p_p_b2s_msgs[B2S_MAX_MSGIDS];
+#endif
 
+#ifdef DEFINE_API_VARIABLES
 uint16_t const b2s_msg_sizes[B2S_MAX_MSGIDS] =
 {
 	0,
@@ -148,6 +244,8 @@ uint16_t const b2s_msg_sizes[B2S_MAX_MSGIDS] =
 	sizeof(test_msg3_t),
 	0
 };
+#else
+extern uint16_t const b2s_msg_sizes[B2S_MAX_MSGIDS];
 #endif
 
 
