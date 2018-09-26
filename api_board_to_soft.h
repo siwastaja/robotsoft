@@ -63,6 +63,7 @@ typedef struct __attribute__((packed))
 	uint16_t d;
 } test_msg1_t;
 
+#ifdef ROBOTSOFT
 void print_test_msg1(void* m)
 #ifdef DEFINE_API_VARIABLES
 {
@@ -72,12 +73,14 @@ void print_test_msg1(void* m)
 #else
 ;
 #endif
+#endif
 
 typedef struct __attribute__((packed))
 {
 	uint8_t buf[1024];
 } test_msg2_t;
 
+#ifdef ROBOTSOFT
 void print_test_msg2(void* m)
 #ifdef DEFINE_API_VARIABLES
 {
@@ -96,11 +99,14 @@ void print_test_msg2(void* m)
 #else
 ;
 #endif
+#endif
 
 typedef struct __attribute__((packed))
 {
 	uint8_t buf[40000];
 } test_msg3_t;
+
+#ifdef ROBOTSOFT
 void print_test_msg3(void* m)
 #ifdef DEFINE_API_VARIABLES
 {
@@ -127,6 +133,7 @@ void print_test_msg3(void* m)
 }
 #else
 ;
+#endif
 #endif
 
 
