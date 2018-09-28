@@ -33,10 +33,10 @@ void* main_thread()
 		{
 			printf("Got something! Messages:\n");
 
-			int offs = sizeof(b2s_header_and_subs_t);
+			int offs = sizeof(b2s_header_t);
 			for(int i=0; i<B2S_SUBS_U64_ITEMS; i++)
 			{
-				uint64_t t = ((b2s_header_and_subs_t*)p_data)->subs[i];
+				uint64_t t = ((b2s_header_t*)p_data)->subs[i];
 				for(int s=i*64; s<(i+1)*64; s++)
 				{
 					if(t & 1)
@@ -44,7 +44,7 @@ void* main_thread()
 						// id #s is enabled
 						printf("msgid=%u  name=%s  comment=%s\n", s, b2s_meta[s].name, b2s_meta[s].comment);
 						b2s_meta[s].p_print(&p_data[offs]);
-						offs += b2s_msg_sizes[s];
+						offs += b2s_msgs[s].size;
 					}
 					t >>= 1;
 				}
