@@ -157,17 +157,8 @@ typedef struct __attribute__((packed))
 	uint8_t reserved1;
 	uint16_t payload_len; // in bytes, not including header, subscription list and footer
 	uint16_t reserved2;
+	uint64_t subs[B2S_SUBS_U64_ITEMS];	
 } b2s_header_t;
-
-typedef struct __attribute__((packed))
-{
-	uint16_t magic;
-	uint8_t fifo_status;
-	uint8_t reserved1;
-	uint16_t payload_len; // in bytes, not including header, subscription list and footer
-	uint16_t reserved2;
-	uint64_t subs[B2S_SUBS_U64_ITEMS];
-} b2s_header_and_subs_t;
 
 
 /*
@@ -191,11 +182,11 @@ typedef struct
 #ifdef DEFINE_API_VARIABLES
 const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS] =
 {
-	{},
+	{NULL},
 	{"test_msg1", "Test message 1", &print_test_msg1},
 	{"test_msg2", "Test message 2", &print_test_msg2},
-	{"test_msg3", "Test message 3", &print_test_msg3},
-	{}
+   	{"test_msg3", "Test message 3", &print_test_msg3},
+	{NULL}
 };
 #else
 extern const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS];
@@ -229,31 +220,29 @@ Works in a very similar way. Same data structures are used.
 Only the .c module responsible of handling the data needs to know about these tables.
 */
 
-#ifdef DEFINE_API_VARIABLES
-void * * const p_p_b2s_msgs[B2S_MAX_MSGIDS]  =
-{
-	0,
-	(void**)&test_msg1,
-	(void**)&test_msg2,
-	(void**)&test_msg3,
-	0
+struct message {
+   void**   p_accessor;
+   uint16_t size;
 };
-#else
-extern void * * const p_p_b2s_msgs[B2S_MAX_MSGIDS];
-#endif
+
 
 #ifdef DEFINE_API_VARIABLES
-uint16_t const b2s_msg_sizes[B2S_MAX_MSGIDS] =
-{
-	0,
-	sizeof(test_msg1_t),
-	sizeof(test_msg2_t),
-	sizeof(test_msg3_t),
-	0
+
+#define MESSAGE_STRUCT(msg) {(void**)(&msg), sizeof(*msg)}
+
+struct message const b2s_msgs[B2S_MAX_MSGIDS] = {
+   {0},
+   MESSAGE_STRUCT(test_msg1),
+   MESSAGE_STRUCT(test_msg2),
+   MESSAGE_STRUCT(test_msg3),
+   {0}  
 };
+
 #else
-extern uint16_t const b2s_msg_sizes[B2S_MAX_MSGIDS];
-#endif
+
+extern struct message const b2s_msgs[B2S_MAX_MSGIDS];
+
+#endif // DEFINE_API_VARIABLES
 
 
 #if 0

@@ -64,20 +64,15 @@ MAYBE_EXTERN s2b_subscribe_t* s2b_subscribe;
 MAYBE_EXTERN s2b_move_rel_t*  s2b_move_rel;
 
 #ifdef DEFINE_API_VARIABLES
-void * * const p_p_s2b_msgs[256]  =
+
+struct message const s2b_msgs[256]  =
 {
-	0,
-	(void**)&s2b_subscribe,
-	(void**)&s2b_move_rel,
-	0
+	{NULL},
+	MESSAGE_STRUCT(s2b_subscribe),
+	MESSAGE_STRUCT(s2b_move_rel),
+	{NULL}
 };
 
-uint16_t const s2b_msg_sizes[256] =
-{
-	0,
-	sizeof(s2b_subscribe_t),
-	sizeof(s2b_move_rel_t),
-	0
-};
+
 #endif
 
