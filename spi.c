@@ -261,8 +261,8 @@ void* spi_init_cmd(uint8_t msgid)
 	}
 
 	if (s2b_msgs[msgid].p_accessor == NULL) {
-	   printf("ERROR: spi_init_cmd tries to initialize a non-existing message id (msgid=%u)\n", msgid);
-	   return NULL;
+		printf("ERROR: spi_init_cmd tries to initialize a non-existing message id (msgid=%u)\n", msgid);
+		return NULL;
 	} // if
 	int size = s2b_msgs[msgid].size;
 

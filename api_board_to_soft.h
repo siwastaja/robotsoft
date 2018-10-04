@@ -1,4 +1,4 @@
-/*
+ /*
 	This header provides multiple ways of reuse & write-once (and don't worry about keeping in sync).
 
 	1) The same file is used on the microcontroller (robotboard2-fw) and the host computer (robotsoft).
@@ -185,7 +185,7 @@ const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS] =
 	{NULL},
 	{"test_msg1", "Test message 1", &print_test_msg1},
 	{"test_msg2", "Test message 2", &print_test_msg2},
-   	{"test_msg3", "Test message 3", &print_test_msg3},
+	{"test_msg3", "Test message 3", &print_test_msg3},
 	{NULL}
 };
 #else
@@ -221,8 +221,8 @@ Only the .c module responsible of handling the data needs to know about these ta
 */
 
 struct message {
-   void**   p_accessor;
-   uint16_t size;
+	void**   p_accessor;
+	uint16_t size;
 };
 
 
@@ -231,11 +231,11 @@ struct message {
 #define MESSAGE_STRUCT(msg) {(void**)(&msg), sizeof(*msg)}
 
 struct message const b2s_msgs[B2S_MAX_MSGIDS] = {
-   {0},
-   MESSAGE_STRUCT(test_msg1),
-   MESSAGE_STRUCT(test_msg2),
-   MESSAGE_STRUCT(test_msg3),
-   {0}  
+	{0},
+	MESSAGE_STRUCT(test_msg1),
+	MESSAGE_STRUCT(test_msg2),
+	MESSAGE_STRUCT(test_msg3),
+	{0}  
 };
 
 #else
