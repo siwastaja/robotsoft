@@ -59,18 +59,38 @@ typedef struct __attribute__((packed))
 	uint32_t reserved;
 } s2b_move_rel_t;
 
+#define CMD_TEST1 3
+typedef struct __attribute__((packed))
+{
+	uint8_t buf[16];
+} s2b_test1_t;
 
-MAYBE_EXTERN s2b_subscribe_t* s2b_subscribe;
-MAYBE_EXTERN s2b_move_rel_t*  s2b_move_rel;
+#define CMD_ACK_ERROR 4
+typedef struct __attribute__((packed))
+{
+	uint32_t reserved;
+} s2b_ack_error_t;
+
+
+
+
+typedef struct __attribute__((packed))
+{
+	uint16_t size;
+} s2b_message_t;
+
+#define S2B_MESSAGE_STRUCT(msg_t) {sizeof(msg_t)}
 
 #ifdef DEFINE_API_VARIABLES
 
-struct message const s2b_msgs[256]  =
+s2b_message_t const s2b_msgs[256]  =
 {
-	{NULL},
-	MESSAGE_STRUCT(s2b_subscribe),
-	MESSAGE_STRUCT(s2b_move_rel),
-	{NULL}
+	{0},
+	S2B_MESSAGE_STRUCT(s2b_subscribe_t),
+	S2B_MESSAGE_STRUCT(s2b_move_rel_t),
+	S2B_MESSAGE_STRUCT(s2b_test1_t),
+	S2B_MESSAGE_STRUCT(s2b_ack_error_t),
+	{0}
 };
 
 
