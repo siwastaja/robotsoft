@@ -154,7 +154,7 @@ typedef uint64_t spidev_buf_t;
 static int is_available(int* p_paylen)
 {
 	struct spi_ioc_transfer xfer;
-	b2s_header_t response;
+	b2s_poll_t response;
 
 	memset(&xfer, 0, sizeof(xfer)); // unused fields need to be initialized zero.
 	//xfer.tx_buf left at NULL - documented spidev feature to send out zeroes - we don't have anything to send, just want to get what the sensor wants to send us!
@@ -168,7 +168,7 @@ static int is_available(int* p_paylen)
 		return -1;
 	}
 
-//	printf("avail response: magic=0x%04x, fifo_status=0x%02x, payload_len=%u\n", response.magic, response.fifo_status, response.payload_len);
+//	printf("avail response: magic=0x%04x, fifo_status=0x%02x, err_flags=0x%02x, payload_len=%u\n", response.magic, response.fifo_status, response.err_flags, response.payload_len);
 
 	if((response.magic & 0xff00) == 0)
 	{
@@ -209,16 +209,9 @@ static int cur_tx_frame_offs;
 
 volatile int send_pending;
 
-int spi_init_cmd_queue();
-void* spi_init_cmd(uint8_t msgid);
-int spi_send_queue();
-
 
 int subscribe_to(uint64_t* subs_vector)
 {
-	if(send_pending)
-		return 1;
-
 	if(spi_init_cmd_queue() < 0)
 		return -1;
 
@@ -230,6 +223,29 @@ int subscribe_to(uint64_t* subs_vector)
 	memcpy(p_msg->subs_vector, subs_vector, sizeof(uint64_t)*B2S_SUBS_U64_ITEMS);
 	spi_send_queue();
 
+	return 0;
+}
+
+static int error_state;
+int is_error()
+{
+	return error_state;
+}
+
+int ack_error()
+{
+	if(spi_init_cmd_queue() < 0)
+		return -1;
+
+	s2b_ack_error_t *p_msg = spi_init_cmd(CMD_ACK_ERROR);
+
+	if(!p_msg)
+		return -1;
+
+	memset(p_msg, 0, sizeof(*p_msg));
+
+	spi_send_queue();
+	error_state = 0;
 	return 0;
 }
 
@@ -260,9 +276,9 @@ void* spi_init_cmd(uint8_t msgid)
 		return NULL;
 	}
 
-	if (s2b_msgs[msgid].p_accessor == NULL) {
-		printf("ERROR: spi_init_cmd tries to initialize a non-existing message id (msgid=%u)\n", msgid);
-		return NULL;
+	if (s2b_msgs[msgid].size == 0) {
+	   printf("ERROR: spi_init_cmd tries to initialize a message id (msgid=%u) with zero size\n", msgid);
+	   return NULL;
 	} // if
 	int size = s2b_msgs[msgid].size;
 
@@ -311,20 +327,98 @@ uint8_t* spi_rx_pop()
 	return ret;
 }
 
+
+#define CRC_INITIAL_REMAINDER 0x00
+#define CRC_POLYNOMIAL 0x07
+
+#define CALC_CRC(remainder) \
+	for(int crc__bit = 8; crc__bit > 0; --crc__bit) \
+	{ \
+		if((remainder) & 0b10000000) \
+		{ \
+			(remainder) = ((remainder) << 1) ^ CRC_POLYNOMIAL; \
+		} \
+		else \
+		{ \
+			(remainder) = ((remainder) << 1); \
+		} \
+	}
+
+
+
 /*
+	rxlen = # bytes we expect from the RobotBoard
+	txlen = # bytes we have valid data in our send buffer
+
+	The actual transaction length will be the bigger of the two guys.
+
 < 0 error
   0 transaction ok, no more data on the FIFO
   1 transaction ok, more data on the FIFO that can be read right away, p_paylen is set to reflect the number of payload bytes of the next transaction
 */
 
-static int transact(int len, int send)
+int rx_crc_err_simu;
+void simulate_crc_err_on_rx()
 {
+	rx_crc_err_simu = 1;
+}
+
+int tx_crc_err_simu;
+void simulate_crc_err_on_tx()
+{
+	tx_crc_err_simu = 1;
+}
+
+static int transact(int rxlen, int txlen)
+{
+	int bigger_len = (txlen>rxlen)?txlen:rxlen;
+
+	if(txlen)
+	{
+		// RX is _typically_ longer than tx, but other way around is possible as well.
+		// The actual SPI transaction, however, must always be symmetric.
+		// "Excess" data in either buffer is guaranteed to be zeroes. CRC calculation
+		// works based on the total transaction length, which is the bigger.
+		// Optimized CRC algorithm can be used for big buffers of repeated zeroes.
+
+		// An example:
+		// rxlen = 10000, txlen=1000, bigger_len=10000, excess_in_txbuf = 10000-1000 = 9000
+
+		int excess_in_txbuf = bigger_len - txlen;
+		memset(&spi_tx_frame[txlen], 0, excess_in_txbuf);
+
+		// Now calculate CRC8 for the tx packet.
+		// Optimization trick:
+		// Typically, the tx length is around 30-3000 bytes, whereas rx tends to be around 30000-40000 bytes.
+		// Hence, tx is padded with a lot of zeroes; crc needs to be calculated over the whole packet, it's
+		// the only way we can utilize the HW CRC calculation inside the microcontroller SPI peripheral.
+		// When xorring in only zeroes, the CRC8 wraps around every 127 bytes.
+
+		uint8_t crc = CRC_INITIAL_REMAINDER;
+		for(int i=0; i<txlen; i++)
+		{
+			crc ^= spi_tx_frame[i];
+			CALC_CRC(crc);
+		}
+		int wrapped_length_of_zeroes = excess_in_txbuf%127;
+		for(int i=0; i<wrapped_length_of_zeroes; i++)
+		{
+			// only zeroes, no need to xor anything in.
+			CALC_CRC(crc);
+		}
+
+		spi_tx_frame[bigger_len] = crc+tx_crc_err_simu;
+		tx_crc_err_simu=0;
+
+		printf("Transact() with send! - CRC: %02x\n", crc);
+	}
+
 	struct spi_ioc_transfer xfer;
 
 	memset(&xfer, 0, sizeof(xfer)); // unused fields need to be initialized zero.
-	xfer.tx_buf = send?((spidev_buf_t)spi_tx_frame):0;
+	xfer.tx_buf = txlen?((spidev_buf_t)spi_tx_frame):0; // Send out zeroes if nothing to send.
 	xfer.rx_buf = (spidev_buf_t)spi_rx_fifo[rx_fifo_wr];
-	xfer.len = len;
+	xfer.len = bigger_len+1; // 1 byte for CRC8
 
 	if(ioctl(spi_fd, SPI_IOC_MESSAGE(1), &xfer) < 0)
 	{
@@ -332,17 +426,35 @@ static int transact(int len, int send)
 		return -1;
 	}
 
-	if(send) printf("Transact() with send!\n");
 
-/*
-	printf("\n");
-	for(int i=0; i<32; i++)
-	{
-		printf("%02x ", spi_rx_fifo[rx_fifo_wr][i]);
-		if(i%8 == 7) printf(" ");
-	}
-	printf("\n");
-*/
+
+	#if 1
+		int plen = bigger_len+1;
+		{
+			printf("\n");
+			int printlen = plen; if(printlen > 128) printlen=64;
+			for(int i=0; i<printlen; i++)
+			{
+				printf("%02x ", spi_rx_fifo[rx_fifo_wr][i]);
+				if(i%4 == 3) printf(" ");
+				if(i%16 == 15) printf("\n");
+			}
+			printf("\n");
+		}
+		if(plen > 128)
+		{
+			printf("\n(truncated %u bytes)\n", plen-128);
+
+			for(int i=plen-64; i<plen; i++)
+			{
+				printf("%02x ", spi_rx_fifo[rx_fifo_wr][i]);
+				if(i%4 == 3) printf(" ");
+				if(i%16 == 15) printf("\n");
+			}
+			printf("\n");
+		}
+
+	#endif
 
 	b2s_header_t *p_header = (b2s_header_t*)&spi_rx_fifo[rx_fifo_wr][0];
 
@@ -358,6 +470,28 @@ static int transact(int len, int send)
 	}
 	else
 	{
+		uint8_t crc = CRC_INITIAL_REMAINDER;
+		for(int i=0; i<bigger_len; i++)
+		{
+			crc ^= spi_rx_fifo[rx_fifo_wr][i];
+			CALC_CRC(crc);
+		}
+
+		if(spi_rx_fifo[rx_fifo_wr][bigger_len] != crc+rx_crc_err_simu)
+		{
+			rx_crc_err_simu = 0;
+			printf("ERROR: CRC mismatch (expected %02x, got %02x) - ignoring the packet.\n", crc, spi_rx_fifo[rx_fifo_wr][bigger_len]);
+			return -1;
+		}
+		rx_crc_err_simu = 0;
+
+		if(p_header->err_flags&1)
+		{
+			printf("WARN: Error flag from RobotBoard: communicating the previous command failed!\n");
+			error_state = 1;
+		}
+
+
 		rx_fifo_wr++; if(rx_fifo_wr >= SPI_RX_FIFO_DEPTH) rx_fifo_wr = 0;
 
 		if(p_header->fifo_status&1) // Next read WILL give the next FIFO item - no polling necessary.
@@ -391,26 +525,24 @@ void* spi_comm_thread()
 		if(avail > 0)
 		{
 			// Polling told us we will get this much data by calling transact():
-			int rxlen = paylen+B2S_TOTAL_OVERHEAD;
+			int rxlen = paylen+B2S_TOTAL_OVERHEAD_WITHOUT_CRC;
 
 			int txlen = 0;
-			int send = 0;
 			// Do we have something to send as well? Let's do it on the same pass.
 			if(send_pending)
 			{
-				send = 1;
 				txlen = cur_tx_frame_offs;
 			}
-
-			// Transfer needs to be long enough to account for tx and rx sides, whichever is longer:
-			int len = (txlen>rxlen)?txlen:rxlen;
 
 			// Read as many packets as the RobotBoard wants to give.
 			// These no-polling-inbetween multipackets are guaranteed to be of same length.
 			int timeout = 16;
-			while(transact(len, send) == 1)
+			usleep(100000);
+
+			while(transact(rxlen, txlen) == 1)
 			{
-				send = 0;
+				usleep(100000);
+				txlen = 0; // We already sent our content, rest is zero.
 				if(timeout-- == 0)
 				{
 					printf("ERROR: RobotBoard keeps reporting more readable content on FIFO over and over again, which is impossible.\n");
@@ -419,7 +551,7 @@ void* spi_comm_thread()
 				}
 			}
 			send_pending = 0;
-			usleep(10000);
+			usleep(200000);
 		}
 		else if(avail < 0)
 		{
@@ -428,7 +560,8 @@ void* spi_comm_thread()
 		}
 		else
 		{
-			usleep(10000);
+//			usleep(10000);
+			usleep(200000);
 		}
 	}
 

@@ -47,8 +47,10 @@
 #define SUBLIST_START_OFFSET (HEADER_LEN)
 #define MSGS_START_OFFSET (HEADER_LEN+B2S_SUBS_LEN)
 #define FOOTER_LEN 4
+#define CRC_LEN 1
 
-#define B2S_TOTAL_OVERHEAD (HEADER_LEN+B2S_SUBS_LEN+FOOTER_LEN)
+#define B2S_TOTAL_OVERHEAD_WITHOUT_CRC (HEADER_LEN+B2S_SUBS_LEN+FOOTER_LEN)
+#define B2S_TOTAL_OVERHEAD (B2S_TOTAL_OVERHEAD_WITHOUT_CRC+CRC_LEN)
 
 #if (HEADER_LEN%8 != 0)
 #error "HEADER_LEN must be multiple of 8"
@@ -77,7 +79,7 @@ void print_test_msg1(void* m)
 
 typedef struct __attribute__((packed))
 {
-	uint8_t buf[1024];
+	uint8_t buf[6100];
 } test_msg2_t;
 
 #ifdef ROBOTSOFT
@@ -137,6 +139,27 @@ void print_test_msg3(void* m)
 #endif
 
 
+typedef struct __attribute__((packed))
+{
+	/*
+		magic:
+		for "no data avail": 0x00?? little endian (? = don't care)
+		when data is available: 0xabcd little endian
+	*/
+	uint16_t magic;
+
+	/*
+		fifo_status:
+		bit0: fifo occupancy more than 1 (if you are getting this with a full read, you are guaranteed to
+		      be able to do another full read with another packet, without needing to poll inbetween)
+		rest: reserved
+	*/
+	uint8_t fifo_status;
+	uint8_t err_flags;
+	uint16_t payload_len; // in bytes, not including header, subscription list and footer
+	uint16_t reserved2;
+	uint64_t subs[B2S_SUBS_U64_ITEMS];
+} b2s_header_t;
 
 typedef struct __attribute__((packed))
 {
@@ -154,11 +177,10 @@ typedef struct __attribute__((packed))
 		rest: reserved
 	*/
 	uint8_t fifo_status;
-	uint8_t reserved1;
+	uint8_t err_flags;
 	uint16_t payload_len; // in bytes, not including header, subscription list and footer
 	uint16_t reserved2;
-	uint64_t subs[B2S_SUBS_U64_ITEMS];	
-} b2s_header_t;
+} b2s_poll_t;
 
 
 /*
@@ -220,27 +242,26 @@ Works in a very similar way. Same data structures are used.
 Only the .c module responsible of handling the data needs to know about these tables.
 */
 
-struct message {
-	void**   p_accessor;
-	uint16_t size;
+struct b2s_message {
+   void**   p_accessor;
+   uint16_t size;
 };
 
+#define B2S_MESSAGE_STRUCT(msg) {(void**)(&msg), sizeof(*msg)}
 
 #ifdef DEFINE_API_VARIABLES
 
-#define MESSAGE_STRUCT(msg) {(void**)(&msg), sizeof(*msg)}
-
-struct message const b2s_msgs[B2S_MAX_MSGIDS] = {
-	{0},
-	MESSAGE_STRUCT(test_msg1),
-	MESSAGE_STRUCT(test_msg2),
-	MESSAGE_STRUCT(test_msg3),
-	{0}  
+struct b2s_message const b2s_msgs[B2S_MAX_MSGIDS] = {
+   {0},
+   B2S_MESSAGE_STRUCT(test_msg1),
+   B2S_MESSAGE_STRUCT(test_msg2),
+   B2S_MESSAGE_STRUCT(test_msg3),
+   {0}  
 };
 
 #else
 
-extern struct message const b2s_msgs[B2S_MAX_MSGIDS];
+extern struct b2s_message const b2s_msgs[B2S_MAX_MSGIDS];
 
 #endif // DEFINE_API_VARIABLES
 
