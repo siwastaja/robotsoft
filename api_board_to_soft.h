@@ -79,7 +79,7 @@ void print_test_msg1(void* m)
 
 typedef struct __attribute__((packed))
 {
-	uint8_t buf[6100];
+	uint8_t buf[2000];
 } test_msg2_t;
 
 #ifdef ROBOTSOFT
@@ -138,6 +138,32 @@ void print_test_msg3(void* m)
 #endif
 #endif
 
+typedef struct __attribute__((packed))
+{
+	uint8_t  flags;
+	uint8_t  bat_percent;
+	uint16_t bat_mv;
+	uint16_t charger_input_mv;
+	uint16_t pha_charging_current_ma;
+	uint16_t phb_charging_current_ma;
+} pwr_status_t;
+
+#ifdef ROBOTSOFT
+void print_pwr_status(void* m)
+#ifdef DEFINE_API_VARIABLES
+{
+	pwr_status_t* mm = m;
+
+	printf("Battery %.3f V (%u %%), charger input %.2f V, charging current phase A: %.2f A, phase B: %.2f, total %.2f\n", 
+		(float)mm->bat_mv/1000.0, mm->bat_percent, (float)mm->charger_input_mv/1000.0,
+		(float)mm->pha_charging_current_ma/1000.0, (float)mm->phb_charging_current_ma/1000.0,
+		(float)mm->pha_charging_current_ma/1000.0+(float)mm->phb_charging_current_ma/1000.0);
+}
+#else
+;
+#endif
+#endif
+
 
 typedef struct __attribute__((packed))
 {
@@ -190,7 +216,7 @@ typedef struct __attribute__((packed))
 MAYBE_EXTERN test_msg1_t* test_msg1;
 MAYBE_EXTERN test_msg2_t* test_msg2;
 MAYBE_EXTERN test_msg3_t* test_msg3;
-
+MAYBE_EXTERN pwr_status_t* pwr_status;
 
 
 #ifdef ROBOTSOFT
@@ -208,6 +234,7 @@ const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS] =
 	{"test_msg1", "Test message 1", &print_test_msg1},
 	{"test_msg2", "Test message 2", &print_test_msg2},
    	{"test_msg3", "Test message 3", &print_test_msg3},
+   	{"pwr_status", "Power status", &print_pwr_status},
 	{NULL}
 };
 #else
@@ -252,10 +279,11 @@ struct b2s_message {
 #ifdef DEFINE_API_VARIABLES
 
 struct b2s_message const b2s_msgs[B2S_MAX_MSGIDS] = {
-   {0},
-   B2S_MESSAGE_STRUCT(test_msg1),
-   B2S_MESSAGE_STRUCT(test_msg2),
-   B2S_MESSAGE_STRUCT(test_msg3),
+   {0},  // 0
+   B2S_MESSAGE_STRUCT(test_msg1),  // 1
+   B2S_MESSAGE_STRUCT(test_msg2),  // 2
+   B2S_MESSAGE_STRUCT(test_msg3),  // 3
+   B2S_MESSAGE_STRUCT(pwr_status), // 4
    {0}  
 };
 

@@ -24,9 +24,13 @@ uint64_t subs_test2[4] = {0b0100,0,0,0};
 uint64_t subs_test3[4] = {0b0100,0,0,0};
 uint64_t subs_test4[4] = {0b0100,0,0,0};
 
+volatile uint64_t subs[B2S_SUBS_U64_ITEMS];
+
 void* main_thread()
 {
 	printf("Hello!\n");
+
+	subscribe_to((uint64_t*)subs);
 
 	int cnt = 0;
 	while(!quit)
@@ -48,7 +52,8 @@ void* main_thread()
 					{
 						// id #s is enabled
 						printf("msgid=%u  name=%s  comment=%s\n", s, b2s_meta[s].name, b2s_meta[s].comment);
-						//b2s_meta[s].p_print(&p_data[offs]);
+						if(b2s_meta[s].p_print)
+							b2s_meta[s].p_print(&p_data[offs]);
 						offs += b2s_msgs[s].size;
 					}
 					t >>= 1;
@@ -65,16 +70,16 @@ void* main_thread()
 			}
 
 
-			if(cnt == 3)
-			{
-				subscribe_to(subs_test1);
-				continue;
-			}
+//			if(cnt == 3)
+//			{
+//				subscribe_to(subs_test1);
+//				continue;
+//			}
 
 //			if(cnt==5)
 //				simulate_crc_err_on_rx();
 
-
+/*
 			if(cnt==7)
 			{
 
@@ -101,7 +106,7 @@ void* main_thread()
 
 
 			}
-
+*/
 /*			else if(cnt == 20)
 				subscribe_to(subs_test2);
 			else if(cnt == 30)
@@ -116,8 +121,26 @@ void* main_thread()
 	return NULL;
 }
 
+
+
 int main(int argc, char** argv)
 {
+	printf("Subscribing to...\n");
+	for(int i=1; i<argc; i++)
+	{
+		int msgid = atoi(argv[i]);
+
+		if(msgid < 1 || msgid >= B2S_MAX_MSGIDS || b2s_meta[msgid].name == NULL)
+		{
+			printf("Invalid msgid %s  (atoi)-> %u\n", argv[i], msgid); 
+		}
+		else
+		{
+			printf("%3u %s %s ", msgid, b2s_meta[msgid].name, b2s_meta[msgid].comment);
+			subs[msgid/64] |= 1ULL<<(msgid - msgid/64);
+		}
+	}
+
 	pthread_t thread_main, thread_spi;
 
 	int ret;

@@ -62,7 +62,7 @@ typedef struct __attribute__((packed))
 #define CMD_TEST1 3
 typedef struct __attribute__((packed))
 {
-	uint8_t buf[16];
+	uint8_t buf[1234];
 } s2b_test1_t;
 
 #define CMD_ACK_ERROR 4

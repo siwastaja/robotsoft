@@ -516,7 +516,7 @@ void* spi_comm_thread()
 		if(next_rx_fifo_wr == rx_fifo_rd)
 		{
 			printf("WARNING: SPI RX FIFO is going to overflow, ignoring data & sleeping...\n");
-			usleep(500000);
+			usleep(50000);
 			continue;
 		}
 
@@ -537,11 +537,11 @@ void* spi_comm_thread()
 			// Read as many packets as the RobotBoard wants to give.
 			// These no-polling-inbetween multipackets are guaranteed to be of same length.
 			int timeout = 16;
-			usleep(100000);
+			//usleep(10000);
 
 			while(transact(rxlen, txlen) == 1)
 			{
-				usleep(100000);
+			//	usleep(10000);
 				txlen = 0; // We already sent our content, rest is zero.
 				if(timeout-- == 0)
 				{
@@ -551,7 +551,7 @@ void* spi_comm_thread()
 				}
 			}
 			send_pending = 0;
-			usleep(200000);
+			usleep(40000);
 		}
 		else if(avail < 0)
 		{
@@ -561,7 +561,7 @@ void* spi_comm_thread()
 		else
 		{
 //			usleep(10000);
-			usleep(200000);
+			usleep(10000);
 		}
 	}
 
