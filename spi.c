@@ -428,7 +428,7 @@ static int transact(int rxlen, int txlen)
 
 
 
-	#if 1
+	#if 0
 		int plen = bigger_len+1;
 		{
 			printf("\n");

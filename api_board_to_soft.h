@@ -167,6 +167,48 @@ void print_pwr_status(void* m)
 
 typedef struct __attribute__((packed))
 {
+	uint8_t  sensor_idx;
+	uint8_t  dummy1;
+	uint16_t dummy2;
+	uint16_t dist[160*60];
+} tof_raw_dist_t;
+#ifdef ROBOTSOFT
+void print_tof_raw_dist(void* m)
+#ifdef DEFINE_API_VARIABLES
+{
+	tof_raw_dist_t* mm = m;
+
+	printf("Raw distances sensor %u. Midpoint: %u\n", mm->sensor_idx, mm->dist[30*160+80]);
+}
+#else
+;
+#endif
+#endif
+
+
+typedef struct __attribute__((packed))
+{
+	uint8_t  sensor_idx;
+	uint8_t  dummy1;
+	uint16_t dummy2;
+	uint8_t  ampl[160*60];
+} tof_raw_ampl8_t;
+#ifdef ROBOTSOFT
+void print_tof_raw_ampl8(void* m)
+#ifdef DEFINE_API_VARIABLES
+{
+	tof_raw_ampl8_t* mm = m;
+
+	printf("Raw amplitudes sensor %u. Midpoint: %u\n", mm->sensor_idx, mm->ampl[30*160+80]);
+}
+#else
+;
+#endif
+#endif
+
+
+typedef struct __attribute__((packed))
+{
 	/*
 		magic:
 		for "no data avail": 0x00?? little endian (? = don't care)
@@ -217,6 +259,8 @@ MAYBE_EXTERN test_msg1_t* test_msg1;
 MAYBE_EXTERN test_msg2_t* test_msg2;
 MAYBE_EXTERN test_msg3_t* test_msg3;
 MAYBE_EXTERN pwr_status_t* pwr_status;
+MAYBE_EXTERN tof_raw_dist_t*  tof_raw_dist;
+MAYBE_EXTERN tof_raw_ampl8_t* tof_raw_ampl8;
 
 
 #ifdef ROBOTSOFT
@@ -235,6 +279,8 @@ const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS] =
 	{"test_msg2", "Test message 2", &print_test_msg2},
    	{"test_msg3", "Test message 3", &print_test_msg3},
    	{"pwr_status", "Power status", &print_pwr_status},
+   	{"tof_raw_dist_t", "TOF raw distance", &print_tof_raw_dist},
+   	{"tof_raw_ampl8_t", "TOF raw amplitude", &print_tof_raw_ampl8},
 	{NULL}
 };
 #else
@@ -284,6 +330,8 @@ struct b2s_message const b2s_msgs[B2S_MAX_MSGIDS] = {
    B2S_MESSAGE_STRUCT(test_msg2),  // 2
    B2S_MESSAGE_STRUCT(test_msg3),  // 3
    B2S_MESSAGE_STRUCT(pwr_status), // 4
+   B2S_MESSAGE_STRUCT(tof_raw_dist), // 5
+   B2S_MESSAGE_STRUCT(tof_raw_ampl8), // 6
    {0}  
 };
 
