@@ -51,9 +51,9 @@ void* main_thread()
 					if(t & 1)
 					{
 						// id #s is enabled
-						printf("msgid=%u  name=%s  comment=%s\n", s, b2s_meta[s].name, b2s_meta[s].comment);
-						if(b2s_meta[s].p_print)
-							b2s_meta[s].p_print(&p_data[offs]);
+						printf("msgid=%u  name=%s  comment=%s\n", s, b2s_msgs[s].name, b2s_msgs[s].comment);
+						if(b2s_msgs[s].p_print)
+							b2s_msgs[s].p_print(&p_data[offs]);
 						offs += b2s_msgs[s].size;
 					}
 					t >>= 1;
@@ -125,18 +125,33 @@ void* main_thread()
 
 int main(int argc, char** argv)
 {
+	if(argc == 1)
+	{
+		printf("Usage: boardmon <msgid1> [msgid2] [msgid3] ...\n");
+		printf("Following subscriptions are available:\n");
+		printf(" ID  length  name  (comment)\n");
+		for(int i=0; i<B2S_MAX_MSGIDS; i++)
+		{
+			if(b2s_msgs[i].size != 0)
+			{
+				printf("%3u  %5u  %s   (%s)\n", i, b2s_msgs[i].size, b2s_msgs[i].name, b2s_msgs[i].comment);
+			}
+		}
+		return -1;
+	}
+
 	printf("Subscribing to...\n");
 	for(int i=1; i<argc; i++)
 	{
 		int msgid = atoi(argv[i]);
 
-		if(msgid < 1 || msgid >= B2S_MAX_MSGIDS || b2s_meta[msgid].name == NULL)
+		if(msgid < 1 || msgid >= B2S_MAX_MSGIDS || b2s_msgs[msgid].name == NULL)
 		{
 			printf("Invalid msgid %s  (atoi)-> %u\n", argv[i], msgid); 
 		}
 		else
 		{
-			printf("%3u %s %s ", msgid, b2s_meta[msgid].name, b2s_meta[msgid].comment);
+			printf("%3u %s %s ", msgid, b2s_msgs[msgid].name, b2s_msgs[msgid].comment);
 			subs[msgid/64] |= 1ULL<<(msgid - msgid/64);
 		}
 	}

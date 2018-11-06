@@ -143,22 +143,25 @@ void tcp_comm_close()
 // write() on tcp sockets has been broken with len over about 65536 on linux - so we do smaller writes to be sure.
 #define MAX_WRITE_AT_ONCE 50000
 
-int tcp_send(uint32_t msgid, int32_t paylen, uint8_t* buf)
+int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 {
 	int timeout = 100;
 
-	static uint8_t headbuf[8];
-	headbuf[0] = (msgid&0xff000000)>>24;
-	headbuf[1] = (msgid&0x00ff0000)>>16;
-	headbuf[2] = (msgid&0x0000ff00)>>8;
-	headbuf[3] = (msgid&0x000000ff)>>0;
-	headbuf[4] = (paylen&0xff000000)>>24;
-	headbuf[5] = (paylen&0x00ff0000)>>16;
-	headbuf[6] = (paylen&0x0000ff00)>>8;
-	headbuf[7] = (paylen&0x000000ff)>>0;
+	if(paylen > 16777215)
+	{
+		fprintf(stderr, "ERROR: tcp_send(): Illegal payload len %u\n", paylen);
+		tcp_comm_close();
+		return -1;
+	}
 
+	static uint8_t headbuf[5];
+	headbuf[0] = (msgid&0xff00)>>8;
+	headbuf[1] = (msgid&0x00ff)>>0;
+	headbuf[2] = (paylen&0x00ff0000)>>16;
+	headbuf[3] = (paylen&0x0000ff00)>>8;
+	headbuf[4] = (paylen&0x000000ff)>>0;
 
-	int header_cnt = 8;
+	int header_cnt = 5;
 	uint8_t* p_head = headbuf;
 	while(header_cnt)
 	{

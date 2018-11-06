@@ -64,79 +64,19 @@ typedef struct __attribute__((packed))
 	uint8_t  c;
 	uint16_t d;
 } test_msg1_t;
-
-#ifdef ROBOTSOFT
-void print_test_msg1(void* m)
-#ifdef DEFINE_API_VARIABLES
-{
-	test_msg1_t* mm = m;
-	printf("a =%u  b =%u  c=%u  d=%u\n", mm->a, mm->b, mm->c, mm->d);
-}
-#else
-;
-#endif
-#endif
+void print_test_msg1(void* m);
 
 typedef struct __attribute__((packed))
 {
 	uint8_t buf[2000];
 } test_msg2_t;
-
-#ifdef ROBOTSOFT
-void print_test_msg2(void* m)
-#ifdef DEFINE_API_VARIABLES
-{
-	test_msg2_t* mm = m;
-
-	int i;
-	for(i=0; i < sizeof(mm->buf); i++)
-	{
-		printf("%02x", mm->buf[i]);
-		if(i%4 == 3) printf(" ");
-		if(i%16 == 15) printf(" ");
-		if(i%32 == 31) printf("\n");
-	}
-	printf("\n");
-}
-#else
-;
-#endif
-#endif
+void print_test_msg2(void* m);
 
 typedef struct __attribute__((packed))
 {
 	uint8_t buf[40000];
 } test_msg3_t;
-
-#ifdef ROBOTSOFT
-void print_test_msg3(void* m)
-#ifdef DEFINE_API_VARIABLES
-{
-	test_msg3_t* mm = m;
-
-	int i;
-	for(i=0; i < 256; i++)
-	{
-		printf("%02x", mm->buf[i]);
-		if(i%4 == 3) printf(" ");
-		if(i%16 == 15) printf(" ");
-		if(i%32 == 31) printf("\n");
-	}
-	printf("\n...\n");
-	for(i=sizeof(mm->buf)-256; i < sizeof(mm->buf); i++)
-	{
-		printf("%02x", mm->buf[i]);
-		if(i%4 == 3) printf(" ");
-		if(i%16 == 15) printf(" ");
-		if(i%32 == 31) printf("\n");
-	}
-	printf("\n");
-
-}
-#else
-;
-#endif
-#endif
+void print_test_msg3(void* m);
 
 typedef struct __attribute__((packed))
 {
@@ -147,23 +87,7 @@ typedef struct __attribute__((packed))
 	uint16_t pha_charging_current_ma;
 	uint16_t phb_charging_current_ma;
 } pwr_status_t;
-
-#ifdef ROBOTSOFT
-void print_pwr_status(void* m)
-#ifdef DEFINE_API_VARIABLES
-{
-	pwr_status_t* mm = m;
-
-	printf("Battery %.3f V (%u %%), charger input %.2f V, charging current phase A: %.2f A, phase B: %.2f, total %.2f\n", 
-		(float)mm->bat_mv/1000.0, mm->bat_percent, (float)mm->charger_input_mv/1000.0,
-		(float)mm->pha_charging_current_ma/1000.0, (float)mm->phb_charging_current_ma/1000.0,
-		(float)mm->pha_charging_current_ma/1000.0+(float)mm->phb_charging_current_ma/1000.0);
-}
-#else
-;
-#endif
-#endif
-
+void print_pwr_status(void* m);
 
 typedef struct __attribute__((packed))
 {
@@ -172,19 +96,7 @@ typedef struct __attribute__((packed))
 	uint16_t dummy2;
 	uint16_t dist[160*60];
 } tof_raw_dist_t;
-#ifdef ROBOTSOFT
-void print_tof_raw_dist(void* m)
-#ifdef DEFINE_API_VARIABLES
-{
-	tof_raw_dist_t* mm = m;
-
-	printf("Raw distances sensor %u. Midpoint: %u\n", mm->sensor_idx, mm->dist[30*160+80]);
-}
-#else
-;
-#endif
-#endif
-
+void print_tof_raw_dist(void* m);
 
 typedef struct __attribute__((packed))
 {
@@ -193,18 +105,8 @@ typedef struct __attribute__((packed))
 	uint16_t dummy2;
 	uint8_t  ampl[160*60];
 } tof_raw_ampl8_t;
-#ifdef ROBOTSOFT
-void print_tof_raw_ampl8(void* m)
-#ifdef DEFINE_API_VARIABLES
-{
-	tof_raw_ampl8_t* mm = m;
+void print_tof_raw_ampl8(void* m);
 
-	printf("Raw amplitudes sensor %u. Midpoint: %u\n", mm->sensor_idx, mm->ampl[30*160+80]);
-}
-#else
-;
-#endif
-#endif
 
 
 typedef struct __attribute__((packed))
@@ -263,32 +165,6 @@ MAYBE_EXTERN tof_raw_dist_t*  tof_raw_dist;
 MAYBE_EXTERN tof_raw_ampl8_t* tof_raw_ampl8;
 
 
-#ifdef ROBOTSOFT
-typedef struct
-{
-	char *name;
-	char *comment;
-	void (*p_print)(void*);
-} b2s_meta_t;
-
-#ifdef DEFINE_API_VARIABLES
-const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS] =
-{
-	{NULL},
-	{"test_msg1", "Test message 1", &print_test_msg1},
-	{"test_msg2", "Test message 2", &print_test_msg2},
-   	{"test_msg3", "Test message 3", &print_test_msg3},
-   	{"pwr_status", "Power status", &print_pwr_status},
-   	{"tof_raw_dist_t", "TOF raw distance", &print_tof_raw_dist},
-   	{"tof_raw_ampl8_t", "TOF raw amplitude", &print_tof_raw_ampl8},
-	{NULL}
-};
-#else
-extern const b2s_meta_t b2s_meta[B2S_MAX_MSGIDS];
-#endif
-
-#endif
-
 
 /*
 
@@ -315,29 +191,46 @@ Works in a very similar way. Same data structures are used.
 Only the .c module responsible of handling the data needs to know about these tables.
 */
 
-struct b2s_message {
-   void**   p_accessor;
-   uint16_t size;
-};
+#ifdef FIRMWARE
+	typedef struct
+	{
+		void**   p_accessor;
+		uint16_t size;
+	}  b2s_message_t;
 
-#define B2S_MESSAGE_STRUCT(msg) {(void**)(&msg), sizeof(*msg)}
+	#define B2S_MESSAGE_STRUCT(msg, comment) {(void**)(&msg), sizeof(*msg)}
+#endif
+
+#ifdef ROBOTSOFT
+	typedef struct
+	{
+		void**   p_accessor;
+		uint16_t size;
+		char*    name;
+		char*    comment;
+		void     (*p_print)(void*);
+	}  b2s_message_t;
+
+	#define B2S_MESSAGE_STRUCT(msg, comment) {(void**)(&msg), sizeof(*msg), #msg, comment, print_ ## msg}
+
+#endif
 
 #ifdef DEFINE_API_VARIABLES
 
-struct b2s_message const b2s_msgs[B2S_MAX_MSGIDS] = {
-   {0},  // 0
-   B2S_MESSAGE_STRUCT(test_msg1),  // 1
-   B2S_MESSAGE_STRUCT(test_msg2),  // 2
-   B2S_MESSAGE_STRUCT(test_msg3),  // 3
-   B2S_MESSAGE_STRUCT(pwr_status), // 4
-   B2S_MESSAGE_STRUCT(tof_raw_dist), // 5
-   B2S_MESSAGE_STRUCT(tof_raw_ampl8), // 6
-   {0}  
+b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
+	{0},
+	B2S_MESSAGE_STRUCT(test_msg1, "Test message 1"),  // 1
+	B2S_MESSAGE_STRUCT(test_msg2, "Test message 2"),  // 2
+	B2S_MESSAGE_STRUCT(test_msg3, "Test message 3"),  // 3
+	B2S_MESSAGE_STRUCT(pwr_status, "Power status"), // 4
+	B2S_MESSAGE_STRUCT(tof_raw_dist, "TOF raw distances"), // 5
+	B2S_MESSAGE_STRUCT(tof_raw_ampl8, "TOF raw amplitudes"), // 6
+	{0}  
 };
 
 #else
 
-extern struct b2s_message const b2s_msgs[B2S_MAX_MSGIDS];
+extern b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS];
 
 #endif // DEFINE_API_VARIABLES
 
