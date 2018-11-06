@@ -30,11 +30,10 @@ typedef struct
 	// Where to write when receiving. This field is ignored for tx. 
 	// Remember to use packed structs
 	void* p_data; 
-
-	uint32_t msgid;
-
-	int32_t paysize;
-
+	// Message ID
+	uint8_t mid;
+	// Number of bytes of data expected / sent
+	int size;
 	// Zero-terminated string: Interpretation of the bytes:
 	char types[32]; 
 	/*

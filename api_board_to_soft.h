@@ -199,9 +199,9 @@ Only the .c module responsible of handling the data needs to know about these ta
 	}  b2s_message_t;
 
 	#define B2S_MESSAGE_STRUCT(msg, comment) {(void**)(&msg), sizeof(*msg)}
-#endif
 
-#ifdef ROBOTSOFT
+#else
+
 	typedef struct
 	{
 		void**   p_accessor;

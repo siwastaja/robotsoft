@@ -170,7 +170,7 @@ int main(int argc, char** argv)
 
 	if( (ret = pthread_create(&thread_spi, NULL, spi_comm_thread, NULL)) )
 	{
-		printf("ERROR: tof3d access thread creation, ret = %d\n", ret);
+		printf("ERROR: spi access thread creation, ret = %d\n", ret);
 		return -1;
 	}
 

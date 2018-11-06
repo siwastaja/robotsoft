@@ -9,7 +9,7 @@ DEVIP = 192.168.1.5
 CC = gcc
 LD = gcc
 
-ROBOTSOFT_OBJ = main.o tcp_comm.o tpc_parser.o spi.o b2s_prints.o
+ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o map_memdisk.o mapping.o routing.o hwdata.o
 BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
 
 CFLAGS = -Wall -Winline -std=c99 -DROBOTSOFT

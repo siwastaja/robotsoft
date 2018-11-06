@@ -17,3 +17,6 @@ int ack_error();
 void simulate_crc_err_on_rx();
 void simulate_crc_err_on_tx();
 
+
+#define ADD_SUB(vect, msgid) do{vect[msgid/64] |= 1ULL<<(msgid - msgid/64);}while(0)
+#define REM_SUB(vect, msgid) do{vect[msgid/64] &= ~(1ULL<<(msgid - msgid/64));}while(0)

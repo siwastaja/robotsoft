@@ -34,6 +34,7 @@
 #include "tcp_parser.h"
 #include "utlist.h"
 #include "routing.h"
+#include "misc.h"
 
 // Client->Robot messages
 
@@ -176,422 +177,54 @@ tcp_rc_route_status_t    msg_rc_route_status;
 
 void tcp_send_picture(int16_t id, uint8_t bytes_per_pixel, int xs, int ys, uint8_t *pict)
 {
-	if(xs < 1 || ys < 1 || xs > 10000 || ys > 10000 || bytes_per_pixel < 1 || bytes_per_pixel > 4 )
-	{
-		printf("ERROR: tcp_send_picture: invalid params\n.");
-		return;
-	}
-
-	int size=3+2+1+2+2+(xs*ys)*bytes_per_pixel;
-	uint8_t *buf = malloc(size);
-
-	if(!buf)
-	{
-		printf("ERROR: Out of memory in tcp_send_picture\n");
-		return;
-	}
-
-	buf[0] = TCP_RC_PICTURE_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-
-	I16TOBUF(id, buf, 3);
-	buf[5] = bytes_per_pixel;
-	I16TOBUF(xs, buf, 6);
-	I16TOBUF(ys, buf, 8);
-
-	memcpy(&buf[10], pict, bytes_per_pixel*xs*ys);
-
-	tcp_send(buf, size);
-
-	free(buf);
+	PR_FUNC();
 }
 
 void tcp_send_robot_info()
 {
-	const int size = 3+8;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_ROBOTINFO_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-
-	extern float main_robot_xs;
-	extern float main_robot_ys;
-	extern float main_robot_middle_to_lidar;
-	int16_t rx = main_robot_xs;
-	int16_t ry = main_robot_ys;
-	int16_t lid_xoffs = -1.0*main_robot_middle_to_lidar;
-	int16_t lid_yoffs = 0;
-
-	I16TOBUF(rx, buf, 3);
-	I16TOBUF(ry, buf, 5);
-	I16TOBUF(lid_xoffs, buf, 7);
-	I16TOBUF(lid_yoffs, buf, 9);
-
-	tcp_send(buf, size);
+	PR_FUNC();
 }
 
 
 void tcp_send_info_state(info_state_t state)
 {
-	static info_state_t prev = INFO_STATE_UNDEF;
-
-	if(state != prev)
-	{
-		prev = state;
-		const int size = 3+1;
-		uint8_t buf[size];
-		buf[0] = TCP_RC_INFOSTATE_MID;
-		buf[1] = ((size-3)>>8)&0xff;
-		buf[2] = (size-3)&0xff;
-		buf[3] = (int8_t)state;
-		tcp_send(buf, size);
-	}
+	PR_FUNC();
 }
-
-void tcp_send_lidar_lowres(lidar_scan_t* p_lid)
-{
-	int points = p_lid->n_points;
-
-	// Use some hysteresis to change the decimation level
-	static int decimation = 2;
-
-	if(decimation == 1)
-	{
-		if(points > 200)
-			decimation = 2;
-	}
-	else if(decimation == 2)
-	{
-		if(points > 200*2)
-			decimation = 3;
-		else if(points < 110*2)
-			decimation = 1;
-	}
-	else if(decimation == 3)
-	{
-		if(points > 200*3)
-			decimation = 4;
-		else if(points < 110*3)
-			decimation = 2;
-	}
-	else if(decimation == 4)
-	{
-		if(points < 110/2)
-			decimation = 3;
-	}
-
-	int size = 13+points/decimation*2;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_LIDAR_LOWRES_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-
-	int r_ang = p_lid->robot_pos.ang>>16;
-	int r_x = p_lid->robot_pos.x;
-	int r_y = p_lid->robot_pos.y;
-
-	I16TOBUF(r_ang, buf, 3);
-	I32TOBUF(r_x, buf, 5);
-	I32TOBUF(r_y, buf, 9);
-
-	int bufidx = 13;
-	for(int i=0; i<points; i+=decimation)
-	{
-		// save space, send offsets to the middle. Saturate long readings.
-		// Convert measurements to 16cm/unit so that int8 is enough.
-		int x = p_lid->scan[i].x - r_x;
-		int y = p_lid->scan[i].y - r_y;
-
-		x/=160;
-		y/=160;
-
-		if(x>127) x = 127; else if(x<-128) x=-128;
-		if(y>127) y = 127; else if(y<-128) y=-128;
-
-		buf[bufidx] = (int8_t)x;
-		buf[bufidx+1] = (int8_t)y;
-		bufidx+=2;
-	}
-
-	tcp_send(buf, size);
-}
-
-
-void tcp_send_lidar_highres(lidar_scan_t* p_lid)
-{
-	int points = p_lid->n_points;
-
-	int size = 13+points*4;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_LIDAR_HIGHRES_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-
-	int r_ang = p_lid->robot_pos.ang>>16;
-	int r_x = p_lid->robot_pos.x;
-	int r_y = p_lid->robot_pos.y;
-
-	I16TOBUF(r_ang, buf, 3);
-	I32TOBUF(r_x, buf, 5);
-	I32TOBUF(r_y, buf, 9);
-
-	int bufidx = 13;
-	for(int i=0; i<points; i++)
-	{
-		// save space, send offsets to the middle. Saturate long readings.
-		int x = p_lid->scan[i].x - r_x;
-		int y = p_lid->scan[i].y - r_y;
-
-		//printf("(%d, %d) -> (%d, %d)\n", p_lid->scan[i].x, p_lid->scan[i].y, x, y);
-
-		if(x>32767) x = 32767; else if(x<-32768) x=-32768;
-		if(y>32767) y = 32767; else if(y<-32768) y=-32768;
-
-		I16TOBUF(x, buf, bufidx);
-		I16TOBUF(y, buf, bufidx+2);
-		bufidx+=4;
-	}
-
-	tcp_send(buf, size);
-}
-
 
 void tcp_send_sync_request()
 {
-	const int size = 3+1;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_SYNCREQ_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-	buf[3] = 0;
-
-	tcp_send(buf, size);
-}
-
-void tcp_send_hwdbg(int32_t* dbg)
-{
-	const int size = 3+10*4;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_DBG_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-
-	for(int i=0; i<10; i++)
-	{
-		I32TOBUF(dbg[i], buf, 3+i*4);
-	}
-	tcp_send(buf, size);
-}
-
-void tcp_send_sonar(sonar_point_t* p_son)
-{
-	const int size = 3+4+4+2+1;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_SONAR_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-	I32TOBUF(p_son->x, buf, 3);
-	I32TOBUF(p_son->y, buf, 3+4);
-	I16TOBUF(p_son->z, buf, 3+4+4);
-	buf[3+4+4+2] = p_son->c;
-	tcp_send(buf, size);
+	PR_FUNC();
 }
 
 void tcp_send_hmap(int xsamps, int ysamps, int32_t ang, int xorig_mm, int yorig_mm, int unit_size_mm, int8_t *hmap)
 {
-	if(xsamps < 1 || xsamps > 256 || ysamps < 1 || ysamps > 256 || unit_size_mm < 2 || unit_size_mm > 200 || !hmap)
-	{
-		printf("ERR: tcp_send_hmap() argument sanity check fail\n");
-		return;
-	}
-
-	int size = 3 + 2+2+4+4+2+1+xsamps*ysamps;
-	uint8_t *buf = malloc(size);
-	buf[0] = TCP_RC_HMAP_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-
-	I16TOBUF(xsamps, buf, 3);
-	I16TOBUF(ysamps, buf, 5);
-	I16TOBUF((ang>>16), buf, 7);
-	I32TOBUF(xorig_mm, buf, 9);
-	I32TOBUF(yorig_mm, buf, 13);
-	buf[17] = unit_size_mm;
-
-	memcpy(&buf[18], (uint8_t*)hmap, xsamps*ysamps);
-
-	tcp_send(buf, size);
-	free(buf);
-}
-
-void tcp_send_battery()
-{
-	const int size = 9;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_BATTERY_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-	buf[3] = (pwr_status.charging?1:0) | (pwr_status.charged?2:0);
-	buf[4] = (pwr_status.bat_mv>>8)&0xff;
-	buf[5] = (pwr_status.bat_mv)&0xff;
-	buf[6] = (pwr_status.bat_percentage)&0xff;
-	buf[7] = (pwr_status.cha_mv>>8)&0xff;
-	buf[8] = (pwr_status.cha_mv)&0xff;
-
-	tcp_send(buf, size);
+	PR_FUNC();
 }
 
 void tcp_send_route(int32_t first_x, int32_t first_y, route_unit_t **route)
 {
-	uint8_t buf[2000];
-	buf[0] = TCP_RC_ROUTEINFO_MID;
-
-	int i = 3+4+4;
-	route_unit_t *rt;
-	DL_FOREACH(*route, rt)
-	{
-		if(i > 1900)
-		{
-			printf("WARNING: Route too long to be sent to the client. Ignoring the rest.\n");
-			break;
-		}
-
-		int x_mm, y_mm;
-		mm_from_unit_coords(rt->loc.x, rt->loc.y, &x_mm, &y_mm);					
-		buf[i+0] = rt->backmode?1:0;
-		I32TOBUF(x_mm, buf, i+1);
-		I32TOBUF(y_mm, buf, i+5);
-		i += 9;
-	}
-
-	buf[1] = ((i-3)>>8)&0xff;
-	buf[2] = (i-3)&0xff;
-	I32TOBUF(first_x, buf, 3);
-	I32TOBUF(first_y, buf, 7);
-
-	tcp_send(buf, i);
+	PR_FUNC();
 }
 
 void tcp_send_dbgpoint(int x, int y, uint8_t r, uint8_t g, uint8_t b, int persistence)
 {
-	const int size = 3+4+4+3+1;
-	uint8_t buf[size];
-	buf[0] = TCP_RC_DBGPOINT_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-	I32TOBUF(x, buf, 3);
-	I32TOBUF(y, buf, 7);
-	buf[11] = r;
-	buf[12] = g;
-	buf[13] = b;
-	buf[14] = persistence&0xff;
-	tcp_send(buf, size);
+	PR_FUNC();
 }
 
 void tcp_send_statevect()
 {
-	const int size = 3+sizeof(state_vect);
-	uint8_t buf[size];
-	buf[0] = TCP_RC_STATEVECT_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-	memcpy(&buf[3], state_vect.table, sizeof(state_vect.table));
-	tcp_send(buf, size);
+	PR_FUNC();
 }
 
 void tcp_send_localization_result(int32_t da, int32_t dx, int32_t dy, uint8_t success_code, int32_t score)
 {
-	const int size = 3+2+2+2+1+4;
-	uint8_t buf[size];
-
-	da >>= 16;
-
-	if(dx < -30000 || dx > 30000 || dy < -30000 || dy > 30000 || score < -1000000 || score > 1000000)
-	{
-		printf("tcp_send_localization_result: Out of range parameters.\n");
-		return;
-	}
-
-	buf[0] = TCP_RC_LOCALIZATION_RESULT_MID;
-	buf[1] = ((size-3)>>8)&0xff;
-	buf[2] = (size-3)&0xff;
-	I16TOBUF(da, buf, 3);
-	I16TOBUF(dx, buf, 5);
-	I16TOBUF(dy, buf, 7);
-	buf[9] = success_code; // 0 = success. 1 = possible success, some correction is applied, but big search area is still kept on (if used), 2 = score too low
-	I32TOBUF(score, buf, 10);
-	tcp_send(buf, size);
+	PR_FUNC();
 }
 
 
 int tcp_send_msg(tcp_message_t* msg_type, void* msg)
 {
-	static uint8_t sendbuf[65536];
-	sendbuf[0] = msg_type->mid;
-	sendbuf[1] = (msg_type->size>>8)&0xff;
-	sendbuf[2] = msg_type->size&0xff;
-
-	uint8_t* p_dest = sendbuf+3;
-	uint8_t* p_src = msg;
-
-	for(int field=0;;field++)
-	{
-		switch(msg_type->types[field])
-		{
-			case 'b':
-			case 'B':
-				*(p_dest++) = *(p_src++);
-			break;
-
-			case 's':
-			case 'S':
-			{
-				*(p_dest++) = (((*((uint16_t*)p_src)) )>>8)&0xff;
-				*(p_dest++) = (((*((uint16_t*)p_src)) )>>0)&0xff;
-				p_src+=2;
-			}
-			break;
-
-			case 'i':
-			case 'I':
-			{
-				*(p_dest++) = (((*((uint32_t*)p_src)) )>>24)&0xff;
-				*(p_dest++) = (((*((uint32_t*)p_src)) )>>16)&0xff;
-				*(p_dest++) = (((*((uint32_t*)p_src)) )>>8)&0xff;
-				*(p_dest++) = (((*((uint32_t*)p_src)) )>>0)&0xff;
-				p_src+=4;
-			}
-			break;
-
-			case 'l':
-			case 'L':
-			{
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>56)&0xff;
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>48)&0xff;
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>40)&0xff;
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>32)&0xff;
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>24)&0xff;
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>16)&0xff;
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>8)&0xff;
-				*(p_dest++) = (((*((uint64_t*)p_src)) )>>0)&0xff;
-				p_src+=8;
-			}
-			break;
-
-			case 0:
-				goto PARSE_END;
-
-			default:
-				fprintf(stderr, "ERROR: parse type string has invalid character 0x%02x\n", msg_type->types[field]);
-				return -2;
-		}
-	}
-
-	PARSE_END: ;
-
-	//printf("Sending tcp, size=%d\n", msg_type->size+3);
-	tcp_send(sendbuf, msg_type->size+3);
+	PR_FUNC();
 
 	return 0;
 }
