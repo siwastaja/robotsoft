@@ -920,6 +920,7 @@ void* main_thread()
 	ADD_SUB(subs, 4);
 	ADD_SUB(subs, 5);
 	ADD_SUB(subs, 6);
+	ADD_SUB(subs, 7);
 	subscribe_to(subs);
 
 
@@ -965,6 +966,10 @@ void* main_thread()
 						printf("msgid=%u  name=%s  comment=%s\n", s, b2s_msgs[s].name, b2s_msgs[s].comment);
 						if(b2s_msgs[s].p_print)
 							b2s_msgs[s].p_print(&p_data[offs]);
+
+						if(tcp_client_sock >= 0)
+							tcp_send(s, b2s_msgs[s].size, &p_data[offs]);
+
 						offs += b2s_msgs[s].size;
 					}
 					t >>= 1;

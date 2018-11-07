@@ -71,3 +71,8 @@ void print_tof_raw_ampl8(void* m)
 	printf("Raw amplitudes sensor %u. Midpoint: %u\n", mm->sensor_idx, mm->ampl[30*160+80]);
 }
 
+void print_tof_raw_ambient8(void* m)
+{
+
+}
+

@@ -95,6 +95,9 @@ typedef struct __attribute__((packed))
 	uint8_t  dummy1;
 	uint16_t dummy2;
 	uint16_t dist[160*60];
+	uint16_t dist_narrow[44*32];
+	uint16_t wide_stray_estimate_adc;
+	uint16_t narrow_stray_estimate_adc;
 } tof_raw_dist_t;
 void print_tof_raw_dist(void* m);
 
@@ -104,8 +107,18 @@ typedef struct __attribute__((packed))
 	uint8_t  dummy1;
 	uint16_t dummy2;
 	uint8_t  ampl[160*60];
+	uint8_t  ampl_narrow[44*32];
 } tof_raw_ampl8_t;
 void print_tof_raw_ampl8(void* m);
+
+
+typedef struct __attribute__((packed))
+{
+	uint8_t  sensor_idx;
+	uint8_t  ambient[160*60];
+	int16_t  temperature;
+} tof_raw_ambient8_t;
+void print_tof_raw_ambient8(void* m);
 
 
 
@@ -163,6 +176,7 @@ MAYBE_EXTERN test_msg3_t* test_msg3;
 MAYBE_EXTERN pwr_status_t* pwr_status;
 MAYBE_EXTERN tof_raw_dist_t*  tof_raw_dist;
 MAYBE_EXTERN tof_raw_ampl8_t* tof_raw_ampl8;
+MAYBE_EXTERN tof_raw_ambient8_t* tof_raw_ambient8;
 
 
 
@@ -225,6 +239,7 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(pwr_status, "Power status"), // 4
 	B2S_MESSAGE_STRUCT(tof_raw_dist, "TOF raw distances"), // 5
 	B2S_MESSAGE_STRUCT(tof_raw_ampl8, "TOF raw amplitudes"), // 6
+	B2S_MESSAGE_STRUCT(tof_raw_ambient8, "TOF raw ambient light image"), // 7
 	{0}  
 };
 
