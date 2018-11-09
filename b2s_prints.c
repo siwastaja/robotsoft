@@ -76,3 +76,33 @@ void print_tof_raw_ambient8(void* m)
 
 }
 
+void print_tof_diagnostics(void* m)
+{
+	tof_diagnostics_t* mm = m;
+
+	printf("TOF diagnostics: sensor_idx=%u, temperature=%.1f C. Timing data:\n",
+		mm->sensor_idx, mm->temperature/10.0);
+
+	for(int i=0; i<32; i++)
+	{
+		printf("%d:%.1f ", i, (float)mm->timestamps[i]/10.0);
+	}
+	printf("\n");
+	printf("Time deltas to:\n");
+	for(int i=1; i<32; i++)
+	{
+		printf(">%d:%.1f ", i, (float)(mm->timestamps[i]-mm->timestamps[i-1])/10.0);
+	}
+	printf("\n");
+	printf("dbg_i32:\n");
+	for(int i=0; i<8; i++)
+	{
+		printf("[%d] %11d  ", i, mm->dbg_i32[i]);
+	}
+	printf("\n");
+}
+
+void print_tof_raw_img(void* m)
+{
+}
+

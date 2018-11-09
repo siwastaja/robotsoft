@@ -56,6 +56,11 @@
 #error "HEADER_LEN must be multiple of 8"
 #endif
 
+#ifdef CALIBRATOR
+#define SPI_GENERATION_INTERVAL 5
+#else
+#define SPI_GENERATION_INTERVAL 40
+#endif
 
 typedef struct __attribute__((packed))
 {
@@ -120,50 +125,40 @@ typedef struct __attribute__((packed))
 } tof_raw_ambient8_t;
 void print_tof_raw_ambient8(void* m);
 
+typedef struct __attribute__((packed))
+{
+	uint8_t  sensor_idx;
+	int16_t  temperature;
+	uint16_t timestamps[32];
+	int32_t  dbg_i32[8];
+} tof_diagnostics_t;
+void print_tof_diagnostics(void* m);
 
+#define IMG_WID_DCS0  0
+#define IMG_WID_DCS1  1
+#define IMG_WID_DCS2  2
+#define IMG_WID_DCS3  3
+#define IMG_WID_AMB   4
+#define IMG_NAR_DCS0  5
+#define IMG_NAR_DCS1  6
+#define IMG_NAR_DCS2  7
+#define IMG_NAR_DCS3  8
+#define IMG_NAR_AMB   9
 
 typedef struct __attribute__((packed))
 {
-	/*
-		magic:
-		for "no data avail": 0x00?? little endian (? = don't care)
-		when data is available: 0xabcd little endian
-	*/
-	uint16_t magic;
+	uint8_t  sensor_idx;
+	uint8_t  img_type;
+	union
+	{
+		uint16_t u16[160*60];
+		int16_t  i16[160*60];
+	} img;
+	int16_t temperature;
+	uint8_t param1;
+} tof_raw_img_t;
+void print_tof_raw_img(void* m);
 
-	/*
-		fifo_status:
-		bit0: fifo occupancy more than 1 (if you are getting this with a full read, you are guaranteed to
-		      be able to do another full read with another packet, without needing to poll inbetween)
-		rest: reserved
-	*/
-	uint8_t fifo_status;
-	uint8_t err_flags;
-	uint16_t payload_len; // in bytes, not including header, subscription list and footer
-	uint16_t reserved2;
-	uint64_t subs[B2S_SUBS_U64_ITEMS];
-} b2s_header_t;
-
-typedef struct __attribute__((packed))
-{
-	/*
-		magic:
-		for "no data avail": 0x00?? little endian (? = don't care)
-		when data is available: 0xabcd little endian
-	*/
-	uint16_t magic;
-
-	/*
-		fifo_status:
-		bit0: fifo occupancy more than 1 (if you are getting this with a full read, you are guaranteed to
-		      be able to do another full read with another packet, without needing to poll inbetween)
-		rest: reserved
-	*/
-	uint8_t fifo_status;
-	uint8_t err_flags;
-	uint16_t payload_len; // in bytes, not including header, subscription list and footer
-	uint16_t reserved2;
-} b2s_poll_t;
 
 
 /*
@@ -177,6 +172,8 @@ MAYBE_EXTERN pwr_status_t* pwr_status;
 MAYBE_EXTERN tof_raw_dist_t*  tof_raw_dist;
 MAYBE_EXTERN tof_raw_ampl8_t* tof_raw_ampl8;
 MAYBE_EXTERN tof_raw_ambient8_t* tof_raw_ambient8;
+MAYBE_EXTERN tof_diagnostics_t* tof_diagnostics;
+MAYBE_EXTERN tof_raw_img_t* tof_raw_img;
 
 
 
@@ -240,6 +237,8 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(tof_raw_dist, "TOF raw distances"), // 5
 	B2S_MESSAGE_STRUCT(tof_raw_ampl8, "TOF raw amplitudes"), // 6
 	B2S_MESSAGE_STRUCT(tof_raw_ambient8, "TOF raw ambient light image"), // 7
+	B2S_MESSAGE_STRUCT(tof_diagnostics, "TOF diagnostics"), // 8
+	B2S_MESSAGE_STRUCT(tof_raw_img, "TOF raw image (multiple types)"), // 9
 	{0}  
 };
 
@@ -248,6 +247,52 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 extern b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS];
 
 #endif // DEFINE_API_VARIABLES
+
+
+
+
+typedef struct __attribute__((packed))
+{
+	/*
+		magic:
+		for "no data avail": 0x00?? little endian (? = don't care)
+		when data is available: 0xabcd little endian
+	*/
+	uint16_t magic;
+
+	/*
+		fifo_status:
+		bit0: fifo occupancy more than 1 (if you are getting this with a full read, you are guaranteed to
+		      be able to do another full read with another packet, without needing to poll inbetween)
+		rest: reserved
+	*/
+	uint8_t fifo_status;
+	uint8_t err_flags;
+	uint16_t payload_len; // in bytes, not including header, subscription list and footer
+	uint16_t reserved2;
+	uint64_t subs[B2S_SUBS_U64_ITEMS];
+} b2s_header_t;
+
+typedef struct __attribute__((packed))
+{
+	/*
+		magic:
+		for "no data avail": 0x00?? little endian (? = don't care)
+		when data is available: 0xabcd little endian
+	*/
+	uint16_t magic;
+
+	/*
+		fifo_status:
+		bit0: fifo occupancy more than 1 (if you are getting this with a full read, you are guaranteed to
+		      be able to do another full read with another packet, without needing to poll inbetween)
+		rest: reserved
+	*/
+	uint8_t fifo_status;
+	uint8_t err_flags;
+	uint16_t payload_len; // in bytes, not including header, subscription list and footer
+	uint16_t reserved2;
+} b2s_poll_t;
 
 
 #if 0
@@ -328,3 +373,5 @@ typedef struct __attribute__((packed))
 } imu_raw_t;
 
 #endif
+
+

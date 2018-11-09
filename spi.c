@@ -292,7 +292,9 @@ void* spi_init_cmd(uint8_t msgid)
 
 	void* ret = &spi_tx_frame[cur_tx_frame_offs+sizeof(s2b_cmdheader_t)];
 
+	#if 0
 	printf("spi_init_cmd offset before=%d ", cur_tx_frame_offs);
+	#endif
 
 	((s2b_cmdheader_t*)&spi_tx_frame[cur_tx_frame_offs])->msgid=msgid;
 	((s2b_cmdheader_t*)&spi_tx_frame[cur_tx_frame_offs])->paylen=size;
@@ -300,18 +302,20 @@ void* spi_init_cmd(uint8_t msgid)
 	cur_tx_frame_offs = next_start;
 	((s2b_header_t*)spi_tx_frame)->n_cmds++;
 
-
+	#if 0
 	printf(" after=%d\n", cur_tx_frame_offs);
-
+	#endif
 	return ret;
 }
 
 int spi_send_queue()
 {
+	#if 0
 	printf("spi_send_queue()\n");
 	for(int i=0; i<16; i++)
 		printf("%02x ", spi_tx_frame[i]);
 	printf("\n");
+	#endif
 	send_pending = 1;
 	return 0;
 }
@@ -410,7 +414,9 @@ static int transact(int rxlen, int txlen)
 		spi_tx_frame[bigger_len] = crc+tx_crc_err_simu;
 		tx_crc_err_simu=0;
 
+		#if 0
 		printf("Transact() with send! - CRC: %02x\n", crc);
+		#endif 
 	}
 
 	struct spi_ioc_transfer xfer;
@@ -551,7 +557,7 @@ void* spi_comm_thread()
 				}
 			}
 			send_pending = 0;
-			usleep(40000);
+			usleep((SPI_GENERATION_INTERVAL*1000*2)/3);
 		}
 		else if(avail < 0)
 		{
@@ -561,7 +567,7 @@ void* spi_comm_thread()
 		else
 		{
 //			usleep(10000);
-			usleep(10000);
+			usleep(SPI_GENERATION_INTERVAL*1000/8);
 		}
 	}
 

@@ -72,6 +72,14 @@ typedef struct __attribute__((packed))
 } s2b_ack_error_t;
 
 
+// For Pulu's internal factory use
+#define CMD_CALIBRATION 5
+typedef struct __attribute__((packed))
+{
+	uint8_t cmd;
+	int32_t param1;
+	int32_t param2;
+} s2b_calibration_t;
 
 
 typedef struct __attribute__((packed))
@@ -90,6 +98,7 @@ s2b_message_t const s2b_msgs[256]  =
 	S2B_MESSAGE_STRUCT(s2b_move_rel_t),
 	S2B_MESSAGE_STRUCT(s2b_test1_t),
 	S2B_MESSAGE_STRUCT(s2b_ack_error_t),
+	S2B_MESSAGE_STRUCT(s2b_calibration_t),
 	{0}
 };
 

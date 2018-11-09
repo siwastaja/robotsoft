@@ -921,6 +921,7 @@ void* main_thread()
 	ADD_SUB(subs, 5);
 	ADD_SUB(subs, 6);
 	ADD_SUB(subs, 7);
+	ADD_SUB(subs, 8);
 	subscribe_to(subs);
 
 

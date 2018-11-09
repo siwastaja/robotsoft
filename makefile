@@ -4,17 +4,20 @@
 # and run:
 # ./robotsoft
 
-DEVIP = 192.168.1.6
+DEVIP = 192.168.1.5
 
 CC = gcc
 LD = gcc
 
 ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o map_memdisk.o mapping.o routing.o hwdata.o
 BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
+CALIBRATOR_OBJ = ../robotsoft-calibrator/calibrator.o spi.o b2s_prints.o
 
-CFLAGS = -Wall -Winline -std=c99 -DROBOTSOFT
+CFLAGS = -I. -Wall -Winline -std=c99 -DROBOTSOFT
 
-CFLAGS += -g
+CFLAGS += -DCALIBRATOR
+
+#CFLAGS += -g
 
 LDFLAGS =
 
@@ -35,9 +38,19 @@ robotsoft: $(ROBOTSOFT_OBJ)
 boardmon: $(BOARDMON_OBJ)
 	$(LD) $(LDFLAGS) -o boardmon $^ -lm -pthread
 
+calibrator: $(CALIBRATOR_OBJ)
+	$(LD) $(LDFLAGS) -o calibrator $^ -lm -pthread
+
 cp:
 	scp *.c *.h makefile $(DEVIP):~/robotsoft_dev
+	scp ../robotsoft-calibrator/*.c ../robotsoft-calibrator/*.h $(DEVIP):~/robotsoft-calibrator
 
 e:
-	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h boardmon.c misc.h `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
+	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
+
+e_boardmon:
+	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.h"/g` &
+
+e_calibrator:
+	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.h"/g` &
 
