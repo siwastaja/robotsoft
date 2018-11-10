@@ -79,6 +79,7 @@ typedef struct __attribute__((packed))
 	uint8_t cmd;
 	int32_t param1;
 	int32_t param2;
+	int32_t param3;
 } s2b_calibration_t;
 
 
