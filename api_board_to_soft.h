@@ -156,6 +156,7 @@ typedef struct __attribute__((packed))
 	} img;
 	int16_t temperature;
 	uint8_t param1;
+	uint32_t param2;
 } tof_raw_img_t;
 void print_tof_raw_img(void* m);
 

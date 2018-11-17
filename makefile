@@ -12,12 +12,13 @@ LD = gcc
 ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o map_memdisk.o mapping.o routing.o hwdata.o
 BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
 CALIBRATOR_OBJ = ../robotsoft-calibrator/calibrator.o spi.o b2s_prints.o
+CALIBPROC_OBJ = ../robotsoft-calibrator/calibproc.o
 
 CFLAGS = -I. -Wall -Winline -std=c99 -DROBOTSOFT
 
 CFLAGS += -DCALIBRATOR
 
-#CFLAGS += -g
+CFLAGS += -g
 
 LDFLAGS =
 
@@ -41,6 +42,9 @@ boardmon: $(BOARDMON_OBJ)
 calibrator: $(CALIBRATOR_OBJ)
 	$(LD) $(LDFLAGS) -o calibrator $^ -lm -pthread
 
+calibproc: $(CALIBPROC_OBJ)
+	$(LD) $(LDFLAGS) -o calibproc $^ -lm
+
 cp:
 	scp *.c *.h makefile $(DEVIP):~/robotsoft_dev
 	scp ../robotsoft-calibrator/*.c ../robotsoft-calibrator/*.h $(DEVIP):~/robotsoft-calibrator
@@ -52,5 +56,5 @@ e_boardmon:
 	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.h"/g` &
 
 e_calibrator:
-	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.h"/g` &
+	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h ../robotsoft-calibrator/calibproc.c `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.h"/g` &
 
