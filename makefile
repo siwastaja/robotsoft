@@ -58,3 +58,6 @@ e_boardmon:
 e_calibrator:
 	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h ../robotsoft-calibrator/calibproc.c `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(CALIBRATOR_OBJ)" | sed s/"\.o"/"\.h"/g` &
 
+clean:
+	rm *.o
+	rm ../robotsoft-calibrator/*.o
