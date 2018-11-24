@@ -401,6 +401,7 @@ static int transact(int rxlen, int txlen)
 		uint8_t crc = CRC_INITIAL_REMAINDER;
 		for(int i=0; i<txlen; i++)
 		{
+			//printf("%02x ", spi_tx_frame[i]);
 			crc ^= spi_tx_frame[i];
 			CALC_CRC(crc);
 		}
@@ -416,6 +417,7 @@ static int transact(int rxlen, int txlen)
 
 		#if 0
 		printf("Transact() with send! - CRC: %02x\n", crc);
+
 		#endif 
 	}
 
