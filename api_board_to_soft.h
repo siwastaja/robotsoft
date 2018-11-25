@@ -97,7 +97,7 @@ void print_pwr_status(void* m);
 typedef struct __attribute__((packed))
 {
 	uint8_t  sensor_idx;
-	uint8_t  dummy1;
+	uint8_t  sensor_orientation;
 	uint16_t dummy2;
 	uint16_t dist[160*60];
 	uint16_t dist_narrow[44*32];

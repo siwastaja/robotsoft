@@ -920,7 +920,6 @@ void* main_thread()
 	ADD_SUB(subs, 4);
 	ADD_SUB(subs, 5);
 	ADD_SUB(subs, 6);
-	ADD_SUB(subs, 7);
 	ADD_SUB(subs, 8);
 	subscribe_to(subs);
 
@@ -953,7 +952,7 @@ void* main_thread()
 		uint8_t* p_data = spi_rx_pop();
 		if(p_data != NULL)
 		{
-			printf("Got something! Messages:\n");
+//			printf("Got something! Messages:\n");
 
 			int offs = sizeof(b2s_header_t);
 			for(int i=0; i<B2S_SUBS_U64_ITEMS; i++)
