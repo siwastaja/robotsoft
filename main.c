@@ -904,6 +904,29 @@ void request_tof_quit(void);
 
 volatile int retval = 0;
 
+int new_move_to(int32_t x, int32_t y)
+{
+	if(spi_init_cmd_queue() < 0)
+	{
+		printf("spi_init_cmd_queue error\n");
+		return -1;
+	}
+
+	s2b_move_abs_t *p_msg = spi_init_cmd(CMD_MOVE_ABS);
+
+	if(!p_msg)
+	{
+		printf("p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->x = x;
+	p_msg->y = y;
+
+	spi_send_queue();
+	return 0;
+}
 
 void* main_thread()
 {
@@ -923,11 +946,15 @@ void* main_thread()
 //	ADD_SUB(subs, 6);
 	ADD_SUB(subs, 8);
 	ADD_SUB(subs, 10);
+	ADD_SUB(subs, 11);
 	subscribe_to(subs);
 
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
 	hwmsg_decim[5] = 4;
 	hwmsg_decim[6] = 4;
+
+	static int stdout_msgids[B2S_MAX_MSGIDS];
+	stdout_msgids[11] = 1;
 
 	srand(time(NULL));
 
@@ -967,10 +994,13 @@ void* main_thread()
 				{
 					if(t & 1)
 					{
-						// id #s is enabled
-						printf("msgid=%u  name=%s  comment=%s\n", s, b2s_msgs[s].name, b2s_msgs[s].comment);
-						if(b2s_msgs[s].p_print)
-							b2s_msgs[s].p_print(&p_data[offs]);
+						// id #s content received
+						if(stdout_msgids[s])
+						{
+							printf("msgid=%u  name=%s  comment=%s\n", s, b2s_msgs[s].name, b2s_msgs[s].comment);
+							if(b2s_msgs[s].p_print)
+								b2s_msgs[s].p_print(&p_data[offs]);
+						}
 
 						if(tcp_client_sock >= 0)
 						{
@@ -1156,14 +1186,16 @@ void* main_thread()
 				cur_xymove.remaining = 999999; // invalidate
 
 				printf("  ---> DEST params: X=%d Y=%d backmode=0x%02x\n", msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode);
-				if(msg_cr_dest.backmode & 0b1000) // Rotate pose
+//				if(msg_cr_dest.backmode & 0b1000) // Rotate pose
+//				{
+//					float ang = atan2(msg_cr_dest.y-cur_y, msg_cr_dest.x-cur_x);
+//					turn_and_go_abs_rel(RADTOANG32(ang), 0, cur_speedlim, 1);
+//				}
+//				else
 				{
-					float ang = atan2(msg_cr_dest.y-cur_y, msg_cr_dest.x-cur_x);
-					turn_and_go_abs_rel(RADTOANG32(ang), 0, cur_speedlim, 1);
+		//			move_to(msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode, 0, cur_speedlim, 1);
+					new_move_to(msg_cr_dest.x, msg_cr_dest.y);
 				}
-				else
-					move_to(msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode, 0, cur_speedlim, 1);
-
 				find_charger_state = 0;
 				lookaround_creep_reroute = 0;
 				do_follow_route = 0;

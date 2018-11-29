@@ -59,11 +59,13 @@ typedef struct __attribute__((packed))
 	uint32_t reserved;
 } s2b_move_rel_t;
 
-#define CMD_TEST1 3
+#define CMD_MOVE_ABS 3
 typedef struct __attribute__((packed))
 {
-	uint8_t buf[1234];
-} s2b_test1_t;
+	int32_t x;
+	int32_t y;
+	uint32_t reserved;
+} s2b_move_abs_t;
 
 #define CMD_ACK_ERROR 4
 typedef struct __attribute__((packed))
@@ -85,6 +87,12 @@ typedef struct __attribute__((packed))
 } s2b_calibration_t;
 
 
+
+
+
+
+
+
 typedef struct __attribute__((packed))
 {
 	uint16_t size;
@@ -99,7 +107,7 @@ s2b_message_t const s2b_msgs[256]  =
 	{0},
 	S2B_MESSAGE_STRUCT(s2b_subscribe_t),
 	S2B_MESSAGE_STRUCT(s2b_move_rel_t),
-	S2B_MESSAGE_STRUCT(s2b_test1_t),
+	S2B_MESSAGE_STRUCT(s2b_move_abs_t),
 	S2B_MESSAGE_STRUCT(s2b_ack_error_t),
 	S2B_MESSAGE_STRUCT(s2b_calibration_t),
 	{0}
