@@ -106,3 +106,10 @@ void print_tof_raw_img(void* m)
 {
 }
 
+void print_hw_pose(void* m)
+{
+	hw_pose_t *mm = m;
+
+	printf("HW pose  ang=%5.1f deg  x=%8d mm  y=%8d mm\n", ANG32TOFDEG(mm->ang), mm->x, mm->y);
+}
+

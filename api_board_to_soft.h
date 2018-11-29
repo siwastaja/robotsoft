@@ -161,6 +161,35 @@ typedef struct __attribute__((packed))
 void print_tof_raw_img(void* m);
 
 
+#define ANG_180_DEG 2147483648UL
+#define ANG_90_DEG  1073741824
+#define ANG_2_5_DEG   29826162
+#define ANG_1_DEG     11930465
+#define ANG_0_5_DEG    5965232
+#define ANG_0_25_DEG   2982616
+#define ANG_0_125_DEG  1491308
+#define ANG_0_1_DEG    1193047
+#define ANG_0_05_DEG    596523
+#define ANG_0_01_DEG    119305
+#define ANG_0_001_DEG    11930
+#define ANG_1PER16_DEG  745654  // cumulated full circle rounding error: 0.000006%
+
+#define ANG32TORAD(x) ( ((float)((uint32_t)(x)))/683565275.576432)
+#define ANG32TOFDEG(x) ( ((float)((uint32_t)(x)))/11930464.7111111)
+#define RADTODEG(x) ((x)*(360.0/(2.0*M_PI)))
+#define DEGTORAD(x) ((x)*((2.0*M_PI)/360.0))
+#define RADTOANG32(x) ( (int32_t)((((float)(x)) / (2.0*M_PI)) * 4294967296.0))
+
+
+typedef struct __attribute__((packed))
+{
+	uint32_t ang;
+	int32_t x;
+	int32_t y;
+} hw_pose_t;
+void print_hw_pose(void* m);
+
+
 
 /*
 	The pointers
@@ -175,6 +204,7 @@ MAYBE_EXTERN tof_raw_ampl8_t* tof_raw_ampl8;
 MAYBE_EXTERN tof_raw_ambient8_t* tof_raw_ambient8;
 MAYBE_EXTERN tof_diagnostics_t* tof_diagnostics;
 MAYBE_EXTERN tof_raw_img_t* tof_raw_img;
+MAYBE_EXTERN hw_pose_t* hw_pose;
 
 
 
@@ -240,6 +270,7 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(tof_raw_ambient8, "TOF raw ambient light image"), // 7
 	B2S_MESSAGE_STRUCT(tof_diagnostics, "TOF diagnostics"), // 8
 	B2S_MESSAGE_STRUCT(tof_raw_img, "TOF raw image (multiple types)"), // 9
+	B2S_MESSAGE_STRUCT(hw_pose, "Sensor fusion accumulated pose estimate"), // 10
 	{0}  
 };
 

@@ -904,6 +904,7 @@ void request_tof_quit(void);
 
 volatile int retval = 0;
 
+
 void* main_thread()
 {
 	int find_charger_state = 0;
@@ -918,11 +919,15 @@ void* main_thread()
 	sleep(1);
 	uint64_t subs[B2S_SUBS_U64_ITEMS];
 	ADD_SUB(subs, 4);
-	ADD_SUB(subs, 5);
-	ADD_SUB(subs, 6);
+//	ADD_SUB(subs, 5);
+//	ADD_SUB(subs, 6);
 	ADD_SUB(subs, 8);
+	ADD_SUB(subs, 10);
 	subscribe_to(subs);
 
+	static int hwmsg_decim[B2S_MAX_MSGIDS];
+	hwmsg_decim[5] = 4;
+	hwmsg_decim[6] = 4;
 
 	srand(time(NULL));
 
@@ -968,7 +973,14 @@ void* main_thread()
 							b2s_msgs[s].p_print(&p_data[offs]);
 
 						if(tcp_client_sock >= 0)
-							tcp_send(s, b2s_msgs[s].size, &p_data[offs]);
+						{
+							static int hwmsg_decim_cnt[B2S_MAX_MSGIDS];
+							if(++hwmsg_decim_cnt[s] >= hwmsg_decim[s])
+							{
+								tcp_send(s, b2s_msgs[s].size, &p_data[offs]);
+								hwmsg_decim_cnt[s] = 0;
+							}
+						}
 
 						offs += b2s_msgs[s].size;
 					}
