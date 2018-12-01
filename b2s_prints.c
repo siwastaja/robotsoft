@@ -120,4 +120,9 @@ void print_drive_diag(void* m)
 	printf("Drive diagnostics  ang_err=%5.2f deg  x=%d  y=%d\n", ANG_I32TOFDEG(mm->ang_err), mm->x, mm->y);
 }
 
+void print_mcu_voxel_map(void* m)
+{
+
+}
+
 

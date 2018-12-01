@@ -941,20 +941,24 @@ void* main_thread()
 
 	sleep(1);
 	uint64_t subs[B2S_SUBS_U64_ITEMS];
+//	ADD_SUB(subs, 3); // zmap yay!
 	ADD_SUB(subs, 4);
-//	ADD_SUB(subs, 5);
-//	ADD_SUB(subs, 6);
+//	ADD_SUB(subs, 5); // tof dists
+//	ADD_SUB(subs, 6); // tof ampls
 	ADD_SUB(subs, 8);
 	ADD_SUB(subs, 10);
 	ADD_SUB(subs, 11);
+	ADD_SUB(subs, 12); // voxel map!
 	subscribe_to(subs);
 
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
+	hwmsg_decim[3] = 4;
 	hwmsg_decim[5] = 4;
 	hwmsg_decim[6] = 4;
 
 	static int stdout_msgids[B2S_MAX_MSGIDS];
-	stdout_msgids[11] = 1;
+//	stdout_msgids[11] = 1;
+	stdout_msgids[8] = 1;
 
 	srand(time(NULL));
 

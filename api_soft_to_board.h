@@ -22,10 +22,16 @@
 
 */
 
-#define S2B_MAX_LEN 6000
+#define S2B_MAX_LEN 4096
 
 #define S2B_HEADER_LEN 8
 #define S2B_TOTAL_OVERHEAD (S2B_HEADER_LEN)
+
+
+#if (S2B_MAX_LEN%8 != 0)
+#error S2B_MAX_LEN must be multiple of 8
+#endif
+
 
 typedef struct __attribute__((packed))
 {

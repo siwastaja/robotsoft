@@ -32,7 +32,7 @@
 #endif
 
 
-#define B2S_MAX_LEN 55000
+#define B2S_MAX_LEN 73728
 
 
 #define B2S_MAX_MSGIDS 128
@@ -51,6 +51,11 @@
 
 #define B2S_TOTAL_OVERHEAD_WITHOUT_CRC (HEADER_LEN+B2S_SUBS_LEN+FOOTER_LEN)
 #define B2S_TOTAL_OVERHEAD (B2S_TOTAL_OVERHEAD_WITHOUT_CRC+CRC_LEN)
+
+#if (B2S_MAX_LEN%8 != 0)
+#error B2S_MAX_LEN must be multiple of 8
+#endif
+
 
 #if (HEADER_LEN%8 != 0)
 #error "HEADER_LEN must be multiple of 8"
@@ -201,6 +206,45 @@ typedef struct __attribute__((packed))
 void print_drive_diag(void* m);
 
 
+
+
+// z_step = 100 mm
+// base_z = -250 mm
+// 0: -250 .. -150
+// 1: -150 ..  -50
+// 2:  -50 ..  +50
+// 3:  +50 .. +150
+// 4: +150 .. +250
+// 5: +250 .. +350
+// 6: +350 .. +450
+// 7: +450 .. +550
+// 8: +550 .. +650
+// 9: +650 .. +750
+//10: +750 .. +850
+//11: +850 .. +950
+//12: +950 ..+1050
+//13:+1050 ..+1150
+//14:+1150 ..+1250
+//15:+1250 ..+1350
+
+// bit index = (z-base_z)/z_step
+
+#define BASE_Z (-250)
+#define Z_STEP (100)
+#define MAX_Z ((Z_STEP*16 + BASE_Z)-1)
+#define VOX_SEG_XS 100
+#define VOX_SEG_YS 100
+
+typedef struct __attribute__((packed))
+{
+	uint8_t block_id;
+	uint16_t z_step;
+	int32_t  base_z;
+	uint16_t map[VOX_SEG_XS*VOX_SEG_YS];
+} mcu_voxel_map_t;
+void print_mcu_voxel_map(void* m);
+
+
 /*
 	The pointers
 */
@@ -216,7 +260,7 @@ MAYBE_EXTERN tof_diagnostics_t* tof_diagnostics;
 MAYBE_EXTERN tof_raw_img_t* tof_raw_img;
 MAYBE_EXTERN hw_pose_t* hw_pose;
 MAYBE_EXTERN drive_diag_t* drive_diag;
-
+MAYBE_EXTERN mcu_voxel_map_t* mcu_voxel_map;
 
 
 /*
@@ -283,6 +327,7 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(tof_raw_img, "TOF raw image (multiple types)"), // 9
 	B2S_MESSAGE_STRUCT(hw_pose, "Sensor fusion accumulated pose estimate"), // 10
 	B2S_MESSAGE_STRUCT(drive_diag, "Drive module (mech feedbacks) diagnostics"), // 11
+	B2S_MESSAGE_STRUCT(mcu_voxel_map, "Low level voxel map"), // 12
 	{0}  
 };
 
