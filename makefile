@@ -4,7 +4,7 @@
 # and run:
 # ./robotsoft
 
-DEVIP = 192.168.0.12
+DEVIP = 192.168.43.102
 
 CC = gcc
 LD = gcc
@@ -50,7 +50,7 @@ cp:
 	scp ../robotsoft-calibrator/*.c ../robotsoft-calibrator/*.h $(DEVIP):~/robotsoft-calibrator
 
 e:
-	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
+	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h datatypes.h `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
 
 e_boardmon:
 	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.h"/g` &

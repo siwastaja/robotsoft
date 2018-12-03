@@ -206,7 +206,7 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 		if(paylen)
 		{
 			if(timeout%10 == 0)
-				printf("INFO: tcp_send(): write() didn't write everything, written=%d, left=%d\n", ret, paylen);
+//				printf("INFO: tcp_send(): write() didn't write everything, written=%d, left=%d\n", ret, paylen);
 			usleep(200);
 			timeout--;
 

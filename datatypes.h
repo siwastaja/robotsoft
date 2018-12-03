@@ -45,7 +45,7 @@
 
 typedef struct __attribute__((packed))
 {
-	int32_t ang; // int32_t range --> -180..+180 deg; let it overflow freely. 1 unit = 83.81903171539 ndeg
+	uint32_t ang; // uint32_t range --> 0..360 deg; let it overflow freely. 1 unit = 83.81903171539 ndeg
 	int32_t x;   // in mm
 	int32_t y;
 } pos_t;

@@ -203,7 +203,30 @@ void tcp_send_hmap(int xsamps, int ysamps, int32_t ang, int xorig_mm, int yorig_
 
 void tcp_send_route(int32_t first_x, int32_t first_y, route_unit_t **route)
 {
-	PR_FUNC();
+	uint8_t buf[2000];
+	int i = 4+4;
+	route_unit_t *rt;
+	DL_FOREACH(*route, rt)
+	{
+		if(i > 1900)
+		{
+			printf("WARNING: Route too long to be sent to the client. Ignoring the rest.\n");
+			break;
+		}
+
+		int x_mm, y_mm;
+		mm_from_unit_coords(rt->loc.x, rt->loc.y, &x_mm, &y_mm);					
+		buf[i+0] = rt->backmode?1:0;
+		I32TOBUF(x_mm, buf, i+1);
+		I32TOBUF(y_mm, buf, i+5);
+		i += 9;
+	}
+
+	I32TOBUF(first_x, buf, 0);
+	I32TOBUF(first_y, buf, 4);
+
+	tcp_send(TCP_RC_ROUTEINFO_MID, i, buf);
+
 }
 
 void tcp_send_dbgpoint(int x, int y, uint8_t r, uint8_t g, uint8_t b, int persistence)
@@ -213,7 +236,10 @@ void tcp_send_dbgpoint(int x, int y, uint8_t r, uint8_t g, uint8_t b, int persis
 
 void tcp_send_statevect()
 {
-	PR_FUNC();
+	const int size = sizeof(state_vect);
+	uint8_t buf[size];
+	memcpy(buf, state_vect.table, sizeof(state_vect.table));
+	tcp_send(TCP_RC_STATEVECT_MID, size, buf);
 }
 
 void tcp_send_localization_result(int32_t da, int32_t dx, int32_t dy, uint8_t success_code, int32_t score)
@@ -240,7 +266,7 @@ int tcp_parser(int sock)
 {
 	int ret;
 	static int state = 0; // Num of bytes read
-	static struct __attribute__ ((packed)) { uint8_t mid; uint8_t size_msb; uint8_t size_lsb;} header; // Stored header of incoming message
+	static struct __attribute__ ((packed)) { uint8_t mid_msb; uint8_t mid_lsb; uint8_t size_msb; uint8_t size_middle; uint8_t size_lsb;} header; // Stored header of incoming message
 	static int bytes_left = 0;
 	static tcp_message_t* msg = 0; // Once message is recognized, pointer to message type struct.
 	static int unrecog = 0;
@@ -248,11 +274,11 @@ int tcp_parser(int sock)
 	static uint8_t buf[65536];
 	static uint8_t* p_buf = buf;
 
-	if(state < 3)
+	if(state < 5)
 	{
 		msg = 0;
 		unrecog = 0;
-		ret = read(sock, (uint8_t*)&(header.mid) + state, 3-state);
+		ret = read(sock, (uint8_t*)&(header.mid_msb) + state, 5-state);
 		if(ret < 0)
 		{
 			fprintf(stderr, "ERROR: TCP stream read error %d (%s)\n", errno, strerror(errno));
@@ -269,29 +295,30 @@ int tcp_parser(int sock)
 			state += ret;
 	}
 
-	if(state >= 3)
+	if(state >= 5)
 	{
+		int mid = ((int)header.mid_msb<<8) | ((int)header.mid_lsb);
 		if(msg == 0 && unrecog == 0)
 		{		
 			for(int i=0; i<NUM_CR_MSGS; i++)
 			{
-				if(CR_MSGS[i]->mid == header.mid)
+				if(CR_MSGS[i]->mid == mid)
 				{
 					msg = CR_MSGS[i];
 					break;
 				}
 			}
 
-			int size_from_header = ((int)header.size_msb<<8) | (int)header.size_lsb;
+			int size_from_header = ((int)header.size_msb<<16) | ((int)header.size_middle<<8) | (int)header.size_lsb;
 			if(!msg)
 			{
-				fprintf(stderr, "WARN: Ignoring unrecognized message with msgid 0x%02x\n", header.mid);
+				fprintf(stderr, "WARN: Ignoring unrecognized message with msgid 0x%02x\n", mid);
 				unrecog = 1;
 			}
 			else if(size_from_header != msg->size)
 			{
 				fprintf(stderr, "WARN: Ignoring message with msgid 0x%02x because of size mismatch (got:%u, expected:%u)\n",
-					header.mid, size_from_header, msg->size);
+					mid, size_from_header, msg->size);
 				unrecog = 1;
 			}
 			bytes_left = size_from_header;
@@ -402,7 +429,7 @@ int tcp_parser(int sock)
 				}
 
 				PARSE_END: ;
-				return header.mid;
+				return mid;
 			}
 		}
 

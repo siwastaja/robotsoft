@@ -64,7 +64,7 @@
 #ifdef CALIBRATOR
 #define SPI_GENERATION_INTERVAL 5
 #else
-#define SPI_GENERATION_INTERVAL 40
+#define SPI_GENERATION_INTERVAL 20 // was 40
 #endif
 
 typedef struct __attribute__((packed))
@@ -237,12 +237,28 @@ void print_drive_diag(void* m);
 
 typedef struct __attribute__((packed))
 {
+	uint32_t running_cnt;
+	int32_t  ref_x;
+	int32_t  ref_y;
 	uint8_t block_id;
 	uint16_t z_step;
 	int32_t  base_z;
 	uint16_t map[VOX_SEG_XS*VOX_SEG_YS];
 } mcu_voxel_map_t;
 void print_mcu_voxel_map(void* m);
+
+
+typedef struct __attribute__((packed))
+{
+	uint32_t running_cnt;
+	int32_t  ref_x;
+	int32_t  ref_y;
+	uint8_t first_block_id;
+	uint16_t z_step;
+	int32_t  base_z;
+	uint16_t maps[3][VOX_SEG_XS*VOX_SEG_YS];
+} mcu_multi_voxel_map_t;
+void print_mcu_multi_voxel_map(void* m);
 
 
 /*
@@ -261,6 +277,7 @@ MAYBE_EXTERN tof_raw_img_t* tof_raw_img;
 MAYBE_EXTERN hw_pose_t* hw_pose;
 MAYBE_EXTERN drive_diag_t* drive_diag;
 MAYBE_EXTERN mcu_voxel_map_t* mcu_voxel_map;
+MAYBE_EXTERN mcu_multi_voxel_map_t* mcu_multi_voxel_map;
 
 
 /*
@@ -316,7 +333,7 @@ Only the .c module responsible of handling the data needs to know about these ta
 
 b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	{0},
-	B2S_MESSAGE_STRUCT(test_msg1, "Test message 1"),  // 1
+	B2S_MESSAGE_STRUCT(mcu_multi_voxel_map, "Low level voxel map, 3 parts of 12"), // 1 - automatically force-subscribed when relevant. Others may drop if they won't fit.
 	B2S_MESSAGE_STRUCT(test_msg2, "Test message 2"),  // 2
 	B2S_MESSAGE_STRUCT(test_msg3, "Test message 3"),  // 3
 	B2S_MESSAGE_STRUCT(pwr_status, "Power status"), // 4
@@ -327,7 +344,7 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(tof_raw_img, "TOF raw image (multiple types)"), // 9
 	B2S_MESSAGE_STRUCT(hw_pose, "Sensor fusion accumulated pose estimate"), // 10
 	B2S_MESSAGE_STRUCT(drive_diag, "Drive module (mech feedbacks) diagnostics"), // 11
-	B2S_MESSAGE_STRUCT(mcu_voxel_map, "Low level voxel map"), // 12
+	B2S_MESSAGE_STRUCT(mcu_voxel_map, "Low level voxel map, 1 part of 12"), // 12
 	{0}  
 };
 

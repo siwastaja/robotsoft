@@ -22,6 +22,8 @@
 
 */
 
+#include "api_board_to_soft.h" // for B2S_SUBS_U64_ITEMS
+
 #define S2B_MAX_LEN 4096
 
 #define S2B_HEADER_LEN 8
@@ -47,6 +49,7 @@ typedef struct __attribute__((packed))
 	uint8_t reserved;
 	uint16_t paylen;
 } s2b_cmdheader_t;
+#define S2B_CMDHEADER_LEN 4
 
 
 
@@ -93,11 +96,20 @@ typedef struct __attribute__((packed))
 } s2b_calibration_t;
 
 
+#define CMD_MOTORS 6
+typedef struct __attribute__((packed))
+{
+	uint8_t enabled;
+	uint8_t res;
+	uint16_t res2;
+} s2b_motors_t;
 
-
-
-
-
+#define CMD_CORR_POS 7
+typedef struct __attribute__((packed))
+{
+	int32_t dx;
+	int32_t dy;
+} s2b_corr_pos_t;
 
 typedef struct __attribute__((packed))
 {
@@ -111,11 +123,13 @@ typedef struct __attribute__((packed))
 s2b_message_t const s2b_msgs[256]  =
 {
 	{0},
-	S2B_MESSAGE_STRUCT(s2b_subscribe_t),
-	S2B_MESSAGE_STRUCT(s2b_move_rel_t),
-	S2B_MESSAGE_STRUCT(s2b_move_abs_t),
-	S2B_MESSAGE_STRUCT(s2b_ack_error_t),
-	S2B_MESSAGE_STRUCT(s2b_calibration_t),
+	S2B_MESSAGE_STRUCT(s2b_subscribe_t), // 1
+	S2B_MESSAGE_STRUCT(s2b_move_rel_t),  // 2
+	S2B_MESSAGE_STRUCT(s2b_move_abs_t),  // 3
+	S2B_MESSAGE_STRUCT(s2b_ack_error_t), // 4
+	S2B_MESSAGE_STRUCT(s2b_calibration_t), // 5
+	S2B_MESSAGE_STRUCT(s2b_motors_t), // 6
+	S2B_MESSAGE_STRUCT(s2b_corr_pos_t), // 7
 	{0}
 };
 

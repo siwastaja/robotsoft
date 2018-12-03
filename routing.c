@@ -101,7 +101,7 @@ uint32_t robot_shapes[32][ROBOT_SHAPE_WINDOW];
 
 static int check_hit(int x, int y, int direction)
 {
-//	printf("check_hit(%d, %d, %d)\n", x, y, direction);
+	printf("check_hit(%d, %d, %d): ", x, y, direction);
 	for(int chk_x=0; chk_x<ROBOT_SHAPE_WINDOW; chk_x++)
 	{
 		int pageidx_x, pageidx_y, pageoffs_x, pageoffs_y;
@@ -110,9 +110,9 @@ static int check_hit(int x, int y, int direction)
 		int yoffs = pageoffs_y/32;
 		int yoffs_remain = pageoffs_y - yoffs*32;
 
-		if(!routing_world->rpages[pageidx_x][pageidx_y]) // out of bounds (not allocated) - give up instantly
+		if(!routing_world->pages[pageidx_x][pageidx_y]) // out of bounds (not allocated) - give up instantly
 		{
-			printf("rpages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
+			printf("pages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
 			printf("x = %d  y = %d  direction = %d\n", x, y, direction);
 			//exit(1);
 			return 1;
@@ -123,13 +123,15 @@ static int check_hit(int x, int y, int direction)
 
 		uint64_t shape = (uint64_t)robot_shapes[direction][chk_x] << (32-yoffs_remain);
 
-		if((((uint64_t)routing_world->rpages[pageidx_x][pageidx_y]->obst_u32[pageoffs_x][yoffs]<<32) |
-		   (uint64_t)routing_world->rpages[pageidx_x][pageidx_y]->obst_u32[pageoffs_x][yoffs+1])
+		if((((uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs]<<32) |
+		   (uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs+1])
 		      & shape)
 		{
+			printf("1\n");
 			return 1;
 		}
 	}
+	printf("0\n");
 
 	return 0;
 }
@@ -148,9 +150,9 @@ static int check_hit_hitcnt(int x, int y, int direction)
 		int yoffs = pageoffs_y/32;
 		int yoffs_remain = pageoffs_y - yoffs*32;
 
-		if(!routing_world->rpages[pageidx_x][pageidx_y]) // out of bounds (not allocated) - give up instantly
+		if(!routing_world->pages[pageidx_x][pageidx_y]) // out of bounds (not allocated) - give up instantly
 		{
-			printf("rpages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
+			printf("pages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
 			printf("x = %d  y = %d  direction = %d\n", x, y, direction);
 			//exit(1);
 			return 999;
@@ -161,8 +163,8 @@ static int check_hit_hitcnt(int x, int y, int direction)
 
 		uint64_t shape = (uint64_t)robot_shapes[direction][chk_x] << (32-yoffs_remain);
 
-		if((((uint64_t)routing_world->rpages[pageidx_x][pageidx_y]->obst_u32[pageoffs_x][yoffs]<<32) |
-		   (uint64_t)routing_world->rpages[pageidx_x][pageidx_y]->obst_u32[pageoffs_x][yoffs+1])
+		if((((uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs]<<32) |
+		   (uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs+1])
 		      & shape)
 		{
 			hit_cnt++;
@@ -968,7 +970,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 	while(start_ang < 0.0) start_ang += 2.0*M_PI;
 	int start_dir = (start_ang/(2.0*M_PI) * 32.0)+0.5;
 
-//	printf("Start %d,%d,  end %d,%d  start_ang=%f  start_dir=%d\n", s_x, s_y, e_x, e_y, start_ang, start_dir);
+	printf("Start %d,%d,  end %d,%d  start_ang=%f  start_dir=%d\n", s_x, s_y, e_x, e_y, start_ang, start_dir);
 
 
 	search_unit_t* p_start = (search_unit_t*) malloc(sizeof(search_unit_t));
@@ -1276,7 +1278,7 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 	if(ret == 1)
 	{
-		//printf("Search fails in the start - trying to back off.\n");
+		printf("Search fails in the start - trying to back off.\n");
 
 		for(int a_idx = 0; a_idx < SRCH_NUM_A; a_idx++)
 		{
@@ -1294,18 +1296,18 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 				int new_x_units, new_y_units;
 				unit_coords(new_x, new_y, &new_x_units, &new_y_units);
 
-		//		printf("Back off ang=%.2f deg, mm = %d  -> new start = (%d, %d) --> ", TODEG(new_ang), b_s[back_idx], new_x_units, new_y_units);
+				//printf("Back off ang=%.2f deg, mm = %d  -> new start = (%d, %d) --> ", TODEG(new_ang), b_s[back_idx], new_x_units, new_y_units);
 
 				if(check_hit(new_x_units, new_y_units, dir))
 				{
-		//			printf("backing off hits the wall.\n");
+				//	printf("backing off hits the wall.\n");
 				}
 				else
 				{
 					int ret = search(route, new_ang, new_x, new_y, end_x_mm, end_y_mm);
 					if(ret == 0)
 					{
-						//printf("Search succeeded (back off ang=%.1fdeg, mm = %d), stopping back-off search.\n", TODEG(new_ang), b_s[back_idx]);
+						printf("Search succeeded (back off ang=%.1fdeg, mm = %d), stopping back-off search.\n", TODEG(new_ang), b_s[back_idx]);
 
 						route_unit_t* point = malloc(sizeof(route_unit_t));
 						point->loc.x = new_x_units; point->loc.y = new_y_units;
@@ -1316,7 +1318,7 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 					}
 					else if(ret > 1)
 					{
-						//printf("Search failed later than in the beginning, stopping back-off search.\n");
+						printf("Search failed later than in the beginning, stopping back-off search.\n");
 						return 2;
 					}
 				}
@@ -1330,6 +1332,8 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 }
 
+//#define ROUTING_MASK 0b1111111111111000
+#define ROUTING_MASK 0
 
 void gen_routing_page(world_t *w, int xpage, int ypage, int forgiveness)
 {
@@ -1337,97 +1341,40 @@ void gen_routing_page(world_t *w, int xpage, int ypage, int forgiveness)
 	{
 		return;
 	}
-	if(!w->rpages[xpage][ypage])
-	{
-		w->rpages[xpage][ypage] = malloc(sizeof(routing_page_t));
-	}
 
-	forgiveness = ROUTING_3D_FORGIVENESS;
-	if(forgiveness == 0)
+	printf("Generating routing page %d,%d\n", xpage, ypage);
+
+	for(int xx=0; xx < MAP_PAGE_W; xx++)
 	{
-		for(int xx=0; xx < MAP_PAGE_W; xx++)
+		for(int yy=0; yy < MAP_PAGE_W/32; yy++)
 		{
-			for(int yy=0; yy < MAP_PAGE_W/32; yy++)
+			uint32_t tmp = 0;
+			for(int i = 0; i < 32; i++)
 			{
-				uint32_t tmp = 0;
-				for(int i = 0; i < 32; i++)
-				{
-					tmp<<=1;
-					uint8_t res  = w->pages[xpage][ypage]->units[xx][yy*32+i].result;
-					uint8_t cons = w->pages[xpage][ypage]->units[xx][yy*32+i].constraints;
-#ifdef AVOID_3D_THINGS
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (res & UNIT_3D_WALL) || (res & UNIT_ITEM) || (res & UNIT_DROP) || (cons & CONSTRAINT_FORBIDDEN);
-#else
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (cons & CONSTRAINT_FORBIDDEN);
-#endif
-				}
-				w->rpages[xpage][ypage]->obst_u32[xx][yy] = tmp;
+				tmp<<=1;
+				uint64_t mapval = w->pages[xpage][ypage]->voxmap[(yy*32+i)*MAP_PAGE_W + xx];
+				uint8_t cons = w->pages[xpage][ypage]->meta[((yy*32+i)/2)*(MAP_PAGE_W/2) + (xx/2)].constraints;
+				tmp |= (cons & CONSTRAINT_FORBIDDEN) || (mapval & ROUTING_MASK);
 			}
-			if(w->pages[xpage][ypage+1])
+			w->pages[xpage][ypage]->routing[xx][yy] = tmp;
+		}
+		if(w->pages[xpage][ypage+1])
+		{
+			uint32_t tmp = 0;
+			for(int i = 0; i < 32; i++)
 			{
-				uint32_t tmp = 0;
-				for(int i = 0; i < 32; i++)
-				{
-					tmp<<=1;
-					uint8_t res  = w->pages[xpage][ypage+1]->units[xx][0*32+i].result;
-					uint8_t cons = w->pages[xpage][ypage+1]->units[xx][0*32+i].constraints;
-#ifdef AVOID_3D_THINGS
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (res & UNIT_3D_WALL) || (res & UNIT_ITEM) || (res & UNIT_DROP) || (cons & CONSTRAINT_FORBIDDEN);
-#else
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (cons & CONSTRAINT_FORBIDDEN);
-#endif				
-				}
-				w->rpages[xpage][ypage]->obst_u32[xx][MAP_PAGE_W/32] = tmp;
+				tmp<<=1;
+				uint64_t mapval = w->pages[xpage][ypage+1]->voxmap[(0*32+i)*MAP_PAGE_W + xx];
+				uint8_t cons = w->pages[xpage][ypage+1]->meta[((0*32+i)/2)*(MAP_PAGE_W/2) + (xx/2)].constraints;
+				tmp |= (cons & CONSTRAINT_FORBIDDEN) || (mapval & ROUTING_MASK);
 			}
-			else
-			{
-				w->rpages[xpage][ypage]->obst_u32[xx][MAP_PAGE_W/32] = 0xffffffff;
-			}
+			w->pages[xpage][ypage]->routing[xx][MAP_PAGE_W/32] = tmp;
+		}
+		else
+		{
+			w->pages[xpage][ypage]->routing[xx][MAP_PAGE_W/32] = 0xffffffff;
 		}
 	}
-	else
-	{
-		for(int xx=0; xx < MAP_PAGE_W; xx++)
-		{
-			for(int yy=0; yy < MAP_PAGE_W/32; yy++)
-			{
-				uint32_t tmp = 0;
-				for(int i = 0; i < 32; i++)
-				{
-					tmp<<=1;
-					uint8_t res =  w->pages[xpage][ypage]->units[xx][yy*32+i].result;
-					uint8_t cons = w->pages[xpage][ypage]->units[xx][yy*32+i].constraints;
-#ifdef AVOID_3D_THINGS
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (w->pages[xpage][ypage]->units[xx][yy*32+i].num_3d_obstacles > forgiveness) || (cons & CONSTRAINT_FORBIDDEN);
-#else
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (cons & CONSTRAINT_FORBIDDEN);
-#endif
-				}
-				w->rpages[xpage][ypage]->obst_u32[xx][yy] = tmp;
-			}
-			if(w->pages[xpage][ypage+1])
-			{
-				uint32_t tmp = 0;
-				for(int i = 0; i < 32; i++)
-				{
-					tmp<<=1;
-					uint8_t res  = w->pages[xpage][ypage+1]->units[xx][0*32+i].result;
-					uint8_t cons = w->pages[xpage][ypage+1]->units[xx][0*32+i].constraints;
-#ifdef AVOID_3D_THINGS
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (w->pages[xpage][ypage+1]->units[xx][0*32+i].num_3d_obstacles > forgiveness) || (cons & CONSTRAINT_FORBIDDEN);
-#else
-					tmp |= (res & UNIT_FREE) || (res & UNIT_WALL) || (res & UNIT_INVISIBLE_WALL) || (cons & CONSTRAINT_FORBIDDEN);
-#endif
-				}
-				w->rpages[xpage][ypage]->obst_u32[xx][MAP_PAGE_W/32] = tmp;
-			}
-			else
-			{
-				w->rpages[xpage][ypage]->obst_u32[xx][MAP_PAGE_W/32] = 0xffffffff;
-			}
-		}
-	}
-	
 }
 
 void gen_all_routing_pages(world_t *w, int forgiveness)
@@ -1445,17 +1392,17 @@ int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_
 {
 	routing_world = w;
 
-	//printf("Searching for route...\n");
+	printf("Searching for route...\n");
 
-//	printf("Generating routing pages... "); fflush(stdout);
+	printf("Generating routing pages... "); fflush(stdout);
 	gen_all_routing_pages(w, 0);
-//	printf("done.\n");
+	printf("done.\n");
 
 	wide_search_mode();
 	if(search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm))
 	{
 		normal_search_mode();
-	//	printf("Searching with normal limits...\n");
+		printf("Searching with normal limits...\n");
 
 		int ret;
 		if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm)) )
@@ -1467,7 +1414,7 @@ int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_
 			}
 			else
 			{
-		//		printf("Search failed - retrying with tighter limits.\n");
+				printf("Search failed - retrying with tighter limits.\n");
 				tight_search_mode();
 				if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm)) ) 
 				{

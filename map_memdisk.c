@@ -40,7 +40,7 @@ int write_map_page(world_t* w, int pagex, int pagey)
 	if(snprintf(fname, 1024, MAP_DIR"/%08x_%u_%u_%u.map", robot_id, w->id, pagex, pagey) > 1022)
 		fname[1023] = 0;
 
-	printf("Info: writing map page %s\n", fname);
+//	printf("Info: writing map page %s\n", fname);
 
 	FILE *f = fopen(fname, "w");
 	if(!f)
@@ -129,9 +129,6 @@ int unload_map_page(world_t* w, int pagex, int pagey)
 		free(w->pages[pagex][pagey]);
 		w->pages[pagex][pagey] = 0;
 		w->changed[pagex][pagey] = 0;
-
-		free(w->rpages[pagex][pagey]);
-		w->rpages[pagex][pagey] = 0;
 	}
 	else
 	{

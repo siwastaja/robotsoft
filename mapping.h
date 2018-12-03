@@ -24,6 +24,7 @@
 
 #include <stdint.h>
 #include "datatypes.h"
+#include "api_board_to_soft.h"
 
 #define UNIT_FREE	0
 #define UNIT_ITEM           (1<<0)	// Small obstacle, detected by sonars or bumping into it
@@ -42,73 +43,74 @@
 
 #define MM_TO_UNIT(x) ((x)/MAP_UNIT_W + MAP_MIDDLE_UNIT)
 
-/*
-Map unit is a 40mm*40mm area. Memory usage is carefully considered, because the world is a 2D map of the map units.
-40mm*40mm was selected as a good compromise between accuracy (i.e., considering that the 500mm wide robot can maneuver through
-tight passages, which would be wasteful if the unit was larger) and memory/disk usage.
-*/
 
 typedef struct __attribute__ ((packed))
 {
-	uint8_t result;   	// Mapping result decided based on all available data.
-	uint8_t latest;  	// Mapping result based on last scan.
-
 	uint8_t timestamp;	// Latest time scanned
-	uint8_t num_visited;    // Incremented when lidar is mapped with this robot coord. Saturated at 255.
-
-	uint8_t num_seen;  	// Number of times mapped. Saturated at 255.
-	uint8_t num_obstacles;  // "is an obstacle" BY LIDAR counter. Every time mapped, ++ if obstacle, -- if not. Saturated at 255.
-
+	uint8_t num_visited;    // Incremented when mapped with this robot coord. Saturated at 255.
 	uint8_t constraints;
-	uint8_t num_3d_obstacles; // ++ if 3D_WALL, DROP, or ITEM. Set to 0 if those are removed.
-} map_unit_t;
+	uint8_t reserved;
+} map_unit_meta_t;
 
 
 /*
-Map page is a fixed 256*256 * 40mm*40mm = 10.24m*10.24m area.
+Map page is a fixed 256*256 * 50mm*50mm = 12.8m*12.8m area.
 
 At all times, the following principles apply:
-- There are 9 map pages (3*3) in the memory
-- The robot is always located in the middle page.
-
+- There are 25 map pages (5*5) in the memory
+- The robot is always located somewhere in the middle page.
 To satisfy these conditions, map pages are stored/retrieved to/from the disk every time the robot crosses the map border.
+
+-> always a guaranteed minimum of 25.6 m of pre-loaded map range in any direction
+-> Mapping algorithm doesn't need to check and load pages based on measurements, as long as maximum measured distance is guaranteed below 25.6m.
+
+Memory footprint is around 15Mbytes for the 25 pages
+
 */
 
-#define MAP_UNIT_W 40  // in mm
+#define MAP_UNIT_W 50  // in mm
 #define MAP_PAGE_W 256 // in map_units
 #define MAP_PAGE_W_MM (MAP_UNIT_W * MAP_PAGE_W)  // convenience define
 
 
-/*
-Quick map only holds the mapping result byte, and with half*half resolution; 1 map page will be 16Kbytes instead of 0.5Mbytes.
-*/
-
-#define QMAP_UNIT_W 80 // in mm
-#define QMAP_PAGE_W 128
-#define QMAP_PAGE_W_MM (QMAP_UNIT_W * QMAP_PAGE_W)
-
-
-typedef struct
+typedef struct  __attribute__ ((packed))
 {
-	map_unit_t units[MAP_PAGE_W][MAP_PAGE_W];
-} map_page_t;
 
+	/*
+		Voxel map:
+		1 bit per voxel: something's there, or isn't.
 
-typedef struct
-{
-	uint8_t units[QMAP_PAGE_W][QMAP_PAGE_W];
-} qmap_page_t;
+		An example:
+		z_step    = 100 mm
+		base_z_mm = -250 mm
+		...
+		b3:  +50 .. +149
+		b2:  -50 ..  +49
+		b1: -150 ..  -51
+		b0: -250 .. -151
 
+		With z_step = 100mm, uint64_t ranges 6.4m.
+
+	*/
+
+	int32_t  base_z_mm; // Reference Z level, bit0 spans  [base_z_mm...base_z_mm+z_step[
+	uint64_t voxmap[MAP_PAGE_W*MAP_PAGE_W];
+	map_unit_meta_t meta[(MAP_PAGE_W/2)*(MAP_PAGE_W/2)]; // half*half resolution
 
 /*
 	Routing pages (for optimization purposes only) use single bits to denote forbidden areas, so
 	that 32-bit wide robot shapes can be compared against hits efficiently. For the same reason,
 	one extra uint32 block is included on the bottom (positive) end.
 */
-typedef union
-{
-	uint32_t obst_u32[MAP_PAGE_W][MAP_PAGE_W/32 + 1];
-} routing_page_t;
+
+	uint8_t  routing_valid;
+	uint32_t routing[MAP_PAGE_W][MAP_PAGE_W/32 + 1];
+
+} map_page_t;
+
+
+#define MAPIDX(x_,y_) ((y_)*MAP_PAGE_W+(x_))
+
 
 
 /*
@@ -136,8 +138,6 @@ typedef struct
 
 	map_page_t*  pages[MAP_W][MAP_W];
 	uint8_t changed[MAP_W][MAP_W];
-	qmap_page_t* qpages[MAP_W][MAP_W];
-	routing_page_t* rpages[MAP_W][MAP_W];
 } world_t;
 
 void page_coords(int mm_x, int mm_y, int* pageidx_x, int* pageidx_y, int* pageoffs_x, int* pageoffs_y);
@@ -152,7 +152,6 @@ void map_next_with_larger_search_area();
 void map_sonars(world_t* w, int n_sonars, sonar_point_t* p_sonars);
 void map_collision_obstacle(world_t* w, int32_t cur_ang, int cur_x, int cur_y, int stop_reason, int vect_valid, float vect_ang_rad);
 
-//int map_3dtof(world_t* w, int n_tofs, tof3d_scan_t** tof_list, int32_t *mx, int32_t *my);
 
 
 void start_automapping_from_compass();
@@ -168,5 +167,6 @@ int doing_autonomous_things();
 void add_map_constraint(world_t* w, int32_t x, int32_t y);
 void remove_map_constraint(world_t* w, int32_t x, int32_t y);
 
+void provide_mcu_voxmap(world_t* w, mcu_multi_voxel_map_t* mcuvox, int32_t* xcorr, int32_t* ycorr);
 
 #endif

@@ -31,7 +31,7 @@ typedef struct
 	// Remember to use packed structs
 	void* p_data; 
 	// Message ID
-	uint8_t mid;
+	uint16_t mid;
 	// Number of bytes of data expected / sent
 	int size;
 	// Zero-terminated string: Interpretation of the bytes:
@@ -50,7 +50,7 @@ typedef struct
 } tcp_message_t;
 
 
-#define TCP_CR_DEST_MID    55
+#define TCP_CR_DEST_MID    355
 typedef struct __attribute__ ((packed))
 {
 	int32_t x;
@@ -60,7 +60,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_dest_t   msg_cr_dest;
 
-#define TCP_CR_ROUTE_MID    56
+#define TCP_CR_ROUTE_MID    356
 typedef struct __attribute__ ((packed))
 {
 	int32_t x;
@@ -71,7 +71,7 @@ typedef struct __attribute__ ((packed))
 extern tcp_cr_route_t   msg_cr_route;
 
 
-#define TCP_CR_CHARGE_MID    57
+#define TCP_CR_CHARGE_MID    357
 typedef struct __attribute__ ((packed))
 {
 	uint8_t params;
@@ -79,7 +79,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_charge_t   msg_cr_charge;
 
-#define TCP_CR_MODE_MID    58
+#define TCP_CR_MODE_MID    358
 typedef struct __attribute__ ((packed))
 {
 	uint8_t mode;
@@ -87,7 +87,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_mode_t   msg_cr_mode;
 
-#define TCP_CR_MANU_MID    59
+#define TCP_CR_MANU_MID    359
 typedef struct __attribute__ ((packed))
 {
 	uint8_t op;
@@ -95,7 +95,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_manu_t   msg_cr_manu;
 
-#define TCP_CR_ADDCONSTRAINT_MID    60
+#define TCP_CR_ADDCONSTRAINT_MID    360
 typedef struct __attribute__ ((packed))
 {
 	int32_t x;
@@ -104,7 +104,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_addconstraint_t   msg_cr_addconstraint;
 
-#define TCP_CR_REMCONSTRAINT_MID    61
+#define TCP_CR_REMCONSTRAINT_MID    361
 typedef struct __attribute__ ((packed))
 {
 	int32_t x;
@@ -113,7 +113,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_remconstraint_t   msg_cr_remconstraint;
 
-#define TCP_CR_MAINTENANCE_MID    62
+#define TCP_CR_MAINTENANCE_MID    362
 typedef struct __attribute__ ((packed))
 {
 	int32_t magic;
@@ -122,7 +122,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_maintenance_t   msg_cr_maintenance;
 
-#define TCP_CR_SPEEDLIM_MID    63
+#define TCP_CR_SPEEDLIM_MID    363
 typedef struct __attribute__ ((packed))
 {
 	uint8_t speedlim_linear_fwd;  // right now, sets both linear (fwd and back) and angular speedlimit. 1..100. 0 = use default limit. Note that actual speedlimit may always be lower due to nearby obstacles.
@@ -135,14 +135,14 @@ typedef struct __attribute__ ((packed))
 extern tcp_cr_speedlim_t   msg_cr_speedlim;
 
 
-#define TCP_CR_STATEVECT_MID        64
+#define TCP_CR_STATEVECT_MID        364
 
 
 /*
 SETPOS: Set new robot coordinates. Doesn't change states. Flushes lidar scan mapping queue.
 
 */
-#define TCP_CR_SETPOS_MID    65
+#define TCP_CR_SETPOS_MID    365
 typedef struct __attribute__ ((packed))
 {
 	int16_t ang;
@@ -154,7 +154,7 @@ extern tcp_cr_setpos_t msg_cr_setpos;
 
 
 
-#define TCP_RC_POS_MID    130
+#define TCP_RC_POS_MID    430
 typedef struct __attribute__ ((packed))
 {
 	int16_t ang;
@@ -170,7 +170,7 @@ extern tcp_rc_pos_t    msg_rc_pos;
 #define TCP_RC_MOVEMENT_STATUS_SUCCESS 0
 #define TCP_RC_MOVEMENT_STATUS_STOPPED 1
 #define TCP_RC_MOVEMENT_STATUS_STOPPED_BY_FEEDBACK_MODULE 1
-#define TCP_RC_MOVEMENT_STATUS_MID  143
+#define TCP_RC_MOVEMENT_STATUS_MID  443
 typedef struct __attribute__ ((packed))
 {
 	int16_t start_ang;
@@ -195,7 +195,7 @@ extern tcp_rc_movement_status_t    msg_rc_movement_status;
 #define TCP_RC_ROUTE_STATUS_SUCCESS 0
 #define TCP_RC_ROUTE_STATUS_NOTFOUND 1
 #define TCP_RC_ROUTE_STATUS_UNDEFINED 2
-#define TCP_RC_ROUTE_STATUS_MID  144
+#define TCP_RC_ROUTE_STATUS_MID  444
 typedef struct __attribute__ ((packed))
 {
 	int16_t start_ang;
@@ -216,21 +216,21 @@ extern tcp_message_t   msgmeta_rc_route_status;
 extern tcp_rc_route_status_t    msg_rc_route_status;
 
 
-#define TCP_RC_LIDAR_LOWRES_MID     131
-#define TCP_RC_DBG_MID              132
-#define TCP_RC_SONAR_MID            133
-#define TCP_RC_BATTERY_MID          134
-#define TCP_RC_ROUTEINFO_MID        135
-#define TCP_RC_SYNCREQ_MID          136
-#define TCP_RC_DBGPOINT_MID         137
-#define TCP_RC_HMAP_MID             138
-#define TCP_RC_INFOSTATE_MID        139
-#define TCP_RC_ROBOTINFO_MID        140
-#define TCP_RC_LIDAR_HIGHRES_MID    141
-#define TCP_RC_PICTURE_MID	    142
+#define TCP_RC_LIDAR_LOWRES_MID     431
+#define TCP_RC_DBG_MID              432
+#define TCP_RC_SONAR_MID            433
+#define TCP_RC_BATTERY_MID          434
+#define TCP_RC_ROUTEINFO_MID        435
+#define TCP_RC_SYNCREQ_MID          436
+#define TCP_RC_DBGPOINT_MID         437
+#define TCP_RC_HMAP_MID             438
+#define TCP_RC_INFOSTATE_MID        439
+#define TCP_RC_ROBOTINFO_MID        440
+#define TCP_RC_LIDAR_HIGHRES_MID    441
+#define TCP_RC_PICTURE_MID	    442
 
-#define TCP_RC_STATEVECT_MID        145
-#define TCP_RC_LOCALIZATION_RESULT_MID 146
+#define TCP_RC_STATEVECT_MID        445
+#define TCP_RC_LOCALIZATION_RESULT_MID 446
 
 
 int tcp_parser(int sock);

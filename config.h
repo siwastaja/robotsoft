@@ -8,4 +8,5 @@
 
 #define ROBOTBOARD_REV2A
 
-#define MAP_DIR "/home/pulu/maps/"
+//#define MAP_DIR "/home/pulu/maps/"
+#define MAP_DIR "/home/hrst/maps/"

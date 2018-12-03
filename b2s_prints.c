@@ -125,4 +125,9 @@ void print_mcu_voxel_map(void* m)
 
 }
 
+void print_mcu_multi_voxel_map(void* m)
+{
+
+}
+
 

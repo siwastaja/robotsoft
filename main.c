@@ -62,6 +62,8 @@
 
 //#define PULUTOF1_GIVE_RAWS
 
+#define _BSD_SOURCE  // glibc backwards incompatibility workaround to bring usleep back.
+
 #define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <stdio.h>
@@ -188,14 +190,6 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars, int no_tight
 
 	prev_search_dest_x = dest_x;
 	prev_search_dest_y = dest_y;
-
-	if(!dont_map_lidars)
-	{
-		int32_t da, dx, dy;
-		map_lidars(&world, NUM_LATEST_LIDARS_FOR_ROUTING_START, lidars_to_map_at_routing_start, &da, &dx, &dy);
-		INCR_POS_CORR_ID();
-		correct_robot_pos(da/2, dx/2, dy/2, pos_corr_id);
-	}
 
 	route_unit_t *some_route = NULL;
 
@@ -830,7 +824,7 @@ void retrieve_robot_pos()
 void conf_charger_pos()  // call when the robot is *in* the charger.
 {
 	int32_t da, dx, dy;
-	map_lidars(&world, NUM_LATEST_LIDARS_FOR_ROUTING_START, lidars_to_map_at_routing_start, &da, &dx, &dy);
+//	map_lidars(&world, NUM_LATEST_LIDARS_FOR_ROUTING_START, lidars_to_map_at_routing_start, &da, &dx, &dy);
 	INCR_POS_CORR_ID();
 
 	int32_t cha_ang = cur_ang-da; int cha_x = cur_x+dx; int cha_y = cur_y+dy;
@@ -904,19 +898,15 @@ void request_tof_quit(void);
 
 volatile int retval = 0;
 
+int cmd_send_to_robot;
+
 int new_move_to(int32_t x, int32_t y)
 {
-	if(spi_init_cmd_queue() < 0)
-	{
-		printf("spi_init_cmd_queue error\n");
-		return -1;
-	}
-
 	s2b_move_abs_t *p_msg = spi_init_cmd(CMD_MOVE_ABS);
 
 	if(!p_msg)
 	{
-		printf("p_msg null\n");
+		printf("ERROR: p_msg null\n");
 		return -1;
 	}
 
@@ -924,7 +914,44 @@ int new_move_to(int32_t x, int32_t y)
 	p_msg->x = x;
 	p_msg->y = y;
 
-	spi_send_queue();
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
+int motor_enable_keepalive(int enabled)
+{
+	s2b_motors_t *p_msg = spi_init_cmd(CMD_MOTORS);
+
+	if(!p_msg)
+	{
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->enabled = enabled;
+
+	cmd_send_to_robot = 1;
+
+	return 0;
+}
+
+int new_correct_pos(int32_t dx, int32_t dy)
+{
+	s2b_corr_pos_t *p_msg = spi_init_cmd(CMD_CORR_POS);
+
+	if(!p_msg)
+	{
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->dx = dx;
+	p_msg->dy = dy;
+
+	cmd_send_to_robot = 1;
+
 	return 0;
 }
 
@@ -941,16 +968,14 @@ void* main_thread()
 
 	sleep(1);
 	uint64_t subs[B2S_SUBS_U64_ITEMS];
-//	ADD_SUB(subs, 3); // zmap yay!
 	ADD_SUB(subs, 4);
 //	ADD_SUB(subs, 5); // tof dists
 //	ADD_SUB(subs, 6); // tof ampls
 	ADD_SUB(subs, 8);
 	ADD_SUB(subs, 10);
 	ADD_SUB(subs, 11);
-	ADD_SUB(subs, 12); // voxel map!
 	subscribe_to(subs);
-
+	usleep(SPI_GENERATION_INTERVAL*20*1000);
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
 	hwmsg_decim[3] = 4;
 	hwmsg_decim[5] = 4;
@@ -958,7 +983,7 @@ void* main_thread()
 
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
-	stdout_msgids[8] = 1;
+//	stdout_msgids[8] = 1;
 
 	srand(time(NULL));
 
@@ -1005,6 +1030,16 @@ void* main_thread()
 							if(b2s_msgs[s].p_print)
 								b2s_msgs[s].p_print(&p_data[offs]);
 						}
+
+						if(s==1)
+						{
+							int32_t xcorr = 0, ycorr=0;
+							provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &xcorr, &ycorr);
+
+							if(xcorr != 0 || ycorr != 0)
+								new_correct_pos(xcorr, ycorr);
+						}
+
 
 						if(tcp_client_sock >= 0)
 						{
@@ -1078,11 +1113,13 @@ void* main_thread()
 
 			if(cmd == 'S')
 			{
-				save_robot_pos();
+				save_map_pages(&world);
+//				save_robot_pos();
 			}
 			if(cmd == 's')
 			{
-				retrieve_robot_pos();
+				save_map_pages(&world);
+//				retrieve_robot_pos();
 			}
 
 /*			if(cmd == 'c')
@@ -1641,9 +1678,9 @@ void* main_thread()
 		{
 			keepalive_cnt = 0;
 			if(state_vect.v.keep_position)
-				send_keepalive();
+				motor_enable_keepalive(1);
 			else
-				release_motors();
+				motor_enable_keepalive(0);
 		}
 
 
@@ -1677,6 +1714,19 @@ void* main_thread()
 			fflush(stdout); // syncs log file.
 
 		}
+
+		if(cmd_send_to_robot)
+		{
+			cmd_send_to_robot = 0;
+			spi_send_queue();
+			usleep(500000);
+			if(spi_init_cmd_queue() < 0)
+			{
+				printf("ERROR: spi_init_cmd_queue error\n");
+			}
+
+		}
+
 
 	}
 
