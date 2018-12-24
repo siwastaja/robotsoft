@@ -110,7 +110,8 @@ void print_hw_pose(void* m)
 {
 	hw_pose_t *mm = m;
 
-	printf("HW pose  ang=%5.1f deg  x=%8d mm  y=%8d mm\n", ANG32TOFDEG(mm->ang), mm->x, mm->y);
+	printf("HW pose  ang=%5.1f  pitch=%5.1f  roll=%5.1f deg   x=%8d  y=%8d  z=%8d mm\n", ANG32TOFDEG(mm->ang), ANG_I32TOFDEG(mm->pitch), ANG_I32TOFDEG(mm->roll), mm->x, mm->y, mm->z);
+//	printf("         ang=%11d   pitch=%11d   roll=%11d LSB\n", (int32_t)mm->ang, (int32_t)mm->pitch, (int32_t)mm->roll);
 }
 
 void print_drive_diag(void* m)

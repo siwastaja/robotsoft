@@ -97,7 +97,7 @@
 
 #include "spi.h"
 
-//#include "mcu_micronavi_docu.c"
+#include "mcu_micronavi_docu.c"
 
 #define DEFAULT_SPEEDLIM 45
 #define MAX_CONFIGURABLE_SPEEDLIM 70
@@ -107,6 +107,12 @@ volatile int verbose_mode = 0;
 int max_speedlim = DEFAULT_SPEEDLIM;
 int cur_speedlim = DEFAULT_SPEEDLIM;
 
+int32_t move_id;
+int32_t move_remaining;
+
+
+uint32_t micronavi_stop_flags;
+uint32_t feedback_stop_flags;
 
 state_vect_t state_vect =
 {
@@ -132,7 +138,7 @@ double subsec_timestamp()
 	return (double)spec.tv_sec + (double)spec.tv_nsec/1.0e9;
 }
 
-int live_obstacle_checking_on = 1; // only temporarily disabled by charger mounting code.
+int live_obstacle_checking_on = 0; // only temporarily disabled by charger mounting code.
 int pos_corr_id = 42;
 #define INCR_POS_CORR_ID() {pos_corr_id++; if(pos_corr_id > 99) pos_corr_id = 0;}
 
@@ -277,6 +283,9 @@ int rerun_search()
 	return run_search(prev_search_dest_x, prev_search_dest_y, 0, 1);
 }
 
+int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn);
+int new_stop_movement();
+
 static int maneuver_cnt = 0; // to prevent too many successive maneuver operations
 void do_live_obstacle_checking()
 {
@@ -308,6 +317,8 @@ void do_live_obstacle_checking()
 		}
 
 		int hitcnt = check_direct_route_non_turning_hitcnt_mm(cur_x, cur_y, target_x, target_y);
+
+		printf("    HITCNT = %d, dist_to_next=%d\n", hitcnt, dist_to_next);
 
 #if 0
 		if(hitcnt > 0 && maneuver_cnt < 2)
@@ -358,7 +369,7 @@ void do_live_obstacle_checking()
 
 //				do_follow_route = 0;
 //				lookaround_creep_reroute = 0;
-//				stop_movement();
+//				new_stop_movement();
 
 				if( (abs(side_drifts[best_drift_idx]) < 50) || ( abs(side_drifts[best_drift_idx]) < 100 && drift_angles[best_angle_idx] < M_PI/13.0))
 				{
@@ -379,7 +390,7 @@ void do_live_obstacle_checking()
 
 					// Do the steer
 					id_cnt = 0; // id0 is reserved for special maneuvers during route following.
-					move_to(best_new_x, best_new_y, 0, (id_cnt<<4) | ((route_pos)&0b1111), 12, 2 /* auto backmode*/);
+					new_move_to(best_new_x, best_new_y, 0, (id_cnt<<4) | ((route_pos)&0b1111), 12, 2 /* auto backmode*/);
 					send_info((side_drifts[best_drift_idx] > 0)?INFO_STATE_RIGHT:INFO_STATE_LEFT);
 					maneuver_cnt++;
 				}
@@ -399,7 +410,7 @@ void do_live_obstacle_checking()
 //					printf("Direct line-of-sight to the next point has disappeared! Trying to solve.\n");
 					SPEED(18);
 					limit_speed(cur_speedlim);
-					stop_movement();
+					new_stop_movement();
 					lookaround_creep_reroute = 1;
 				}
 #if 0
@@ -424,7 +435,7 @@ void route_fsm()
 			do_follow_route = 1;
 			id_cnt++; if(id_cnt > 7) id_cnt = 1;
 			send_info(the_route[route_pos].backmode?INFO_STATE_REV:INFO_STATE_FWD);
-			move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
+			new_move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
 		}
 	}
 
@@ -664,7 +675,7 @@ void route_fsm()
 	if(start_route)
 	{
 		printf("Start going id=%d!\n", id_cnt<<4);
-		move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4), cur_speedlim, 0);
+		new_move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4), cur_speedlim, 0);
 		send_info(the_route[route_pos].backmode?INFO_STATE_REV:INFO_STATE_FWD);
 
 		start_route = 0;
@@ -672,11 +683,11 @@ void route_fsm()
 
 	if(do_follow_route)
 	{
-		int id = cur_xymove.id;
+		int id = move_id;
 
 		if(((id&0b1110000) == (id_cnt<<4)) && ((id&0b1111) == ((route_pos)&0b1111)))
 		{
-			if(cur_xymove.micronavi_stop_flags || cur_xymove.feedback_stop_flags)
+			if(micronavi_stop_flags || feedback_stop_flags)
 			{
 				if(micronavi_stops < 7)
 				{
@@ -697,7 +708,7 @@ void route_fsm()
 			}
 			else if(id_cnt == 0) // Zero id move is a special move during route following
 			{
-				if(cur_xymove.remaining < 30)
+				if(move_remaining < 30)
 				{
 					while(the_route[route_pos].backmode == 0 && route_pos < the_route_len-1)
 					{
@@ -715,19 +726,19 @@ void route_fsm()
 					}
 					id_cnt = 1;
 					printf("Maneuver done, redo the waypoint, id=%d!\n", (id_cnt<<4) | ((route_pos)&0b1111));
-					move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
+					new_move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
 					send_info(the_route[route_pos].backmode?INFO_STATE_REV:INFO_STATE_FWD);
 
 				}
 			}
 			else
 			{
-				if(cur_xymove.remaining < 250)
+				if(move_remaining < 250)
 				{
 					good_time_for_lidar_mapping = 1;
 				}
 
-				if(cur_xymove.remaining < the_route[route_pos].take_next_early)
+				if(move_remaining < the_route[route_pos].take_next_early)
 				{
 					maneuver_cnt = 0;
 					if(route_pos < the_route_len-1)
@@ -750,7 +761,7 @@ void route_fsm()
 							}
 						}
 						printf("Take the next, id=%d!\n", (id_cnt<<4) | ((route_pos)&0b1111));
-						move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
+						new_move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
 						send_info(the_route[route_pos].backmode?INFO_STATE_REV:INFO_STATE_FWD);
 						micronavi_stops = 0;
 					}
@@ -770,15 +781,15 @@ void route_fsm()
 
 					static double prev_incr = 0.0;
 					double stamp;
-					if( (stamp=subsec_timestamp()) > prev_incr+0.10)
+					if( (stamp=subsec_timestamp()) > prev_incr+0.20)
 					{
 						prev_incr = stamp;
 
-						if(robot_pos_timestamp < stamp-0.20)
-						{
+//						if(robot_pos_timestamp < stamp-0.20)
+//						{
 							//printf("Skipping live obstacle checking due to stale robot pos.\n");
-						}
-						else
+//						}
+//						else
 						{
 							do_live_obstacle_checking();
 						}
@@ -900,7 +911,24 @@ volatile int retval = 0;
 
 int cmd_send_to_robot;
 
-int new_move_to(int32_t x, int32_t y)
+int new_stop_movement()
+{
+	printf("STOP MOVEMENT\n");
+	s2b_stop_movement_t *p_msg = spi_init_cmd(CMD_STOP_MOVEMENT);
+
+	if(!p_msg)
+	{
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
+int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn)
 {
 	s2b_move_abs_t *p_msg = spi_init_cmd(CMD_MOVE_ABS);
 
@@ -913,6 +941,8 @@ int new_move_to(int32_t x, int32_t y)
 	memset(p_msg, 0, sizeof(*p_msg));
 	p_msg->x = x;
 	p_msg->y = y;
+	p_msg->id = id;
+	p_msg->backmode = backmode;
 
 	cmd_send_to_robot = 1;
 	return 0;
@@ -969,8 +999,8 @@ void* main_thread()
 	sleep(1);
 	uint64_t subs[B2S_SUBS_U64_ITEMS];
 	ADD_SUB(subs, 4);
-//	ADD_SUB(subs, 5); // tof dists
-//	ADD_SUB(subs, 6); // tof ampls
+	ADD_SUB(subs, 5); // tof dists
+	ADD_SUB(subs, 6); // tof ampls
 	ADD_SUB(subs, 8);
 	ADD_SUB(subs, 10);
 	ADD_SUB(subs, 11);
@@ -978,12 +1008,12 @@ void* main_thread()
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
 	hwmsg_decim[3] = 4;
-	hwmsg_decim[5] = 4;
-	hwmsg_decim[6] = 4;
+	hwmsg_decim[5] = 1;
+	hwmsg_decim[6] = 1;
 
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
-//	stdout_msgids[8] = 1;
+	stdout_msgids[8] = 1;
 
 	srand(time(NULL));
 
@@ -1034,13 +1064,26 @@ void* main_thread()
 						if(s==1)
 						{
 							int32_t xcorr = 0, ycorr=0;
-							provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &xcorr, &ycorr);
+							//provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &xcorr, &ycorr);
 
 							if(xcorr != 0 || ycorr != 0)
 								new_correct_pos(xcorr, ycorr);
 						}
 
+						if(s==10)
+						{
+							cur_x = ((hw_pose_t*)&p_data[offs])->x;
+							cur_y = ((hw_pose_t*)&p_data[offs])->y;
+							cur_ang = ((hw_pose_t*)&p_data[offs])->ang;
+						}
 
+
+						if(s==11)
+						{
+							move_id = ((drive_diag_t*)&p_data[offs])->id;
+							move_remaining = ((drive_diag_t*)&p_data[offs])->remaining;
+							micronavi_stop_flags = ((drive_diag_t*)&p_data[offs])->micronavi_stop_flags;
+						}
 						if(tcp_client_sock >= 0)
 						{
 							static int hwmsg_decim_cnt[B2S_MAX_MSGIDS];
@@ -1224,7 +1267,7 @@ void* main_thread()
 				msg_rc_movement_status.requested_y = msg_cr_dest.y;
 				msg_rc_movement_status.requested_backmode = msg_cr_dest.backmode;
 
-				cur_xymove.remaining = 999999; // invalidate
+				move_remaining = 999999; // invalidate
 
 				printf("  ---> DEST params: X=%d Y=%d backmode=0x%02x\n", msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode);
 //				if(msg_cr_dest.backmode & 0b1000) // Rotate pose
@@ -1234,8 +1277,7 @@ void* main_thread()
 //				}
 //				else
 				{
-		//			move_to(msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode, 0, cur_speedlim, 1);
-					new_move_to(msg_cr_dest.x, msg_cr_dest.y);
+					new_move_to(msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode, 0, cur_speedlim, 1);
 				}
 				find_charger_state = 0;
 				lookaround_creep_reroute = 0;
@@ -1378,7 +1420,7 @@ void* main_thread()
 						find_charger_state = 0;
 						lookaround_creep_reroute = 0;
 						do_follow_route = 0;
-						stop_movement();
+						new_stop_movement();
 						send_info(INFO_STATE_IDLE);
 					} break;
 
@@ -1478,10 +1520,56 @@ void* main_thread()
 //		}
 
 		static int micronavi_stop_flags_printed = 0;
+		if(micronavi_stop_flags)
+		{
+			if(!micronavi_stop_flags_printed)
+			{
+				micronavi_stop_flags_printed = 1;
+				printf("MCU-level micronavigation: STOP. Reason flags:\n");
+				for(int i=0; i<32; i++)
+				{
+					if(micronavi_stop_flags&(1UL<<i))
+					{
+						printf("bit %2d: %s\n", i, MCU_NAVI_STOP_NAMES[i]);
+					}
+				}
+
+				printf("Actions being taken:\n");
+				for(int i=0; i<32; i++)
+				{
+					if(cur_xymove.micronavi_action_flags&(1UL<<i))
+					{
+						printf("bit %2d: %s\n", i, MCU_NAVI_ACTION_NAMES[i]);
+					}
+				}
+
+				printf("\n");
+
+				if(cmd_state == TCP_CR_DEST_MID)
+				{
+					if(tcp_client_sock >= 0)
+					{
+						msg_rc_movement_status.cur_ang = cur_ang>>16;
+						msg_rc_movement_status.cur_x = cur_x;
+						msg_rc_movement_status.cur_y = cur_y;
+						msg_rc_movement_status.status = TCP_RC_MOVEMENT_STATUS_STOPPED;
+						msg_rc_movement_status.obstacle_flags = micronavi_stop_flags;
+						tcp_send_msg(&msgmeta_rc_movement_status, &msg_rc_movement_status);
+					}
+
+					cmd_state = 0;
+				}
+			}
+		}
+		else
+			micronavi_stop_flags_printed = 0;
+
+
+
 
 		if(cmd_state == TCP_CR_DEST_MID)
 		{
-			if(cur_xymove.remaining < 5)
+			if(move_remaining < 5)
 			{
 				if(tcp_client_sock >= 0)
 				{
@@ -1498,10 +1586,10 @@ void* main_thread()
 			}
 		}
 	
-		if(find_charger_state < 4)
-			live_obstacle_checking_on = 1;
-		else
-			live_obstacle_checking_on = 0;
+//		if(find_charger_state < 4)
+//			live_obstacle_checking_on = 1;
+//		else
+//			live_obstacle_checking_on = 0;
 
 #if 0
 
@@ -1562,13 +1650,13 @@ void* main_thread()
 			{
 				printf("Going to second charger point.\n");
 				send_info(INFO_STATE_FWD);
-				move_to(charger_second_x, charger_second_y, 0, 0x7f, 20, 1);
+				new_move_to(charger_second_x, charger_second_y, 0, 0x7f, 20, 1);
 				find_charger_state++;
 			}
 		}
 		else if(find_charger_state == 5)
 		{
-			if(cur_xymove.id == 0x7f && cur_xymove.remaining < 10)
+			if(move_id == 0x7f && move_remaining < 10)
 			{
 				if(sq(cur_x-charger_second_x) + sq(cur_y-charger_second_y) > sq(180))
 				{
@@ -1630,6 +1718,11 @@ void* main_thread()
 		autofsm();
 
 #endif
+
+
+		route_fsm();
+		autofsm();
+
 
 		{
 			static double prev_incr = 0.0;

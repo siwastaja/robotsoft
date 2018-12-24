@@ -356,7 +356,7 @@ int score_voxmap(world_t* w, uint16_t* vox, int32_t ref_x, int32_t ref_y, int32_
 
 	int32_t scores[32] = {0};
 
-	printf("INFO: score_voxmap, n_speculations=%d, min_x=%d, max_x=%d, min_y=%d, max_y=%d\n", n_speculations, min_x, max_x, min_y, max_y);
+//	printf("INFO: score_voxmap, n_speculations=%d, min_x=%d, max_x=%d, min_y=%d, max_y=%d\n", n_speculations, min_x, max_x, min_y, max_y);
 
 	int x_start = -1*min_x; if(x_start < 0) x_start = 0;
 	int x_end = TMPVOX_XS-1-max_x; if(x_end > TMPVOX_XS-1) x_end = TMPVOX_XS-1;
@@ -474,7 +474,8 @@ int map_voxmap(world_t* w, uint16_t* vox, int32_t ref_x, int32_t ref_y, int32_t 
 
 		//	if(vox[yy*TMPVOX_XS+xx] != 0) cnt++;
 
-			if(w->pages[map_px][map_py]->voxmap[MAPIDX(map_ox, map_oy)] == 0)
+//			if(w->pages[map_px][map_py]->voxmap[MAPIDX(map_ox, map_oy)] == 0)
+			if(vox[yy*TMPVOX_XS+xx] != 0)
 				w->pages[map_px][map_py]->voxmap[MAPIDX(map_ox, map_oy)] = vox[yy*TMPVOX_XS+xx];
 			w->changed[map_px][map_py] = 1;
 			
@@ -587,7 +588,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, int32_t ref_x, int32_t ref_y, int32_t
 void provide_mcu_voxmap(world_t* w, mcu_multi_voxel_map_t* mcuvox, int32_t* xcorr, int32_t* ycorr)
 {
 	int b = mcuvox->first_block_id;
-	printf("provide_mcu_voxmap, got %d\n", b);
+//	printf("provide_mcu_voxmap, got %d\n", b);
 
 	insert_mcu_voxel_map(tmpvox, mcuvox);
 

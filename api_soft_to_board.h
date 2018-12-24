@@ -65,6 +65,8 @@ typedef struct __attribute__((packed))
 {
 	int32_t dx;
 	int32_t dy;
+	int32_t id;
+	uint32_t backmode;
 	uint32_t reserved;
 } s2b_move_rel_t;
 
@@ -73,6 +75,8 @@ typedef struct __attribute__((packed))
 {
 	int32_t x;
 	int32_t y;
+	int32_t id;
+	uint32_t backmode;
 	uint32_t reserved;
 } s2b_move_abs_t;
 
@@ -111,6 +115,15 @@ typedef struct __attribute__((packed))
 	int32_t dy;
 } s2b_corr_pos_t;
 
+
+#define CMD_STOP_MOVEMENT 8
+typedef struct __attribute__((packed))
+{
+	uint32_t reserved;
+} s2b_stop_movement_t;
+
+
+
 typedef struct __attribute__((packed))
 {
 	uint16_t size;
@@ -130,6 +143,7 @@ s2b_message_t const s2b_msgs[256]  =
 	S2B_MESSAGE_STRUCT(s2b_calibration_t), // 5
 	S2B_MESSAGE_STRUCT(s2b_motors_t), // 6
 	S2B_MESSAGE_STRUCT(s2b_corr_pos_t), // 7
+	S2B_MESSAGE_STRUCT(s2b_stop_movement_t), // 8
 	{0}
 };
 

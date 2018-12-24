@@ -191,8 +191,11 @@ void print_tof_raw_img(void* m);
 typedef struct __attribute__((packed))
 {
 	uint32_t ang;
+	uint32_t pitch;
+	uint32_t roll;
 	int32_t x;
 	int32_t y;
+	int32_t z;
 } hw_pose_t;
 void print_hw_pose(void* m);
 
@@ -202,6 +205,9 @@ typedef struct __attribute__((packed))
 	int32_t ang_err;
 	int32_t x;
 	int32_t y;
+	int32_t id;
+	int32_t remaining;
+	uint32_t micronavi_stop_flags;
 } drive_diag_t;
 void print_drive_diag(void* m);
 

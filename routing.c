@@ -55,7 +55,7 @@
 #ifndef M_PI
 #define M_PI 3.141592653589793238
 #endif
-
+/*
 #ifdef PULU1
 float main_robot_xs = 300.0;
 float main_robot_ys = 330.0;
@@ -71,6 +71,12 @@ float main_robot_xs = 524.0;
 float main_robot_ys = 480.0;
 float main_robot_middle_to_lidar = -183.0;
 #endif
+*/
+
+
+float main_robot_xs = 850.0;
+float main_robot_ys = 600.0;
+float main_robot_middle_to_lidar = -100.0;
 
 static void wide_search_mode();
 static void normal_search_mode();
@@ -101,7 +107,7 @@ uint32_t robot_shapes[32][ROBOT_SHAPE_WINDOW];
 
 static int check_hit(int x, int y, int direction)
 {
-	printf("check_hit(%d, %d, %d): ", x, y, direction);
+//	printf("check_hit(%d, %d, %d): ", x, y, direction);
 	for(int chk_x=0; chk_x<ROBOT_SHAPE_WINDOW; chk_x++)
 	{
 		int pageidx_x, pageidx_y, pageoffs_x, pageoffs_y;
@@ -127,11 +133,11 @@ static int check_hit(int x, int y, int direction)
 		   (uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs+1])
 		      & shape)
 		{
-			printf("1\n");
+//			printf("1\n");
 			return 1;
 		}
 	}
-	printf("0\n");
+//	printf("0\n");
 
 	return 0;
 }
@@ -1332,8 +1338,9 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 }
 
+#define ROUTING_MASK 0b1111111110000000
 //#define ROUTING_MASK 0b1111111111111000
-#define ROUTING_MASK 0
+//#define ROUTING_MASK 0
 
 void gen_routing_page(world_t *w, int xpage, int ypage, int forgiveness)
 {
