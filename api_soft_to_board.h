@@ -111,6 +111,7 @@ typedef struct __attribute__((packed))
 #define CMD_CORR_POS 7
 typedef struct __attribute__((packed))
 {
+	int32_t da;
 	int32_t dx;
 	int32_t dy;
 } s2b_corr_pos_t;
@@ -122,6 +123,13 @@ typedef struct __attribute__((packed))
 	uint32_t reserved;
 } s2b_stop_movement_t;
 
+
+#define CMD_EXT_VACUUM 9
+typedef struct __attribute__((packed))
+{
+	uint8_t power; // 0 = off; percentage from 0 - 100.
+	uint8_t nozzle; // 0 = down (to ground), 1 = up
+} s2b_ext_vacuum_t;
 
 
 typedef struct __attribute__((packed))
@@ -144,6 +152,7 @@ s2b_message_t const s2b_msgs[256]  =
 	S2B_MESSAGE_STRUCT(s2b_motors_t), // 6
 	S2B_MESSAGE_STRUCT(s2b_corr_pos_t), // 7
 	S2B_MESSAGE_STRUCT(s2b_stop_movement_t), // 8
+	S2B_MESSAGE_STRUCT(s2b_ext_vacuum_t), // 9
 	{0}
 };
 

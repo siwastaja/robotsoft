@@ -203,8 +203,11 @@ void print_hw_pose(void* m);
 typedef struct __attribute__((packed))
 {
 	int32_t ang_err;
-	int32_t x;
-	int32_t y;
+	int32_t lin_err;
+	int32_t cur_x;
+	int32_t cur_y;
+	int32_t target_x;
+	int32_t target_y;
 	int32_t id;
 	int32_t remaining;
 	uint32_t micronavi_stop_flags;
@@ -233,10 +236,18 @@ void print_drive_diag(void* m);
 //14:+1150 ..+1250
 //15:+1250 ..+1350
 
+
+// 0: -50  ..  -30
+// 1: -30  ..  -10
+// 2: -10  ..  +10
+// 3: +10  ..  +30
+
 // bit index = (z-base_z)/z_step
 
 #define BASE_Z (-250)
+//#define BASE_Z (-50)
 #define Z_STEP (100)
+//#define Z_STEP (20)
 #define MAX_Z ((Z_STEP*16 + BASE_Z)-1)
 #define VOX_SEG_XS 100
 #define VOX_SEG_YS 100

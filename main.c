@@ -918,6 +918,7 @@ int new_stop_movement()
 
 	if(!p_msg)
 	{
+		printf(__func__);
 		printf("ERROR: p_msg null\n");
 		return -1;
 	}
@@ -934,6 +935,7 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 
 	if(!p_msg)
 	{
+		printf(__func__);
 		printf("ERROR: p_msg null\n");
 		return -1;
 	}
@@ -948,12 +950,38 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	return 0;
 }
 
+int ext_vacuum_cmd(int power, int nozzle)
+{
+	if(power < 0 || power > 100 || nozzle < 0 || nozzle > 1)
+	{
+		printf("WARNING: Illegal parameters to ext_vacuum_cmd(%d, %d)\n", power, nozzle);
+		return -1;
+	}
+
+	s2b_ext_vacuum_t *p_msg = spi_init_cmd(CMD_EXT_VACUUM);
+
+	if(!p_msg)
+	{
+		printf(__func__);
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->power = power;
+	p_msg->nozzle = nozzle;
+
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
 int motor_enable_keepalive(int enabled)
 {
 	s2b_motors_t *p_msg = spi_init_cmd(CMD_MOTORS);
 
 	if(!p_msg)
 	{
+		printf(__func__);
 		printf("ERROR: p_msg null\n");
 		return -1;
 	}
@@ -966,17 +994,19 @@ int motor_enable_keepalive(int enabled)
 	return 0;
 }
 
-int new_correct_pos(int32_t dx, int32_t dy)
+int new_correct_pos(int32_t da, int32_t dx, int32_t dy)
 {
 	s2b_corr_pos_t *p_msg = spi_init_cmd(CMD_CORR_POS);
 
 	if(!p_msg)
 	{
+		printf(__func__);
 		printf("ERROR: p_msg null\n");
 		return -1;
 	}
 
 	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->da = da;
 	p_msg->dx = dx;
 	p_msg->dy = dy;
 
@@ -999,11 +1029,11 @@ void* main_thread()
 	sleep(1);
 	uint64_t subs[B2S_SUBS_U64_ITEMS];
 	ADD_SUB(subs, 4);
-	ADD_SUB(subs, 5); // tof dists
-	ADD_SUB(subs, 6); // tof ampls
-	ADD_SUB(subs, 8);
+//	ADD_SUB(subs, 5); // tof dists
+//	ADD_SUB(subs, 6); // tof ampls
+	ADD_SUB(subs, 8); // tof diagnostics
 	ADD_SUB(subs, 10);
-	ADD_SUB(subs, 11);
+	ADD_SUB(subs, 11); // drive module
 	subscribe_to(subs);
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
@@ -1013,7 +1043,7 @@ void* main_thread()
 
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
-	stdout_msgids[8] = 1;
+//	stdout_msgids[8] = 1;
 
 	srand(time(NULL));
 
@@ -1035,8 +1065,6 @@ void* main_thread()
 	set_hw_obstacle_avoidance_margin(0);
 
 	double chafind_timestamp = 0.0;
-	int lidar_ignore_over = 0;
-	int flush_3dtof = 0;
 	while(1)
 	{
 
@@ -1063,11 +1091,11 @@ void* main_thread()
 
 						if(s==1)
 						{
-							int32_t xcorr = 0, ycorr=0;
-							//provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &xcorr, &ycorr);
+							int32_t acorr = 0, xcorr = 0, ycorr=0;
+							provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &acorr, &xcorr, &ycorr);
 
-							if(xcorr != 0 || ycorr != 0)
-								new_correct_pos(xcorr, ycorr);
+							if(xcorr != 0 || ycorr != 0 || acorr != 0)
+								new_correct_pos(acorr, xcorr, ycorr);
 						}
 
 						if(s==10)
@@ -1429,7 +1457,6 @@ void* main_thread()
 						
 					} break;
 
-
 					default: break;
 				}
 			}
@@ -1499,10 +1526,6 @@ void* main_thread()
 				INCR_POS_CORR_ID();
 				correct_robot_pos(0, 0, 0, pos_corr_id); // forces new LIDAR ID, so that correct amount of images (on old coords) are ignored
 
-#ifdef PULUTOF1
-				while(get_tof3d()); // flush 3DTOF queue
-#endif
-				flush_3dtof = 2; // Flush two extra scans
 			}
 		}
 
@@ -1751,6 +1774,18 @@ void* main_thread()
 		if(!state_vect.v.keep_position && prev_keep_position)
 			release_motors();
 		prev_keep_position = state_vect.v.keep_position;
+
+
+		static uint8_t prev_vacuum_on;
+
+		if(state_vect.v.vacuum_on && !prev_vacuum_on)
+			ext_vacuum_cmd(100, 0);
+		else if(!state_vect.v.vacuum_on && prev_vacuum_on)
+			ext_vacuum_cmd(0, 1);
+
+		prev_vacuum_on = state_vect.v.vacuum_on;
+
+
 
 		static uint8_t prev_autonomous;
 		if(state_vect.v.command_source && !prev_autonomous)

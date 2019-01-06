@@ -118,7 +118,8 @@ void print_drive_diag(void* m)
 {
 	drive_diag_t *mm = m;
 
-	printf("Drive diagnostics  ang_err=%5.2f deg  x=%d  y=%d\n", ANG_I32TOFDEG(mm->ang_err), mm->x, mm->y);
+	printf("Drive diagnostics  ang_err=%5.2f deg lin_err=%d mm cur (%d, %d), targ (%d, %d), id=%d, remaining %d mm, stop_flags=%08x\n", ANG_I32TOFDEG(mm->ang_err), mm->lin_err, 
+		mm->cur_x, mm->cur_y, mm->target_x, mm->target_y, mm->id, mm->remaining, mm->micronavi_stop_flags);
 }
 
 void print_mcu_voxel_map(void* m)

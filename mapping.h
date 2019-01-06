@@ -167,6 +167,6 @@ int doing_autonomous_things();
 void add_map_constraint(world_t* w, int32_t x, int32_t y);
 void remove_map_constraint(world_t* w, int32_t x, int32_t y);
 
-void provide_mcu_voxmap(world_t* w, mcu_multi_voxel_map_t* mcuvox, int32_t* xcorr, int32_t* ycorr);
+void provide_mcu_voxmap(world_t* w, mcu_multi_voxel_map_t* mcuvox, int32_t* acorr, int32_t* xcorr, int32_t* ycorr);
 
 #endif

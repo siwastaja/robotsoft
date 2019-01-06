@@ -153,7 +153,7 @@ typedef union __attribute__((packed))
 		uint8_t keep_position;
 		uint8_t command_source;
 		uint8_t localize_with_big_search_area;
-		uint8_t reserved2;
+		uint8_t vacuum_on;
 		uint8_t reserved3;
 		uint8_t reserved4;
 		uint8_t reserved5;
@@ -176,7 +176,7 @@ static const char* state_vect_names[STATE_VECT_LEN] =
 	"motors on",
 	"autonomous exploration",
 	"big localization area",
-	"reserved",
+	"vacuum app",
 	"reserved",
 	"reserved",
 	"reserved",
