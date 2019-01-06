@@ -222,7 +222,7 @@ void rotate_tmpvox(uint16_t* restrict out, uint16_t* restrict in, double ang_rad
 	{
 		double fshift = ((double)(TMPVOX_YMID - yy)*step); // Bottom line (yy=0) shifts right with positive ang.
 		int shift = (fshift>=0.0)?(fshift+0.5):(fshift-0.5);
-		printf("Line yy=%d shifts by %d\n", yy, shift);
+//		printf("Line yy=%d shifts by %d\n", yy, shift);
 
 		if(shift >= 0)
 		{
@@ -246,7 +246,7 @@ void rotate_tmpvox(uint16_t* restrict out, uint16_t* restrict in, double ang_rad
 	{
 		double fshift = ((double)(xx - TMPVOX_XMID)*step); // Left column (xx=0) shifts down with positive ang.
 		int shift = (fshift>=0.0)?(fshift+0.5):(fshift-0.5);
-		printf("Column xx=%d shifts by %d\n", xx, shift);
+//		printf("Column xx=%d shifts by %d\n", xx, shift);
 
 		if(shift >= 0)
 		{
@@ -271,6 +271,13 @@ void clear_voxel_map()
 	memset(tmpvox, 0, sizeof tmpvox);
 }
 
+// Modifies val_ as a side effect.
+#define CALC_ONES(val_, bits_, result_) do{ result_=0; for(int i_=0; i_<(bits_); i_++) { if(val_&1){result_++;}   val_>>=1;  }   } while(0)
+#define CALC_ZEROES(val_, bits_, result_) do{ result_=0; for(int i_=0; i_<(bits_); i_++) { if(!(val_&1)){result_++;}   val_>>=1;  }   } while(0)
+
+
+#define CMP_MASK 0b1111111111110000
+
 void insert_mcu_voxel_map(uint16_t* restrict extvox, mcu_multi_voxel_map_t* restrict mcuvox)
 {
 	for(int i = 0; i<3; i++)
@@ -293,7 +300,7 @@ void insert_mcu_voxel_map(uint16_t* restrict extvox, mcu_multi_voxel_map_t* rest
 				{
 					int ex = seg_lims[b].xmin/MAP_UNIT_W + TMPVOX_XMID + xx;
 					int ey = seg_lims[b].ymin/MAP_UNIT_W + TMPVOX_YMID + yy;
-					uint16_t val = mcuvox->maps[i][yy*VOX_SEG_XS+xx];
+					uint16_t val = mcuvox->maps[i][yy*VOX_SEG_XS+xx]; // & CMP_MASK;
 					extvox[(ey)*TMPVOX_XS + (ex)] = val;
 
 					//if(val != 0) printf("block %d (%d,%d) goes to (%d,%d)\n", b, xx, yy, ex, ey);
@@ -310,7 +317,7 @@ void insert_mcu_voxel_map(uint16_t* restrict extvox, mcu_multi_voxel_map_t* rest
 				{
 					int ex = seg_lims[b].xmin/MAP_UNIT_W + TMPVOX_XMID + xx*2;
 					int ey = seg_lims[b].ymin/MAP_UNIT_W + TMPVOX_YMID + yy*2;
-					uint16_t val = mcuvox->maps[i][yy*VOX_SEG_XS+xx];
+					uint16_t val = mcuvox->maps[i][yy*VOX_SEG_XS+xx]; // & CMP_MASK;
 					extvox[(ey+0)*TMPVOX_XS + (ex+0)] = val;
 					extvox[(ey+0)*TMPVOX_XS + (ex+1)] = val;
 					extvox[(ey+1)*TMPVOX_XS + (ex+0)] = val;
@@ -373,8 +380,8 @@ static inline void shift_page_offs(int* page, int* offs, int delta)
 //	printf("--> page=%d, offs=%d\n", *page, *offs);
 }
 
-#define PERFORMANCE_CROP 100
-int score_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_y, int32_t rota_mid_x, int32_t rota_mid_y, 
+#define PERFORMANCE_CROP 120
+int score_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_y,
 	int n_speculations, speculation_t* restrict speculations)
 {
 	int8_t min_x = 127;
@@ -422,14 +429,6 @@ int score_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_
 	int ref_py = PAGE(ref_y);
 	int ref_oy = OFFS(ref_y);	
 
-
-// Modifies val_ as a side effect.
-#define CALC_ONES(val_, bits_, result_) do{ result_=0; for(int i_=0; i_<(bits_); i_++) { if(val_&1){result_++;}   val_>>=1;  }   } while(0)
-#define CALC_ZEROES(val_, bits_, result_) do{ result_=0; for(int i_=0; i_<(bits_); i_++) { if(!(val_&1)){result_++;}   val_>>=1;  }   } while(0)
-
-
-#define CMP_MASK 0b1111111111110000
-
 	for(int yy = y_start; yy <= y_end; yy++)
 	{
 		for(int xx = x_start; xx <= x_end; xx++)
@@ -463,7 +462,8 @@ int score_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_
 				uint16_t neut = voxval & map_cmp_neutral;
 //				uint16_t hi = voxval & map_cmp_hi;
 				
-				int numbits_lo, numbits_neut, numbits_hi;
+//				int numbits_lo, numbits_neut, numbits_hi;
+				int numbits_neut;
 //				CALC_ONES(lo, 16, numbits_lo);
 				CALC_ONES(neut, 16, numbits_neut);
 //				CALC_ONES(hi, 16, numbits_hi);
@@ -487,7 +487,71 @@ int score_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_
 
 }
 
-int map_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_y, int32_t rota_mid_x, int32_t rota_mid_y, int da, int dx_blocks, int dy_blocks, double *ang_corr_out)
+#if 1
+int map_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_y, int da, int dx_blocks, int dy_blocks, double *ang_corr_out)
+{
+	int ref_px = PAGE(ref_x);
+	int ref_ox = OFFS(ref_x);
+	int ref_py = PAGE(ref_y);
+	int ref_oy = OFFS(ref_y);
+
+	static map_page_t copies[5][5];
+	int copy_start_pagex = ref_px-2;
+	int copy_start_pagey = ref_py-2;	
+
+	for(int i = 0; i<5; i++)
+	{
+		for(int o=0; o<5; o++)
+		{
+			memcpy(&copies[i][o], w->pages[copy_start_pagex+i][copy_start_pagey+o], sizeof(map_page_t));
+		}
+	}
+
+//	int dx_blocks = dx/MAP_UNIT_W;
+//	int dy_blocks = dy/MAP_UNIT_W;
+
+//	int cnt = 0;
+
+	double avg_ang_corr_accum = 0.0;
+	int avg_ang_corr_n = 0;
+
+	for(int yy = 0; yy < TMPVOX_YS; yy++)
+	{
+		for(int xx = 0; xx < TMPVOX_XS; xx++)
+		{
+			int map_px = ref_px;
+			int map_ox = ref_ox;
+			int map_py = ref_py;
+			int map_oy = ref_oy;
+			shift_page_offs(&map_px, &map_ox, xx-TMPVOX_XMID+dx_blocks);			
+			shift_page_offs(&map_py, &map_oy, yy-TMPVOX_YMID+dy_blocks);
+
+			int copy_px = map_px-copy_start_pagex;
+			int copy_py = map_py-copy_start_pagey;
+
+			uint64_t map_says = copies[copy_px][copy_py].voxmap[MAPIDX(map_ox, map_oy)];
+			uint16_t map_cmp_neutral = map_says&CMP_MASK;
+
+			if(vox[yy*TMPVOX_XS+xx] != 0)
+			{
+				w->pages[map_px][map_py]->voxmap[MAPIDX(map_ox, map_oy)] = vox[yy*TMPVOX_XS+xx];
+
+				w->changed[map_px][map_py] = 1;
+
+			}
+		}
+	}
+
+	*ang_corr_out = 0.0;
+
+	return 0;
+}
+
+#endif
+
+
+#if 0
+int map_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_y, int da, int dx_blocks, int dy_blocks, double *ang_corr_out)
 {
 	int ref_px = PAGE(ref_x);
 	int ref_ox = OFFS(ref_x);
@@ -604,26 +668,28 @@ int map_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_y,
 
 				w->changed[map_px][map_py] = 1;
 
-				int uncorrected_y_units = yy - TMPVOX_YMID;
-				int uncorrected_x_units = xx - TMPVOX_XMID;
+				#if 0
+					int uncorrected_y_units = yy - TMPVOX_YMID;
+					int uncorrected_x_units = xx - TMPVOX_XMID;
 
-				if(uncorrected_y_units < -10 || uncorrected_y_units > 10 || uncorrected_x_units < -10 || uncorrected_x_units > 10)
-				{
-					int bestfit_y_units = use_voxyy - TMPVOX_YMID;
-					int bestfit_x_units = use_voxxx - TMPVOX_XMID;
-
-					double supposed_angle = atan2(uncorrected_y_units, uncorrected_x_units);
-					double bestfit_angle  = atan2(bestfit_y_units, bestfit_x_units);
-
-					double ang_corr = supposed_angle - bestfit_angle;
-					if(ang_corr < -M_PI/2.0) ang_corr += 2*M_PI;
-
-					if(ang_corr > DEGTORAD(-15) && ang_corr < DEGTORAD(15))
+					if(uncorrected_y_units < -10 || uncorrected_y_units > 10 || uncorrected_x_units < -10 || uncorrected_x_units > 10)
 					{
-						avg_ang_corr_accum += ang_corr;
-						avg_ang_corr_n++;
+						int bestfit_y_units = use_voxyy - TMPVOX_YMID;
+						int bestfit_x_units = use_voxxx - TMPVOX_XMID;
+
+						double supposed_angle = atan2(uncorrected_y_units, uncorrected_x_units);
+						double bestfit_angle  = atan2(bestfit_y_units, bestfit_x_units);
+
+						double ang_corr = supposed_angle - bestfit_angle;
+						if(ang_corr < -M_PI/2.0) ang_corr += 2*M_PI;
+
+						if(ang_corr > DEGTORAD(-15) && ang_corr < DEGTORAD(15))
+						{
+							avg_ang_corr_accum += ang_corr;
+							avg_ang_corr_n++;
+						}
 					}
-				}
+				#endif
 			}
 
 			xx += 3;
@@ -691,6 +757,10 @@ int map_voxmap(world_t* w, uint16_t* restrict vox, int32_t ref_x, int32_t ref_y,
 
 }
 
+#endif
+
+
+
 /*
 	ref_x, ref_y: actual millimeter coordinates of the TMPVOX_XMID, TMPVOX_YMID. This isn't necessarily the robot's
 		      position within the voxmap, but originates from the microcontroller. Because the microcontroller
@@ -707,33 +777,52 @@ int slam_voxmap(world_t* w, uint16_t* vox, int32_t ref_x, int32_t ref_y, int32_t
 	int32_t *corr_a, int32_t *corr_x, int32_t *corr_y)
 {
 
+	static int test_first = 1;
+
+	static uint16_t rotated_vox[TMPVOX_XS*TMPVOX_YS];
+
 	printf("Localization & mapping on voxmap, ref_x=%d, ref_y=%d, rota_mid_x=%d, rota_mid_y=%d\n", ref_x, ref_y, rota_mid_x, rota_mid_y);
 
 	load_25pages(w, PAGE(ref_x), PAGE(ref_y));
 
-	speculation_t speculations_pass1[9] =
-	{{-2, -2, 0},
-	{-2,  0, 0},
-	{-2, +2, 0},
-	{ 0, -2, 0},
-	{ 0,  0, 0},
-	{ 0, +2, 0},
-	{+2, -2, 0},
-	{+2,  0, 0},
-	{+2, +2, 0}};
-	
-	static const int additional_score_pass1[9] =
+#define NUM_ANGLES_PASS1 7
+	static const double angles_pass1[NUM_ANGLES_PASS1] =
+	{
+		DEGTORAD(-4.5),
+		DEGTORAD(-3.0),
+		DEGTORAD(-1.5),
+		DEGTORAD(0.0),
+		DEGTORAD(1.5),
+		DEGTORAD(3.0),
+		DEGTORAD(4.5)
+	};
+
+	static const int angles_additional_score_pass1[NUM_ANGLES_PASS1] =
 	{
 		0,
-		1,
 		0,
 		1,
 		3,
 		1,
 		0,
-		1,
 		0
 	};
+
+#define NUM_ANGLES_PASS2 3
+	static const double angles_pass2[NUM_ANGLES_PASS2] =
+	{
+		DEGTORAD(-0.75),
+		DEGTORAD(0.0),
+		DEGTORAD(0.75),
+	};
+
+	static const int angles_additional_score_pass2[NUM_ANGLES_PASS2] =
+	{
+		0,
+		3,
+		0
+	};
+
 
 	speculation_t speculations_pass2[9] =
 	{{-1, -1, 0},
@@ -761,23 +850,80 @@ int slam_voxmap(world_t* w, uint16_t* vox, int32_t ref_x, int32_t ref_y, int32_t
 
 	printf("Pass 1\n");
 
-	score_voxmap(w, vox, ref_x, ref_y, rota_mid_x, rota_mid_y, 9, speculations_pass1);
-
-	int max = -99999999;
-	int winner = 0;
-	for(int i=0; i<9; i++)
+	double pass1_ang_winner;
+	int pass1_x_winner;
+	int pass1_y_winner;
+	int pass1_max_score = -9999999;
+	for(int a=0; a<NUM_ANGLES_PASS1; a++)
 	{
-		int score = speculations_pass1[i].score + additional_score_pass1[i];
-		printf("SPECUL%d: score=%d  ", i, score);
-		if(score > max)
+		speculation_t speculations_pass1[9] =
+		{{-3, -3, 0},
+		{-3,  0, 0},
+		{-3, +3, 0},
+		{ 0, -3, 0},
+		{ 0,  0, 0},
+		{ 0, +3, 0},
+		{+3, -3, 0},
+		{+3,  0, 0},
+		{+3, +3, 0}};
+		
+		static const int additional_score_pass1[9] =
 		{
-			max = score;
-			winner = i;
+			0,
+			1,
+			0,
+			1,
+			3,
+			1,
+			0,
+			1,
+			0
+		};
+
+
+		double rota_ang = angles_pass1[a];
+
+		if(rota_ang > DEGTORAD(-0.1) && rota_ang < DEGTORAD(0.1))
+		{
+			// No rotation
+			score_voxmap(w, vox, ref_x, ref_y, 9, speculations_pass1);
+		}
+		else
+		{
+			memset(rotated_vox, 0, sizeof(rotated_vox));
+			rotate_tmpvox(rotated_vox, vox, rota_ang);
+			score_voxmap(w, rotated_vox, ref_x, ref_y, 9, speculations_pass1);
+		}
+
+		int max = -99999999;
+		int winner = 0;
+		for(int i=0; i<9; i++)
+		{
+			int score = speculations_pass1[i].score + additional_score_pass1[i];
+			printf("SPECUL%d: score=%d  ", i, score);
+			if(score > max)
+			{
+				max = score;
+				winner = i;
+			}
+		}
+		printf("\nWinner for angle %.2f deg is %d: x=%d, y=%d\n",  RADTODEG(rota_ang), winner, speculations_pass1[winner].x_units, speculations_pass1[winner].y_units);
+
+		int weighed_score = max + angles_additional_score_pass1[a];
+
+		if(weighed_score > pass1_max_score)
+		{
+			pass1_max_score = weighed_score;
+			pass1_ang_winner = rota_ang;
+			pass1_x_winner = speculations_pass1[winner].x_units;
+			pass1_y_winner = speculations_pass1[winner].y_units;
 		}
 	}
-//	winner = 4; // !!!!!!!!!!!!!!!!!!!!!!!!!!!
-	printf("\nWinner is %d: x=%d, y=%d\n", winner, speculations_pass1[winner].x_units, speculations_pass1[winner].y_units);
 
+
+	printf("Winner for pass1 is %.2f deg, x=%d, y=%d\n", RADTODEG(pass1_ang_winner), pass1_x_winner, pass1_y_winner);
+
+/*
 	speculation_t speculations_second[9];
 
 	for(int i=0; i<9; i++)
@@ -789,7 +935,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, int32_t ref_x, int32_t ref_y, int32_t
 
 	printf("Pass 2\n");
 
-	score_voxmap(w, vox, ref_x, ref_y, rota_mid_x, rota_mid_y, 9, speculations_second);
+	score_voxmap(w, vox, ref_x, ref_y, 9, speculations_second);
 
 	max = -99999999;
 	winner = 0;
@@ -808,15 +954,48 @@ int slam_voxmap(world_t* w, uint16_t* vox, int32_t ref_x, int32_t ref_y, int32_t
 
 	int x_corr = -1*speculations_second[winner].x_units;
 	int y_corr = -1*speculations_second[winner].y_units;
+*/
 
-	printf("          ->>>>>>>>>>>>>>>    Mapping with correction x=%d units, y=%d units\n", x_corr, y_corr);
+	int x_corr = -1*pass1_x_winner;
+	int y_corr = -1*pass1_y_winner;
 
+
+	if(test_first)
+	{
+		pass1_ang_winner = DEGTORAD(4.5);
+		x_corr = 3;
+		y_corr = 3;
+	}
+
+	// Regenerating the best rotated voxmap is probably more efficient than storing it from when it's generated for matching.
+
+	printf("          ->>>>>>>>>>>>>>>    Mapping with correction ang=%.2f deg, x=%d units, y=%d units\n", RADTODEG(pass1_ang_winner), x_corr, y_corr);
 	double insertion_ang_corr = 0.0;
-	map_voxmap(w, vox, ref_x, ref_y, rota_mid_x, rota_mid_y, 0, x_corr, y_corr, &insertion_ang_corr);
 
-	*corr_a = RADTOANG32(insertion_ang_corr);
+
+	if(test_first)
+	{
+		if(pass1_ang_winner > DEGTORAD(-0.1) && pass1_ang_winner < DEGTORAD(0.1))
+		{
+			// no rotation
+			map_voxmap(w, vox, ref_x, ref_y, 0, x_corr, y_corr, &insertion_ang_corr);
+		}
+		else
+		{
+			memset(rotated_vox, 0, sizeof(rotated_vox));
+			rotate_tmpvox(rotated_vox, vox, pass1_ang_winner);
+			map_voxmap(w, rotated_vox, ref_x, ref_y, 0, x_corr, y_corr, &insertion_ang_corr);
+		}
+	}
+
+	double a_corr = pass1_ang_winner;
+
+	*corr_a = RADTOANG32(a_corr);
 	*corr_x = x_corr*MAP_UNIT_W;
 	*corr_y = y_corr*MAP_UNIT_W;
+
+
+	test_first = 0;
 
 	return 0;
 }
