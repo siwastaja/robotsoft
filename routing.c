@@ -1359,7 +1359,7 @@ void gen_routing_page(world_t *w, int xpage, int ypage, int forgiveness)
 			for(int i = 0; i < 32; i++)
 			{
 				tmp<<=1;
-				uint64_t mapval = w->pages[xpage][ypage]->voxmap[(yy*32+i)*MAP_PAGE_W + xx];
+				uint32_t mapval = w->pages[xpage][ypage]->voxmap[(yy*32+i)*MAP_PAGE_W + xx];
 				uint8_t cons = w->pages[xpage][ypage]->meta[((yy*32+i)/2)*(MAP_PAGE_W/2) + (xx/2)].constraints;
 				tmp |= (cons & CONSTRAINT_FORBIDDEN) || (mapval & ROUTING_MASK);
 			}
@@ -1371,7 +1371,7 @@ void gen_routing_page(world_t *w, int xpage, int ypage, int forgiveness)
 			for(int i = 0; i < 32; i++)
 			{
 				tmp<<=1;
-				uint64_t mapval = w->pages[xpage][ypage+1]->voxmap[(0*32+i)*MAP_PAGE_W + xx];
+				uint32_t mapval = w->pages[xpage][ypage+1]->voxmap[(0*32+i)*MAP_PAGE_W + xx];
 				uint8_t cons = w->pages[xpage][ypage+1]->meta[((0*32+i)/2)*(MAP_PAGE_W/2) + (xx/2)].constraints;
 				tmp |= (cons & CONSTRAINT_FORBIDDEN) || (mapval & ROUTING_MASK);
 			}

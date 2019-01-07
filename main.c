@@ -122,7 +122,7 @@ state_vect_t state_vect =
 	.mapping_2d = 1,
 	.mapping_3d = 1,
 	.mapping_collisions = 1,
-	.keep_position = 1,
+	.keep_position = 0, // !!!!!
 	.command_source = USER_IN_COMMAND,
 	.localize_with_big_search_area = 0
 	}

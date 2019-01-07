@@ -94,7 +94,7 @@ typedef struct  __attribute__ ((packed))
 	*/
 
 	int32_t  base_z_mm; // Reference Z level, bit0 spans  [base_z_mm...base_z_mm+z_step[
-	uint64_t voxmap[MAP_PAGE_W*MAP_PAGE_W];
+	uint32_t voxmap[MAP_PAGE_W*MAP_PAGE_W];
 	map_unit_meta_t meta[(MAP_PAGE_W/2)*(MAP_PAGE_W/2)]; // half*half resolution
 
 /*

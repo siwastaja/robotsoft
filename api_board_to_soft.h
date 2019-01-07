@@ -237,11 +237,6 @@ void print_drive_diag(void* m);
 //15:+1250 ..+1350
 
 
-// 0: -50  ..  -30
-// 1: -30  ..  -10
-// 2: -10  ..  +10
-// 3: +10  ..  +30
-
 // bit index = (z-base_z)/z_step
 
 #define BASE_Z (-250)
