@@ -91,7 +91,8 @@ void print_test_msg3(void* m);
 
 #define PWR_STATUS_FLAG_CHARGING  1
 #define PWR_STATUS_FLAG_FULL      2
-
+// Power flowing into the battery can be calculated as
+// bat_mv/1000.0 * (pha_charging_current_ma+phb_charging_current_ma)/1000.0   (in watts)
 typedef struct __attribute__((packed))
 {
 	uint8_t  flags;

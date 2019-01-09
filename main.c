@@ -1103,6 +1103,8 @@ void* main_thread()
 							cur_x = ((hw_pose_t*)&p_data[offs])->x;
 							cur_y = ((hw_pose_t*)&p_data[offs])->y;
 							cur_ang = ((hw_pose_t*)&p_data[offs])->ang;
+							mark_current_as_visited(&world, cur_ang, cur_x, cur_y);
+
 						}
 
 

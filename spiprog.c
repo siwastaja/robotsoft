@@ -317,7 +317,7 @@ int main(int argc, char** argv)
 	if(!(argc == 2 || argc == 4 || argc == 5 || argc >= 11))
 	{
 		printf("Usage: spiprog <reset_type> [bank&sector] [firmware_filename] [v]\n");
-		printf("Reset types: r = s = soft reset.  h = hard reset.  l = stuck in infinite loop.  d = don't reset, stay in programmer.  R = reset if already in programmer\n");
+		printf("Reset types: r = s = soft reset.  h = hard reset.  l = stuck in infinite loop.  d = don't reset, stay in programmer.  R = reset if already in programmer.  S = shutdown\n");
 		printf("Bank&sector string: FOR FIRMWARE: 10 = bank1, sector0.  Valid banks:1,2. Valid sectors:0..7\n");
 		printf("If bank, sector and firmware filename is supplied, it's flashed and verified.\n");
 		printf("If additional v is given, verbose mode is enabled.\n");
@@ -343,6 +343,7 @@ int main(int argc, char** argv)
 	if(argv[1][0] == 'l') reset_type = 55;
 	if(argv[1][0] == 'd') reset_type = 999;
 	if(argv[1][0] == 'R') reset_type = 9999;
+	if(argv[1][0] == 'S') reset_type = 56;
 
 	if(argc==11 || argc==12) 
 	{
