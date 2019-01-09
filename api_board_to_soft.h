@@ -88,6 +88,10 @@ typedef struct __attribute__((packed))
 } test_msg3_t;
 void print_test_msg3(void* m);
 
+
+#define PWR_STATUS_FLAG_CHARGING  1
+#define PWR_STATUS_FLAG_FULL      2
+
 typedef struct __attribute__((packed))
 {
 	uint8_t  flags;
