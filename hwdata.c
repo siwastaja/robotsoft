@@ -89,8 +89,6 @@ int update_robot_pos(int32_t ang, int32_t x, int32_t y)
 #define I16FROMBUFLE(b_, s_)  ( ((uint16_t)b_[(s_)+1]<<8) | ((uint16_t)b_[(s_)+0]<<0) )
 #define I32FROMBUFLE(b_, s_)  ( ((uint32_t)b_[(s_)+3]<<24) | ((uint32_t)b_[(s_)+2]<<16) | ((uint32_t)b_[(s_)+1]<<8) | ((uint32_t)b_[(s_)+0]<<0) )
 
-chafind_results_t chafind_results;
-
 void send_keepalive()
 {
 }

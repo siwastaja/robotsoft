@@ -137,7 +137,7 @@ void print_chafind_results(void* m)
 {
 	chafind_results_t *mm = m;
 
-	static const char state_names[17][] =
+	static const char* state_names[17] =
 	{
 		"IDLE",
 		"START",
