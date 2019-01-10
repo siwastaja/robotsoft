@@ -37,11 +37,12 @@
 #include <stropts.h>
 #include <sys/select.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 
 #include "tcp_parser.h"
 
 int tcp_listener_sock;
-int tcp_client_sock = -1; // One client at the time is allowed.
+volatile int tcp_client_sock = -1; // One client at the time is allowed. Volatile because accessed in SIGPIPE signal handler.
 
 int build_socket(uint16_t port)
 {
@@ -83,8 +84,17 @@ int build_socket(uint16_t port)
 	return sock;
 }
 
+void sigpipe_handler(int signum)
+{
+	printf("Info: Broken pipe, closing TCP connection.\n");
+	close(tcp_client_sock);
+	tcp_client_sock = -1;
+}
+
 int init_tcp_comm()
 {
+	sigaction(SIGPIPE, &(struct sigaction){sigpipe_handler}, NULL);
+
 	/* Create the socket and set it up to accept connections. */
 	tcp_listener_sock = build_socket(22222);
 	if(listen(tcp_listener_sock, 1) < 0)
