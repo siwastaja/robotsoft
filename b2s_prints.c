@@ -51,10 +51,11 @@ void print_pwr_status(void* m)
 {
 	pwr_status_t* mm = m;
 
-	printf("Battery %.3f V (%u %%), charger input %.2f V, charging current phase A: %.2f A, phase B: %.2f, total %.2f\n", 
+	printf("Battery %.3f V (%u %%), charger input %.2f V, charging current phase A: %.2f A, phase B: %.2f, total %.2f, flags: %s %s\n", 
 		(float)mm->bat_mv/1000.0, mm->bat_percent, (float)mm->charger_input_mv/1000.0,
 		(float)mm->pha_charging_current_ma/1000.0, (float)mm->phb_charging_current_ma/1000.0,
-		(float)mm->pha_charging_current_ma/1000.0+(float)mm->phb_charging_current_ma/1000.0);
+		(float)mm->pha_charging_current_ma/1000.0+(float)mm->phb_charging_current_ma/1000.0,
+		(mm->flags&PWR_STATUS_FLAG_CHARGING)?"CHARGING ":"",(mm->flags&PWR_STATUS_FLAG_FULL)?"FULLY_CHARGED ":"");
 }
 
 void print_tof_raw_dist(void* m)
@@ -130,6 +131,41 @@ void print_mcu_voxel_map(void* m)
 void print_mcu_multi_voxel_map(void* m)
 {
 
+}
+
+void print_chafind_results(void* m)
+{
+	chafind_results_t *mm = m;
+
+	static const char state_names[17][] =
+	{
+		"IDLE",
+		"START",
+		"WAIT_DISTANCE",
+		"WAIT_FWD1",
+		"WAIT_FWD1_STOPEXTRA1",
+		"WAIT_FWD1_STOPEXTRA2",
+		"ACCUM_DATA",
+		"WAIT_BACKING",
+		"START_REBACKING",
+		"WAIT_REBACKING",
+		"WAIT_FWD2",
+		"WAIT_FWD2_STOPEXTRA1",
+		"ACCUM_FRONTAVG",
+		"WAIT_PUSH",
+		"SUCCESS",
+		"FAIL",
+		"INVALID STATE NUMBER"
+	};
+
+	int cur_state = mm->cur_state;
+	if(mm->cur_state < 0 || mm->cur_state > 15)
+	{
+		cur_state = 16;
+	}
+
+	printf("Charger mount diagnostics: cur_state=%d[%s] first_movement = %d mm, num angle adjustment passes = %d, num vexling passes = %d, positioning success = %d, dist before push = %d, result code = %d\n",
+		mm->cur_state, state_names[cur_state], mm->first_movement_needed, mm->turning_passes_needed, mm->vexling_passes_needed, mm->accepted_pos, mm->dist_before_push, mm->result);
 }
 
 

@@ -929,6 +929,25 @@ int new_stop_movement()
 	return 0;
 }
 
+int new_mount_charger()
+{
+	printf("MOUNT CHARGER\n");
+	s2b_mount_charger_t *p_msg = spi_init_cmd(CMD_MOUNT_CHARGER);
+
+	if(!p_msg)
+	{
+		printf(__func__);
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
+
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn)
 {
 	s2b_move_abs_t *p_msg = spi_init_cmd(CMD_MOVE_ABS);

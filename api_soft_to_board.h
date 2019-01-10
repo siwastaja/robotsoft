@@ -132,6 +132,13 @@ typedef struct __attribute__((packed))
 } s2b_ext_vacuum_t;
 
 
+#define CMD_MOUNT_CHARGER 10
+typedef struct __attribute__((packed))
+{
+	uint32_t reserved;
+} s2b_mount_charger_t;
+
+
 typedef struct __attribute__((packed))
 {
 	uint16_t size;
@@ -153,6 +160,7 @@ s2b_message_t const s2b_msgs[256]  =
 	S2B_MESSAGE_STRUCT(s2b_corr_pos_t), // 7
 	S2B_MESSAGE_STRUCT(s2b_stop_movement_t), // 8
 	S2B_MESSAGE_STRUCT(s2b_ext_vacuum_t), // 9
+	S2B_MESSAGE_STRUCT(s2b_mount_charger_t), // 10
 	{0}
 };
 

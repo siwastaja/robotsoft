@@ -278,6 +278,19 @@ typedef struct __attribute__((packed))
 void print_mcu_multi_voxel_map(void* m);
 
 
+typedef struct __attribute__((packed))
+{
+	uint8_t cur_state;
+	int16_t first_movement_needed; // distance the robot needed to go fwd or back as the very first operation. 0 if within tolerances. in mm.
+	uint8_t turning_passes_needed; // optical positioning needed to move the robot this many passes without needing to back of / go forward again (adjusting angle was enough alone)
+	uint8_t vexling_passes_needed; // optical positioning needed to move the robot this many passes, doing a back-off-go-forward pass.
+	uint8_t accepted_pos;          // 1, if optical positioning succesful. 0 if failed there.
+	int16_t dist_before_push;      // after succesful optical positioning, the measured distance to the charger right before the push. in mm.
+	uint8_t result;                // 100 = success. Others = failure.
+} chafind_results_t;
+void print_chafind_results(void* m);
+
+
 /*
 	The pointers
 */
@@ -295,6 +308,7 @@ MAYBE_EXTERN hw_pose_t* hw_pose;
 MAYBE_EXTERN drive_diag_t* drive_diag;
 MAYBE_EXTERN mcu_voxel_map_t* mcu_voxel_map;
 MAYBE_EXTERN mcu_multi_voxel_map_t* mcu_multi_voxel_map;
+MAYBE_EXTERN chafind_results_t* chafind_results;
 
 
 /*
@@ -362,6 +376,7 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(hw_pose, "Sensor fusion accumulated pose estimate"), // 10
 	B2S_MESSAGE_STRUCT(drive_diag, "Drive module (mech feedbacks) diagnostics"), // 11
 	B2S_MESSAGE_STRUCT(mcu_voxel_map, "Low level voxel map, 1 part of 12"), // 12
+	B2S_MESSAGE_STRUCT(chafind_results, "Automatic charger mounting diagnostics"), // 13
 	{0}  
 };
 
