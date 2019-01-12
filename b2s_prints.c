@@ -119,8 +119,8 @@ void print_drive_diag(void* m)
 {
 	drive_diag_t *mm = m;
 
-	printf("Drive diagnostics  ang_err=%5.2f deg lin_err=%d mm cur (%d, %d), targ (%d, %d), id=%d, remaining %d mm, stop_flags=%08x\n", ANG_I32TOFDEG(mm->ang_err), mm->lin_err, 
-		mm->cur_x, mm->cur_y, mm->target_x, mm->target_y, mm->id, mm->remaining, mm->micronavi_stop_flags);
+	printf("Drive diagnostics  ang_err=%5.2f deg lin_err=%d mm cur (%d, %d), targ (%d, %d), id=%d, remaining %d mm, stop_flags=%08x, run=%u\n", ANG_I32TOFDEG(mm->ang_err), mm->lin_err, 
+		mm->cur_x, mm->cur_y, mm->target_x, mm->target_y, mm->id, mm->remaining, mm->micronavi_stop_flags, mm->run);
 }
 
 void print_mcu_voxel_map(void* m)
@@ -164,8 +164,10 @@ void print_chafind_results(void* m)
 		cur_state = 16;
 	}
 
-	printf("Charger mount diagnostics: cur_state=%d[%s] first_movement = %d mm, num angle adjustment passes = %d, num vexling passes = %d, positioning success = %d, dist before push = %d, result code = %d\n",
-		mm->cur_state, state_names[cur_state], mm->first_movement_needed, mm->turning_passes_needed, mm->vexling_passes_needed, mm->accepted_pos, mm->dist_before_push, mm->result);
+	printf("Charger mount diagnostics: cur_state=%d[%s] accum_cnt left=%d, mid=%d, right=%d --> backwall_ang=%.2f deg, midmark_x=%d, midmark_y=%d --> shift=%d, dist=%d\n"
+	       "first_movement = %d mm, num angle adjustment passes = %d, num vexling passes = %d, positioning success = %d, dist before push = %d, result code = %d\n",
+		mm->cur_state, state_names[cur_state], mm->left_accum_cnt, mm->mid_accum_cnt, mm->right_accum_cnt, ANG_I32TOFDEG(mm->backwall_ang), mm->midmark_x, mm->midmark_y, mm->shift, mm->dist, 
+		mm->first_movement_needed, mm->turning_passes_needed, mm->vexling_passes_needed, mm->accepted_pos, mm->dist_before_push, mm->result);
 }
 
 

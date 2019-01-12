@@ -1083,6 +1083,11 @@ void* main_thread()
 */
 	set_hw_obstacle_avoidance_margin(0);
 
+	if(spi_init_cmd_queue() < 0)
+	{
+		printf("ERROR: initial spi_init_cmd_queue error\n");
+	}
+
 	double chafind_timestamp = 0.0;
 	while(1)
 	{
@@ -1246,7 +1251,7 @@ void* main_thread()
 			}
 			if(cmd == 'l')
 			{
-				hw_find_charger();
+				new_mount_charger();
 
 //				read_charger_pos();
 //				find_charger_state = 1;
@@ -1316,7 +1321,7 @@ void* main_thread()
 				msg_rc_movement_status.requested_y = msg_cr_dest.y;
 				msg_rc_movement_status.requested_backmode = msg_cr_dest.backmode;
 
-				move_remaining = 999999; // invalidate
+				move_remaining = 0; //999999; // invalidate
 
 				printf("  ---> DEST params: X=%d Y=%d backmode=0x%02x\n", msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode);
 //				if(msg_cr_dest.backmode & 0b1000) // Rotate pose
@@ -1331,7 +1336,7 @@ void* main_thread()
 				find_charger_state = 0;
 				lookaround_creep_reroute = 0;
 				do_follow_route = 0;
-				send_info(INFO_STATE_IDLE);
+				send_info(msg_cr_dest.backmode?INFO_STATE_REV:INFO_STATE_FWD);
 
 			}
 			else if(ret == TCP_CR_ROUTE_MID)
@@ -1599,6 +1604,8 @@ void* main_thread()
 						msg_rc_movement_status.status = TCP_RC_MOVEMENT_STATUS_STOPPED;
 						msg_rc_movement_status.obstacle_flags = micronavi_stop_flags;
 						tcp_send_msg(&msgmeta_rc_movement_status, &msg_rc_movement_status);
+						send_info(INFO_STATE_IDLE);
+
 					}
 
 					cmd_state = 0;
@@ -1613,8 +1620,15 @@ void* main_thread()
 
 		if(cmd_state == TCP_CR_DEST_MID)
 		{
-			if(move_remaining < 5)
+//			static int joocnt = 0;
+//			joocnt++;
+//			if(joocnt%16==15)
+//				printf("%d\n", move_remaining);
+
+			static int prev_move_remaining;
+			if(move_remaining < 5 && prev_move_remaining > 5)
 			{
+//				printf(" MOVEMENT FINISHED !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
 				if(tcp_client_sock >= 0)
 				{
 					msg_rc_movement_status.cur_ang = cur_ang>>16;
@@ -1623,11 +1637,14 @@ void* main_thread()
 					msg_rc_movement_status.status = TCP_RC_MOVEMENT_STATUS_SUCCESS;
 					msg_rc_movement_status.obstacle_flags = 0;
 					tcp_send_msg(&msgmeta_rc_movement_status, &msg_rc_movement_status);
+					send_info(INFO_STATE_IDLE);
+
 				}
 
 				cmd_state = 0;
 
 			}
+			prev_move_remaining = move_remaining;
 		}
 	
 //		if(find_charger_state < 4)
@@ -1868,7 +1885,12 @@ void* main_thread()
 		{
 			cmd_send_to_robot = 0;
 			spi_send_queue();
-			usleep(500000);
+			usleep(200000);
+			if(spi_init_cmd_queue() < 0)
+			{
+				usleep(300000);
+			}
+
 			if(spi_init_cmd_queue() < 0)
 			{
 				printf("ERROR: spi_init_cmd_queue error\n");

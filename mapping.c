@@ -1377,7 +1377,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	double pass1_ang_winner = 0;
 	for(int th=0; th<N_SLAM_THREADS; th++)
 	{
-		printf("Pass1 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
+		//printf("Pass1 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
 
 		if(winner_scores[th] > pass1_best_score)
 		{
@@ -1457,7 +1457,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	double pass2_ang_winner = 0;
 	for(int th=0; th<N_SLAM_THREADS; th++)
 	{
-		printf("Pass2 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
+		//printf("Pass2 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
 
 		if(winner_scores[th] > pass2_best_score)
 		{
@@ -1486,7 +1486,6 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 */
 	// Regenerating the best rotated voxmap is probably more efficient than storing it from when it's generated for matching.
 
-	printf("          ->>>>>>>>>>>>>>>    Mapping with correction ang=%.2f deg, x=%d units, y=%d units\n", RADTODEG(pass2_ang_winner), x_corr, y_corr);
 	double insertion_ang_corr = 0.0;
 
 
@@ -1506,8 +1505,13 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 			rotate_tmpvox(rotated_vox, vox, pass2_ang_winner);
 			map_voxmap(w, rotated_vox, ref_x, ref_y, 0, x_corr, y_corr, &insertion_ang_corr);
 		}
-	}
+		printf("          ->>>>>>>>>>>>>>>    Mapping with correction ang=%.2f deg, x=%d units, y=%d units\n", RADTODEG(pass2_ang_winner), x_corr, y_corr);
 
+	}
+	else
+	{
+		printf(" Mapping turned off ----- not mapping.\n");
+	}
 
 	double time_insertion = subsec_timestamp() - time;
 
@@ -1537,7 +1541,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	static uint16_t rotated_vox[TMPVOX_XS*TMPVOX_YS];
 	static uint16_t rotated_vox_lores[TMPVOX_XS*TMPVOX_YS/4];
 
-	printf("Localization & mapping on voxmap, ref_x=%d, ref_y=%d, rota_mid_x=%d, rota_mid_y=%d\n", ref_x, ref_y, rota_mid_x, rota_mid_y);
+//	printf("Localization & mapping on voxmap, ref_x=%d, ref_y=%d, rota_mid_x=%d, rota_mid_y=%d\n", ref_x, ref_y, rota_mid_x, rota_mid_y);
 
 	time = subsec_timestamp();
 
@@ -1615,7 +1619,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	int xy_nsteps_pass2 = 5;  // to +100mm
 
 
-	printf("Pass 1\n");
+	//printf("Pass 1\n");
 
 	time = subsec_timestamp();
 
@@ -1665,7 +1669,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	double time_pass1 = subsec_timestamp() - time;
 
 
-	printf("Winner for pass1 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass1_ang_winner), pass1_x_winner, pass1_y_winner, pass1_max_score);
+//	printf("Winner for pass1 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass1_ang_winner), pass1_x_winner, pass1_y_winner, pass1_max_score);
 
 	int x_start_pass2 = xy_start_pass2 + pass1_x_winner;
 	int y_start_pass2 = xy_start_pass2 + pass1_y_winner;
@@ -1834,7 +1838,7 @@ void mark_current_as_visited(world_t* w, uint32_t now_ang, int now_x, int now_y)
 
 #if 1 // Vacuum application, mark the full nozzle area
 
-	#define VACUUM_NOZZLE_WIDTH 600.0
+	#define VACUUM_NOZZLE_WIDTH 500.0
 	#define ITEM_STEP_SIZE 40.0
 	#define VACUUM_NUM_STEPS ((int)(VACUUM_NOZZLE_WIDTH/ITEM_STEP_SIZE))
 
@@ -1844,11 +1848,11 @@ void mark_current_as_visited(world_t* w, uint32_t now_ang, int now_x, int now_y)
 		float x = (float)now_x + cos(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT+50.0 + deep*50.0);
 		float y = (float)now_y + sin(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT+50.0 + deep*50.0);
 
-		// Shift the result to the right:
 		int32_t angle = now_ang + (uint32_t)(-90*ANG_1_DEG);
+		int32_t opposite_angle = now_ang + (uint32_t)(90*ANG_1_DEG);
 
-		x += cos(ANG32TORAD(angle))*VACUUM_NOZZLE_WIDTH/2.0;
-		y += sin(ANG32TORAD(angle))*VACUUM_NOZZLE_WIDTH/2.0;
+		x += cos(ANG32TORAD(opposite_angle))*VACUUM_NOZZLE_WIDTH/2.0;
+		y += sin(ANG32TORAD(opposite_angle))*VACUUM_NOZZLE_WIDTH/2.0;
 
 		page_coords(x,y, &idx_x, &idx_y, &offs_x, &offs_y);
 		load_9pages(&world, idx_x, idx_y);
@@ -2136,7 +2140,6 @@ void map_sonars(world_t* w, int n_sonars, sonar_point_t* p_sonars)
 
 int unfamiliarity_score(world_t* w, int x, int y)
 {
-#if 0
 	int n_walls = 0;
 	int n_seen = 0;
 	int n_visited = 1; // to avoid div per zero
@@ -2149,11 +2152,13 @@ int unfamiliarity_score(world_t* w, int x, int y)
 
 			if(w->pages[px][py])
 			{
-				if(w->pages[px][py]->units[ox][oy].result & UNIT_WALL) n_walls++;
+				if(w->pages[px][py]->voxmap[MAPIDX(ox, oy)] & 0b1111111111100000) n_walls++;
 				if(n_walls > 1)
 					return 0;
-				n_seen += w->pages[px][py]->units[ox][oy].num_seen;
-				n_visited += w->pages[px][py]->units[ox][oy].num_visited;
+
+				if(w->pages[px][py]->voxmap[MAPIDX(ox, oy)] & 0b0000000000011111) n_seen++;
+
+				n_visited += w->pages[px][py]->meta[(oy/2)*(MAP_PAGE_W/2)+(ox/2)].num_visited;
 			}
 
 		}
@@ -2163,8 +2168,6 @@ int unfamiliarity_score(world_t* w, int x, int y)
 		return 0;
 
 	return 1000000/n_visited;
-#endif
-	return 0;
 }
 
 typedef struct

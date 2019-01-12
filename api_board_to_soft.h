@@ -216,6 +216,7 @@ typedef struct __attribute__((packed))
 	int32_t id;
 	int32_t remaining;
 	uint32_t micronavi_stop_flags;
+	uint8_t run;
 } drive_diag_t;
 void print_drive_diag(void* m);
 
@@ -280,7 +281,20 @@ void print_mcu_multi_voxel_map(void* m);
 
 typedef struct __attribute__((packed))
 {
+	// Current status:
 	uint8_t cur_state;
+
+	// Live calculation steps and results
+	int32_t left_accum_cnt;
+	int32_t mid_accum_cnt;
+	int32_t right_accum_cnt;
+	int32_t backwall_ang;
+	int32_t midmark_x;
+	int32_t midmark_y;
+	int32_t shift;
+	int32_t dist;
+
+	// Results, updated on the fly:
 	int16_t first_movement_needed; // distance the robot needed to go fwd or back as the very first operation. 0 if within tolerances. in mm.
 	uint8_t turning_passes_needed; // optical positioning needed to move the robot this many passes without needing to back of / go forward again (adjusting angle was enough alone)
 	uint8_t vexling_passes_needed; // optical positioning needed to move the robot this many passes, doing a back-off-go-forward pass.
@@ -324,7 +338,10 @@ the subscription is disabled, data is not wanted), and if not, just write the la
 You can safely modify the structures as you want before the tx_fifo_push() is finally called.
 
 When tx_fifo_push() is called, the pointers move to the next free slot. Note that the memory content
-is NOT automatically cleared, so old values hang out there.
+is NOT automatically cleared, so old values hang out there; when the subscriptions change on-the-fly,
+which happens frequently, this data can be complete gibberish. So always write all members, or memset
+the whole struct.
+
 
 For robotsoft:
 Works in a very similar way. Same data structures are used.

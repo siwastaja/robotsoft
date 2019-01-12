@@ -5,7 +5,7 @@
 # ./robotsoft
 
 #DEVIP = 10.3.0.6
-DEVIP = 192.168.1.3
+DEVIP = 192.168.43.59
 
 CC = gcc
 LD = gcc

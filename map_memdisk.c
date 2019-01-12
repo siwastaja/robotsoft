@@ -53,8 +53,14 @@ int write_map_page(world_t* w, int pagex, int pagey)
 	{
 		printf("Error: Writing map data failed\n");
 	}
+
+	//int fd = fileno(f);
 	fclose(f);
+
+	sync();
+
 	w->changed[pagex][pagey] = 0;
+
 
 	return 0;
 }

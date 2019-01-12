@@ -180,20 +180,27 @@ void tcp_send_picture(int16_t id, uint8_t bytes_per_pixel, int xs, int ys, uint8
 	PR_FUNC();
 }
 
-void tcp_send_robot_info()
-{
-	PR_FUNC();
-}
-
 
 void tcp_send_info_state(info_state_t state)
 {
-	PR_FUNC();
+	static info_state_t prev = INFO_STATE_UNDEF;
+
+	if(state != prev)
+	{
+		prev = state;
+		const int size = 1;
+		uint8_t buf[size];
+		buf[0] = (int8_t)state;
+		tcp_send(TCP_RC_INFOSTATE_MID, size, buf);
+	}
 }
 
 void tcp_send_sync_request()
 {
-	PR_FUNC();
+	const int size = 1;
+	uint8_t buf[size];
+	buf[0] = 0;
+	tcp_send(TCP_RC_SYNCREQ_MID, size, buf);
 }
 
 void tcp_send_hmap(int xsamps, int ysamps, int32_t ang, int xorig_mm, int yorig_mm, int unit_size_mm, int8_t *hmap)
@@ -250,10 +257,92 @@ void tcp_send_localization_result(int32_t da, int32_t dx, int32_t dy, uint8_t su
 
 int tcp_send_msg(tcp_message_t* msg_type, void* msg)
 {
-	PR_FUNC();
+	static uint8_t sendbuf[65536];
+	uint8_t* p_dest = sendbuf;
+	uint8_t* p_src = msg;
+
+	for(int field=0;;field++)
+	{
+		switch(msg_type->types[field])
+		{
+			case 'b':
+			case 'B':
+				*(p_dest++) = *(p_src++);
+			break;
+
+			case 's':
+			case 'S':
+			{
+				*(p_dest++) = (((*((uint16_t*)p_src)) )>>8)&0xff;
+				*(p_dest++) = (((*((uint16_t*)p_src)) )>>0)&0xff;
+				p_src+=2;
+			}
+			break;
+
+			case 'i':
+			case 'I':
+			{
+				*(p_dest++) = (((*((uint32_t*)p_src)) )>>24)&0xff;
+				*(p_dest++) = (((*((uint32_t*)p_src)) )>>16)&0xff;
+				*(p_dest++) = (((*((uint32_t*)p_src)) )>>8)&0xff;
+				*(p_dest++) = (((*((uint32_t*)p_src)) )>>0)&0xff;
+				p_src+=4;
+			}
+			break;
+
+			case 'l':
+			case 'L':
+			{
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>56)&0xff;
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>48)&0xff;
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>40)&0xff;
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>32)&0xff;
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>24)&0xff;
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>16)&0xff;
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>8)&0xff;
+				*(p_dest++) = (((*((uint64_t*)p_src)) )>>0)&0xff;
+				p_src+=8;
+			}
+			break;
+
+			case 0:
+				goto PARSE_END;
+
+			default:
+				fprintf(stderr, "ERROR: parse type string has invalid character 0x%02x\n", msg_type->types[field]);
+				return -2;
+		}
+	}
+
+	PARSE_END: ;
+
+	//printf("Sending tcp, size=%d\n", msg_type->size+3);
+	tcp_send(msg_type->mid, msg_type->size, sendbuf);
 
 	return 0;
 }
+
+void tcp_send_robot_info()
+{
+	const int size = 8;
+	uint8_t buf[size];
+
+	extern float main_robot_xs;
+	extern float main_robot_ys;
+	extern float main_robot_middle_to_lidar;
+	int16_t rx = main_robot_xs;
+	int16_t ry = main_robot_ys;
+	int16_t lid_xoffs = -1.0*main_robot_middle_to_lidar;
+	int16_t lid_yoffs = 0;
+
+	I16TOBUF(rx, buf, 0);
+	I16TOBUF(ry, buf, 2);
+	I16TOBUF(lid_xoffs, buf, 4);
+	I16TOBUF(lid_yoffs, buf, 6);
+
+	tcp_send(TCP_RC_ROBOTINFO_MID, size, buf);
+}
+
 
 /*
 Return value:

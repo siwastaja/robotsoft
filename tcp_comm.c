@@ -128,6 +128,10 @@ int handle_tcp_listener()
 	printf("INFO: connection accepted, client %08x, port %u.\n", clientname.sin_addr.s_addr,
 	        ntohs(clientname.sin_port));
 
+	extern void tcp_send_robot_info();
+	tcp_send_robot_info();
+	tcp_send_statevect();
+
 	return 0;
 }
 

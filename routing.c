@@ -1338,7 +1338,7 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 }
 
-#define ROUTING_MASK 0b1111111110000000
+#define ROUTING_MASK 0b1111111111100000
 //#define ROUTING_MASK 0b1111111111111000
 //#define ROUTING_MASK 0
 
