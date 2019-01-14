@@ -152,6 +152,7 @@ void map_next_with_larger_search_area();
 void map_sonars(world_t* w, int n_sonars, sonar_point_t* p_sonars);
 void map_collision_obstacle(world_t* w, int32_t cur_ang, int cur_x, int cur_y, int stop_reason, int vect_valid, float vect_ang_rad);
 void mark_current_as_visited(world_t* w, uint32_t now_ang, int now_x, int now_y);
+void clear_visited(world_t* w, int now_x, int now_y);
 
 
 
@@ -161,7 +162,7 @@ void stop_automapping();
 void start_automap_only_compass();
 void autofsm();
 void dbg_test();
-void clear_within_robot(world_t* w, pos_t pos);
+void clear_within_robot(world_t* w, int32_t ang, int32_t x, int32_t y);
 void massive_search_area();
 int doing_autonomous_things();
 

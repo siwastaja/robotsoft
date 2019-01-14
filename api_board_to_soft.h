@@ -217,6 +217,14 @@ typedef struct __attribute__((packed))
 	int32_t remaining;
 	uint32_t micronavi_stop_flags;
 	uint8_t run;
+	int32_t dbg1;
+	int32_t dbg2;
+	int32_t dbg3;
+	int32_t dbg4;
+	int32_t ang_speed_i;
+	int32_t lin_speed_i;
+	int32_t dbg5;
+	int32_t dbg6;
 } drive_diag_t;
 void print_drive_diag(void* m);
 

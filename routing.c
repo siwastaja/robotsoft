@@ -33,12 +33,11 @@
 	A 60x speed increase has already been optimized in compared to the first dumb
 	implementation,	but I'm sure there's still a lot to do.
 
-	One "routing unit" is 40x40mm.
+	One "routing unit" is 50x50mm.
 
 */
 
-#define ROUTING_3D_FORGIVENESS 0
-#define AVOID_3D_THINGS
+//#define SEARCH_DBGPRINTS
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -107,7 +106,10 @@ uint32_t robot_shapes[32][ROBOT_SHAPE_WINDOW];
 
 static int check_hit(int x, int y, int direction)
 {
-//	printf("check_hit(%d, %d, %d): ", x, y, direction);
+
+#ifdef SEARCH_DBGPRINTS
+	printf("check_hit(%d, %d, %d): ", x, y, direction);
+#endif
 	for(int chk_x=0; chk_x<ROBOT_SHAPE_WINDOW; chk_x++)
 	{
 		int pageidx_x, pageidx_y, pageoffs_x, pageoffs_y;
@@ -133,12 +135,16 @@ static int check_hit(int x, int y, int direction)
 		   (uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs+1])
 		      & shape)
 		{
-//			printf("1\n");
+#ifdef SEARCH_DBGPRINTS
+			printf("1\n");
+#endif
 			return 1;
 		}
 	}
-//	printf("0\n");
 
+#ifdef SEARCH_DBGPRINTS
+	printf("0\n");
+#endif
 	return 0;
 }
 
@@ -211,11 +217,25 @@ static int test_robot_turn(int x, int y, float start, float end)
 	if(dir_cur < 0) dir_cur = 0; else if(dir_cur > 31) dir_cur = 31;
 	if(dir_end < 0) dir_end = 0; else if(dir_end > 31) dir_end = 31;
 
+#ifdef SEARCH_DBGPRINTS
+	printf("test_robot_turn start=%.1f end=%.1f, da=%.1f, dir_cur=%d, dir_end=%d\n", RADTODEG(start), RADTODEG(end), RADTODEG(da), dir_cur, dir_end);
+#endif
 	while(dir_cur != dir_end)
 	{
+#ifdef SEARCH_DBGPRINTS
+		printf("dir %d", dir_cur);
+#endif
 		if(check_hit(x, y, dir_cur))
+		{
+#ifdef SEARCH_DBGPRINTS
+			printf(" HITS!\n");
+#endif
 			return 0;
+		}
 
+#ifdef SEARCH_DBGPRINTS
+		printf("\n");
+#endif
 		if(cw) dir_cur--; else dir_cur++;
 
 		if(dir_cur < 0) dir_cur = 31;
@@ -291,8 +311,9 @@ static int line_of_sight(route_xy_t p1, route_xy_t p2)
 	int dir = (ang/(2.0*M_PI) * 32.0)+0.5;
 	if(dir < 0) dir = 0; else if(dir > 31) dir = 31;
 
-//	printf("ang = %.4f  dir = %d \n", ang, dir);
-
+#ifdef SEARCH_DBGPRINTS
+	printf("line_of_sight ang = %.1f  dir = %d\n", RADTODEG(ang), dir);
+#endif
 	while(1)
 	{
 		int x = (cos(ang)*pos + (float)p1.x)+0.5;
@@ -791,10 +812,14 @@ static void draw_triangle(int a_idx, int x0, int y0, int x1, int y1, int x2, int
 
 #define TODEG(x) ((360.0*x)/(2.0*M_PI))
 
+int reverse_shapes = 0;
 int tight_shapes = 0;
 
 static void draw_robot_shape(int a_idx, float ang)
 {
+//	if(reverse_shapes)
+//		ang += M_PI;
+
 	float o_x = (ROBOT_SHAPE_WINDOW/2.0)*(float)MAP_UNIT_W;
 	float o_y = (ROBOT_SHAPE_WINDOW/2.0)*(float)MAP_UNIT_W;
 
@@ -804,11 +829,7 @@ static void draw_robot_shape(int a_idx, float ang)
 	float middle_yoffs = -0.0;
 	middle_xoffs = main_robot_middle_to_lidar;
 
-	#ifdef PULU1
-	const float extra_x = 40.0, extra_y = 40.0;
-	#else
 	const float extra_x = 0.0, extra_y = 0.0;
-	#endif
 
 	if(tight_shapes == 2)
 	{
@@ -817,8 +838,8 @@ static void draw_robot_shape(int a_idx, float ang)
 	}
 	else if(tight_shapes == 1)
 	{
-		robot_xs = (main_robot_xs + 20.0 + extra_x);
-		robot_ys = (main_robot_ys + 20.0 + extra_y);
+		robot_xs = (main_robot_xs + 85.0 + extra_x);
+		robot_ys = (main_robot_ys + 50.0 + extra_y);
 	}
 	else if(tight_shapes == 0)
 	{
@@ -906,29 +927,37 @@ static void gen_robot_shapes()
 
         memset(robot_shapes, 0, sizeof(robot_shapes));
 
+	FILE* f_dbg_shapes = fopen("dbg_shapes.txt", "a");
+
 	for(int a=0; a<32; a++)
 	{
 		draw_robot_shape(a, ((float)a*2.0*M_PI)/32.0);
 
-/*		printf("a = %d\n", a);
-
-		for(int y = 0; y < ROBOT_SHAPE_WINDOW; y++)
+		if(f_dbg_shapes)
 		{
-			for(int x = 0; x < ROBOT_SHAPE_WINDOW; x++)
+			fprintf(f_dbg_shapes, "a = %d, tight_shapes = %d\n", a, tight_shapes);
+
+			for(int y = 0; y < ROBOT_SHAPE_WINDOW; y++)
 			{
-				printf(robot_shapes[a][x][y]?"# ":"  ");
+				for(int x = 0; x < ROBOT_SHAPE_WINDOW; x++)
+				{
+					if(y==ROBOT_SHAPE_WINDOW/2 && x==ROBOT_SHAPE_WINDOW/2)
+						fprintf(f_dbg_shapes, "X ");
+					else	
+						fprintf(f_dbg_shapes, (robot_shapes[a][x]&(1UL<<(31-y)))?"# ":"  ");
+				}
+				fprintf(f_dbg_shapes, "\n");
 			}
-			printf("\n");
 		}
-*/
 	}
 
+	if(f_dbg_shapes) fclose(f_dbg_shapes);
 }
 
 static void wide_search_mode()
 {
 	tight_shapes = -1;
-	gen_robot_shapes();	
+	gen_robot_shapes();
 }
 
 
@@ -961,10 +990,10 @@ void clear_route(route_unit_t **route)
 	*route = NULL;
 }
 
-static int search(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm)
+static int search(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int change_to_normal, int accept_dist_blocks)
 {
-	search_unit_t* closed_set = NULL;
-	search_unit_t* open_set = NULL;
+	static search_unit_t* closed_set = NULL;
+	static search_unit_t* open_set = NULL;
 
 	clear_route(route);
 
@@ -976,7 +1005,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 	while(start_ang < 0.0) start_ang += 2.0*M_PI;
 	int start_dir = (start_ang/(2.0*M_PI) * 32.0)+0.5;
 
-	printf("Start %d,%d,  end %d,%d  start_ang=%f  start_dir=%d\n", s_x, s_y, e_x, e_y, start_ang, start_dir);
+//	printf("Start %d,%d,  end %d,%d  start_ang=%f  start_dir=%d\n", s_x, s_y, e_x, e_y, start_ang, start_dir);
 
 
 	search_unit_t* p_start = (search_unit_t*) malloc(sizeof(search_unit_t));
@@ -1003,6 +1032,11 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 			return 3;
 		}
 
+		if(change_to_normal && cnt == 201)
+		{
+			normal_search_mode();
+		}
+
 		// Find the lowest f score from open_set.
 		search_unit_t* p_cur = NULL;
 		float lowest_f = 2.0*MAX_F;
@@ -1021,7 +1055,15 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 			return 55;
 		}
 
-		if(p_cur->loc.x == e_x && p_cur->loc.y == e_y)
+		// See if we are close enough:
+		int64_t goal_dx = p_cur->loc.x - e_x;
+		int64_t goal_dy = p_cur->loc.y - e_y;
+
+		int64_t distsq = sq(goal_dx) + sq(goal_dy);
+		int64_t acceptsq = sq(accept_dist_blocks);
+
+//		if(p_cur->loc.x == e_x && p_cur->loc.y == e_y)
+		if(distsq <= acceptsq)
 		{
 
 			//printf("Solution found, cnt = %d\n", cnt);
@@ -1040,13 +1082,13 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 			}
 
 			route_unit_t *rt = *route;
-			while(rt->next && rt->next->next)
+			while(rt && rt->next && rt->next->next)
 			{
 				if(line_of_sight(rt->loc, rt->next->next->loc))
 				{
 //					printf("Deleting.\n");
 					route_unit_t *tmp = rt->next;
-					DL_DELETE(*route, tmp);
+					DL_DELETE(*route, tmp); // crash
 					free(tmp);
 				}
 				else
@@ -1055,8 +1097,11 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 
 			// Remove the first, because it's the starting point.
 			route_unit_t *tm = *route;
-			DL_DELETE(*route, tm);
-			free(tm);
+			if(tm)
+			{
+				DL_DELETE(*route, tm);
+				free(tm);
+			}
 
 			// Free all memory.
 			search_unit_t *p_del, *p_tmp;
@@ -1119,6 +1164,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 					int dir_dx = neigh_loc.x - p_cur->parent->loc.x;
 					int dir_dy = neigh_loc.y - p_cur->parent->loc.y;
 					float ang = atan2(dir_dy, dir_dx);
+					if(reverse_shapes) ang+=M_PI;
 					if(ang < 0.0) ang += 2.0*M_PI;
 					int dir_parent = ang/(2.0*M_PI) * 32.0;
 					if(dir_parent < 0) dir_parent = 0; else if(dir_parent > 31) dir_parent = 31;
@@ -1130,6 +1176,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 					int dir_dx = p_neigh->parent->loc.x - neigh_loc.x;
 					int dir_dy = p_neigh->parent->loc.y - neigh_loc.y;
 					float ang = atan2(dir_dy, dir_dx);
+					if(reverse_shapes) ang+=M_PI;
 					if(ang < 0.0) ang += 2.0*M_PI;
 					int dir_parent = ang/(2.0*M_PI) * 32.0;
 					if(dir_parent < 0) dir_parent = 0; else if(dir_parent > 31) dir_parent = 31;
@@ -1139,13 +1186,28 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 				int direction = 0;
 				if(direction_from_cur_parent < 0 && direction_from_neigh_parent < 0)  // if the previous two don't work out.
 				{
-					if(xx==1 && yy==1)        direction = 1*4; 
-					else if(xx==0 && yy==1)   direction = 2*4; 
-					else if(xx==-1 && yy==1)  direction = 3*4; 
-					else if(xx==-1 && yy==0)  direction = 4*4; 
-					else if(xx==-1 && yy==-1) direction = 5*4; 
-					else if(xx==0 && yy==-1)  direction = 6*4; 
-					else if(xx==1 && yy==-1)  direction = 7*4; 
+					if(!reverse_shapes)
+					{
+						if(xx==1 && yy==0)        direction = 0*4; 
+						else if(xx==1 && yy==1)   direction = 1*4; 
+						else if(xx==0 && yy==1)   direction = 2*4; 
+						else if(xx==-1 && yy==1)  direction = 3*4; 
+						else if(xx==-1 && yy==0)  direction = 4*4; 
+						else if(xx==-1 && yy==-1) direction = 5*4; 
+						else if(xx==0 && yy==-1)  direction = 6*4; 
+						else if(xx==1 && yy==-1)  direction = 7*4; 
+					}
+					else
+					{
+						if(xx==1 && yy==0)        direction = 4*4; 
+						else if(xx==1 && yy==1)   direction = 5*4; 
+						else if(xx==0 && yy==1)   direction = 6*4; 
+						else if(xx==-1 && yy==1)  direction = 7*4; 
+						else if(xx==-1 && yy==0)  direction = 0*4; 
+						else if(xx==-1 && yy==-1) direction = 1*4; 
+						else if(xx==0 && yy==-1)  direction = 2*4; 
+						else if(xx==1 && yy==-1)  direction = 3*4; 
+					}
 				}
 				else
 				{
@@ -1158,7 +1220,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 				// If this is the first neighbor search, test if the robot can turn:
 				if(cnt == 1)
 				{
-					if(!test_robot_turn(p_cur->loc.x, p_cur->loc.y, start_ang, ((float)direction/32.0)*2.0*M_PI*direction))
+					if(!test_robot_turn(p_cur->loc.x, p_cur->loc.y, start_ang, ((float)direction/32.0)*2.0*M_PI))
 					{
 //						printf("Robot cannot turn to direction %d\n", direction);
 						continue;
@@ -1186,7 +1248,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 					p_neigh = (search_unit_t*) malloc(sizeof(search_unit_t));
 					memset(p_neigh, 0, sizeof(search_unit_t));
 					p_neigh->loc.x = neigh_loc.x; p_neigh->loc.y = neigh_loc.y;
-					HASH_ADD(hh, open_set, loc,sizeof(route_xy_t), p_neigh);
+					HASH_ADD(hh, open_set, loc,sizeof(route_xy_t), p_neigh); // crash
 
 					p_neigh->direction = direction;
 					p_neigh->parent = p_cur;
@@ -1259,10 +1321,14 @@ Searches for the route; if it fails almost right away, different back-offs are t
 Note that now "backoffs" also include trying to go forward first, as this could provide better
 results than the search algorithm can provide, in some rare cases.
 
+
+change_to_normal: enable to call normal_search_mode() after some distance; with tight mode initially, has better
+chances of getting out of tight spot, but then switches to normal limits.
+
 */
 
 
-int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm)
+int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int change_to_normal, int accept_dist_blocks)
 {
 
 #define SRCH_NUM_A 23
@@ -1277,7 +1343,7 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 	// If going forward doesn't work out from the beginning, try backing off slightly.
 
-	int ret = search(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm);
+	int ret = search(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, change_to_normal, accept_dist_blocks);
 
 	if(ret == 0)
 		return 0;
@@ -1290,11 +1356,11 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 		{
 			for(int back_idx = 0; back_idx < SRCH_NUM_BACK; back_idx++)
 			{
-				float new_ang = start_ang + (2.0*M_PI*(float)a_s[a_idx]/360.0);
+				float new_ang = start_ang + ((reverse_shapes?0:0)+2.0*M_PI*(float)a_s[a_idx]/360.0);
 				while(new_ang >= 2.0*M_PI) new_ang -= 2.0*M_PI;
 				while(new_ang < 0.0) new_ang += 2.0*M_PI;
-				int new_x = start_x_mm + cos(new_ang)*b_s[back_idx];
-				int new_y = start_y_mm + sin(new_ang)*b_s[back_idx];
+				int new_x = start_x_mm + cos(new_ang)*(reverse_shapes?-1:1)*b_s[back_idx];
+				int new_y = start_y_mm + sin(new_ang)*(reverse_shapes?-1:1)*b_s[back_idx];
 
 				int dir = (new_ang/(2.0*M_PI) * 32.0)+0.5;
 				if(dir < 0) dir = 0; else if(dir > 31) dir = 31;
@@ -1310,10 +1376,10 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 				}
 				else
 				{
-					int ret = search(route, new_ang, new_x, new_y, end_x_mm, end_y_mm);
+					int ret = search(route, new_ang, new_x, new_y, end_x_mm, end_y_mm, change_to_normal, accept_dist_blocks);
 					if(ret == 0)
 					{
-						printf("Search succeeded (back off ang=%.1fdeg, mm = %d), stopping back-off search.\n", TODEG(new_ang), b_s[back_idx]);
+						printf("Search succeeded (back off ang=%.1fdeg, mm = %d), stopping back-off search.\n", TODEG(new_ang), (reverse_shapes?-1:1)*b_s[back_idx]);
 
 						route_unit_t* point = malloc(sizeof(route_unit_t));
 						point->loc.x = new_x_units; point->loc.y = new_y_units;
@@ -1338,7 +1404,7 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 }
 
-#define ROUTING_MASK 0b1111111111100000
+#define ROUTING_MASK 0b1111111111111000
 //#define ROUTING_MASK 0b1111111111111000
 //#define ROUTING_MASK 0
 
@@ -1349,7 +1415,7 @@ void gen_routing_page(world_t *w, int xpage, int ypage, int forgiveness)
 		return;
 	}
 
-	printf("Generating routing page %d,%d\n", xpage, ypage);
+//	printf("Generating routing page %d,%d\n", xpage, ypage);
 
 	for(int xx=0; xx < MAP_PAGE_W; xx++)
 	{
@@ -1395,42 +1461,60 @@ void gen_all_routing_pages(world_t *w, int forgiveness)
 	}
 }
 
-int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int no_tight)
+// Reverse: search running in opposite direction, i.e., "initial back-off" goes forward, otherwise we go backwards.
+// Note: You need to manually invert the resulting backmode bytes.
+int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int reverse)
 {
 	routing_world = w;
 
-	printf("Searching for route...\n");
+	reverse_shapes = reverse;
 
-	printf("Generating routing pages... "); fflush(stdout);
+	int retval = 0;
+
+//	printf("Generating routing pages... "); fflush(stdout);
 	gen_all_routing_pages(w, 0);
-	printf("done.\n");
+//	printf("done.\n");
+
+	printf("Searching with wide limits...\n");
 
 	wide_search_mode();
-	if(search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm))
+	if(search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 0, 0))
 	{
 		normal_search_mode();
 		printf("Searching with normal limits...\n");
 
 		int ret;
-		if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm)) )
+		if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 0, 0)) )
 		{
-			if(no_tight)
+			printf("Search failed - retrying with tighter limits.\n");
+			tight_search_mode();
+			if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, 0)) ) 
 			{
-				printf("There is no route - didn't try tight search because no_tight was set.\n");
-				return ret;
-			}
-			else
-			{
-				printf("Search failed - retrying with tighter limits.\n");
+				printf("Tight search failed - trying to get close enough\n");
 				tight_search_mode();
-				if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm)) ) 
+				if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, 4)) ) 
 				{
-					printf("There is no route.\n");
-					return ret;
+					printf("Close enough search failed - trying to get halfway\n");
+					double direct_len = sqrt(sq(end_x_mm-start_x_mm)+sq(end_y_mm-start_y_mm));
+					direct_len = direct_len*2.0/3.0;
+					int acceptance = direct_len/MAP_UNIT_W;
+
+					if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, acceptance)) ) 
+					{
+						printf("Halfway failed - gave up.\n");	
+						return ret;
+					}
+					else
+					{
+						printf("Found route HALFWAY.\n");
+						retval = -999;
+					}
 				}
 				else
-					printf("Found route with TIGHT limits\n");
+					printf("Found route with TIGHT limits, close enough to dest, but not quite.\n");
 			}
+			else
+				printf("Found route with TIGHT limits\n");
 		}
 		else
 			printf("Found route with normal limits\n");
@@ -1442,7 +1526,7 @@ int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_
 	// tight_search_mode is put into action so that collision avoidance / step skipping/rounding can use it.
 	// TODO: fix this state horror. 
 	tight_search_mode();
-	return 0;
+	return retval;
 }
 
 int32_t temp_lidar_map_mid_x, temp_lidar_map_mid_y;

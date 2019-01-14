@@ -253,7 +253,7 @@ int spi_init_cmd_queue()
 {
 	if(send_pending)
 	{
-		printf("WARN: spi_init_cmd: send is already pending.\n");
+//		printf("WARN: spi_init_cmd: send is already pending.\n");
 		return -1;
 	}
 

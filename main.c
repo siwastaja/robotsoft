@@ -122,7 +122,7 @@ state_vect_t state_vect =
 	.mapping_2d = 1,
 	.mapping_3d = 1,
 	.mapping_collisions = 1,
-	.keep_position = 0, // !!!!!
+	.keep_position = 1, // !!!!!
 	.command_source = USER_IN_COMMAND,
 	.localize_with_big_search_area = 0
 	}
@@ -172,11 +172,14 @@ int the_route_len = 0;
 
 int do_follow_route = 0;
 int route_finished_or_notfound = 0;
-int lookaround_creep_reroute = 0;
 int route_pos = 0;
 int start_route = 0;
+int partial_route = 0;
 int id_cnt = 1;
 int good_time_for_lidar_mapping = 0;
+
+int route_reverse = 1;
+
 
 #define sq(x) ((x)*(x))
 
@@ -190,7 +193,7 @@ void send_info(info_state_t state)
 }
 
 int32_t prev_search_dest_x, prev_search_dest_y;
-int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars, int no_tight)
+int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars)
 {
 	send_info(INFO_STATE_THINK);
 
@@ -199,12 +202,20 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars, int no_tight
 
 	route_unit_t *some_route = NULL;
 
-	int ret = search_route(&world, &some_route, ANG32TORAD(cur_ang), cur_x, cur_y, dest_x, dest_y, no_tight);
+	int ret = search_route(&world, &some_route, ANG32TORAD(cur_ang), cur_x, cur_y, dest_x, dest_y, route_reverse);
+
+	if(ret==-999)
+		partial_route = 1;
+	else
+		partial_route = 0;
 
 	route_unit_t *rt;
 	int len = 0;
 	DL_FOREACH(some_route, rt)
 	{
+		if(route_reverse)
+			rt->backmode = !rt->backmode;
+
 //		if(rt->backmode)
 //			printf(" REVERSE ");
 //		else
@@ -214,7 +225,9 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars, int no_tight
 		mm_from_unit_coords(rt->loc.x, rt->loc.y, &x_mm, &y_mm);					
 //		printf("to %d,%d\n", x_mm, y_mm);
 
-		the_route[len].x = x_mm; the_route[len].y = y_mm; the_route[len].backmode = rt->backmode;
+		the_route[len].x = x_mm; 
+		the_route[len].y = y_mm;
+		the_route[len].backmode = rt->backmode;
 		the_route[len].take_next_early = 100;
 		len++;
 		if(len >= THE_ROUTE_MAX)
@@ -253,9 +266,8 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars, int no_tight
 		do_follow_route = 0;
 		route_finished_or_notfound = 1;
 		send_info(INFO_STATE_IDLE);
+		ret = 99;
 	}
-
-	lookaround_creep_reroute = 0;
 
 	return ret;
 
@@ -280,10 +292,11 @@ void send_route_end_status(uint8_t reason)
 
 int rerun_search()
 {
-	return run_search(prev_search_dest_x, prev_search_dest_y, 0, 1);
+	return run_search(prev_search_dest_x, prev_search_dest_y, 0);
 }
 
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn);
+int rerequest_move_to();
 int new_stop_movement();
 
 static int maneuver_cnt = 0; // to prevent too many successive maneuver operations
@@ -368,7 +381,6 @@ void do_live_obstacle_checking()
 			{
 
 //				do_follow_route = 0;
-//				lookaround_creep_reroute = 0;
 //				new_stop_movement();
 
 				if( (abs(side_drifts[best_drift_idx]) < 50) || ( abs(side_drifts[best_drift_idx]) < 100 && drift_angles[best_angle_idx] < M_PI/13.0))
@@ -411,7 +423,6 @@ void do_live_obstacle_checking()
 					SPEED(18);
 					limit_speed(cur_speedlim);
 					new_stop_movement();
-					lookaround_creep_reroute = 1;
 				}
 #if 0
 			}
@@ -424,254 +435,7 @@ void route_fsm()
 {
 	static int micronavi_stops = 0;
 	static double timestamp;
-	static int creep_cnt;
-
-	if(lookaround_creep_reroute)
-	{
-		if(check_direct_route_non_turning_mm(cur_x, cur_y, the_route[route_pos].x, the_route[route_pos].y))
-		{
-			printf("Direct line-of-sight has appeared to the next waypoint, resuming following the route.\n");
-			lookaround_creep_reroute = 0;
-			do_follow_route = 1;
-			id_cnt++; if(id_cnt > 7) id_cnt = 1;
-			send_info(the_route[route_pos].backmode?INFO_STATE_REV:INFO_STATE_FWD);
-			new_move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
-		}
-	}
-
-	const float lookaround_turn = 10.0;
-
-	if(lookaround_creep_reroute == 1)
-	{
-		do_follow_route = 0;
-		start_route = 0;
-
-		printf("Lookaround, creep & reroute procedure started; backing off 50 mm.\n");
-		turn_and_go_abs_rel(cur_ang, -50, 13, 1);
-		timestamp = subsec_timestamp();
-		lookaround_creep_reroute++;
-	}
-	else if(lookaround_creep_reroute == 2)
-	{
-		double stamp;
-		if( (stamp=subsec_timestamp()) > timestamp+1.0)
-		{
-			if(doing_autonomous_things())
-			{
-				printf("Robot is mapping autonomously: no need to clear the exact route right now, skipping lookaround & creep\n");
-				rerun_search();
-				lookaround_creep_reroute = 0;
-			}
-			else
-			{
-				int dx = the_route[route_pos].x - cur_x;
-				int dy = the_route[route_pos].y - cur_y;
-				float ang = atan2(dy, dx) /*<- ang to dest*/ - DEGTORAD(lookaround_turn);
-
-				if(test_robot_turn_mm(cur_x, cur_y, ANG32TORAD(cur_ang),  ang))
-				{
-					//printf("Can turn to %.1f deg, doing it.\n", -1*lookaround_turn);
-					turn_and_go_abs_rel(RADTOANG32(ang), 0, 13, 1);
-				}
-				else
-				{
-					//printf("Can't turn to %.1f deg, wiggling a bit.\n", -1*lookaround_turn);
-					turn_and_go_abs_rel(cur_ang-4*ANG_1_DEG, 0, 13, 1);
-				}
-				timestamp = subsec_timestamp();
-				lookaround_creep_reroute++;
-			}
-		}
-	}
-	else if(lookaround_creep_reroute == 3)
-	{
-		double stamp;
-		if( (stamp=subsec_timestamp()) > timestamp+1.0)
-		{
-			int dx = the_route[route_pos].x - cur_x;
-			int dy = the_route[route_pos].y - cur_y;
-			float ang = atan2(dy, dx) /*<- ang to dest*/ - DEGTORAD(1.8*lookaround_turn);
-
-			if(test_robot_turn_mm(cur_x, cur_y, ANG32TORAD(cur_ang),  ang))
-			{
-				//printf("Can turn to %.1f deg, doing it.\n", -1.8*lookaround_turn);
-				turn_and_go_abs_rel(RADTOANG32(ang), -20, 13, 1);
-			}
-			else
-			{
-				//printf("Can't turn to %.1f deg, wiggling a bit.\n", -1.8*lookaround_turn);
-				turn_and_go_abs_rel(cur_ang-4*ANG_1_DEG, 0, 13, 1);
-			}
-			timestamp = subsec_timestamp();
-			lookaround_creep_reroute++;
-		}
-	}
-	else if(lookaround_creep_reroute == 4)
-	{
-		double stamp;
-		if( (stamp=subsec_timestamp()) > timestamp+1.0)
-		{
-			int dx = the_route[route_pos].x - cur_x;
-			int dy = the_route[route_pos].y - cur_y;
-			float ang = atan2(dy, dx) /*<- ang to dest*/ + DEGTORAD(lookaround_turn);
-
-			if(test_robot_turn_mm(cur_x, cur_y, ANG32TORAD(cur_ang),  ang))
-			{
-				//printf("Can turn to %.1f deg, doing it.\n",lookaround_turn);
-				turn_and_go_abs_rel(RADTOANG32(ang), 0, 13, 1);
-			}
-			else
-			{
-				//printf("Can't turn to %.1f deg, wiggling a bit.\n",lookaround_turn);
-				turn_and_go_abs_rel(cur_ang+12*ANG_1_DEG, 0, 13, 1);
-			}
-			timestamp = subsec_timestamp();
-			lookaround_creep_reroute++;
-		}
-	}
-	else if(lookaround_creep_reroute == 5)
-	{
-		double stamp;
-		if( (stamp=subsec_timestamp()) > timestamp+1.0)
-		{
-			int dx = the_route[route_pos].x - cur_x;
-			int dy = the_route[route_pos].y - cur_y;
-			float ang = atan2(dy, dx) /*<- ang to dest*/ + DEGTORAD(1.8*lookaround_turn);
-
-			if(test_robot_turn_mm(cur_x, cur_y, ANG32TORAD(cur_ang),  ang))
-			{
-				//printf("Can turn to %.1f deg, doing it.\n", 1.8*lookaround_turn);
-				turn_and_go_abs_rel(RADTOANG32(ang), 0, 13, 1);
-			}
-			else
-			{
-				//printf("Can't turn to %.1f deg, wiggling a bit.\n", 1.8*lookaround_turn);
-				turn_and_go_abs_rel(cur_ang+4*ANG_1_DEG, 0, 13, 1);
-			}
-			timestamp = subsec_timestamp();
-			lookaround_creep_reroute++;
-		}
-	}
-	else if(lookaround_creep_reroute == 6)
-	{
-		creep_cnt = 0;
-		double stamp;
-		if( (stamp=subsec_timestamp()) > timestamp+1.0)
-		{
-			int dx = the_route[route_pos].x - cur_x;
-			int dy = the_route[route_pos].y - cur_y;
-			float ang = atan2(dy, dx) /*<- ang to dest*/;
-
-			if(test_robot_turn_mm(cur_x, cur_y, ANG32TORAD(cur_ang),  ang))
-			{
-				//printf("Can turn towards the dest, doing it.\n");
-				turn_and_go_abs_rel(RADTOANG32(ang), 50, 13, 1);
-			}
-			else
-			{
-				int reret;
-				printf("Can't turn towards the dest, rerouting.\n");
-				if((reret = rerun_search()) == 1)
-				{
-					printf("Routing failed in start, going to daiju mode for a while.\n");
-					send_info(INFO_STATE_DAIJUING);
-					daiju_mode(1);
-					lookaround_creep_reroute = 8;
-				}
-				else
-				{
-					printf("Routing succeeded, or failed later. Stopping lookaround, creep & reroute procedure.\n");
-					if(reret != 0) send_route_end_status(reret);
-
-					lookaround_creep_reroute = 0;
-				}
-			}
-			timestamp = subsec_timestamp();
-			lookaround_creep_reroute++;
-		}
-	}
-	else if(lookaround_creep_reroute == 7)
-	{
-		static double time_interval = 2.5;
-		double stamp;
-		if( (stamp=subsec_timestamp()) > timestamp+time_interval)
-		{
-			int dx = the_route[route_pos].x - cur_x;
-			int dy = the_route[route_pos].y - cur_y;
-			int dist = sqrt(sq(dx)+sq(dy));
-			if(dist > 300 && creep_cnt < 3)
-			{
-				float ang = atan2(dy, dx) /*<- ang to dest*/;
-				int creep_amount = 100;
-				int dest_x = cur_x + cos(ang)*creep_amount;
-				int dest_y = cur_y + sin(ang)*creep_amount;
-				int hitcnt = check_direct_route_non_turning_hitcnt_mm(cur_x, cur_y, dest_x, dest_y);
-				if(hitcnt < 1)
-				{
-					//printf("Can creep %d mm towards the next waypoint, doing it\n", creep_amount);
-					time_interval = 2.5;
-					turn_and_go_abs_rel(RADTOANG32(ang) + ((creep_cnt&1)?(5*ANG_1_DEG):(-5*ANG_1_DEG)), creep_amount, 15, 1);
-				}
-				else
-				{
-					creep_cnt=99;
-				}
-				creep_cnt++;
-			}
-			else
-			{
-				printf("We have creeped enough (dist to waypoint=%d, creep_cnt=%d), no line of sight to the waypoint, trying to reroute\n",
-					dist, creep_cnt);
-				int reret;
-				if((reret=rerun_search()) == 1)
-				{
-					printf("Routing failed in start, going to daiju mode for a while.\n");
-					daiju_mode(1);
-					send_info(INFO_STATE_DAIJUING);
-					lookaround_creep_reroute++;
-				}
-				else
-				{
-					printf("Routing succeeded, or failed later. Stopping lookaround, creep & reroute procedure.\n");
-					if(reret != 0) send_route_end_status(reret);
-					lookaround_creep_reroute = 0;
-				}
-
-			}
-			timestamp = subsec_timestamp();
-		}
-	}
-	else if(lookaround_creep_reroute >= 8 && lookaround_creep_reroute < 12)
-	{
-		double stamp;
-		if( (stamp=subsec_timestamp()) > timestamp+5.0)
-		{
-			printf("Daijued enough.\n");
-			daiju_mode(0);
-			int reret;
-			if((reret = rerun_search()) == 1)
-			{
-				printf("Routing failed in start, going to daiju mode for a bit more...\n");
-				daiju_mode(1);
-					send_info(INFO_STATE_DAIJUING);
-				lookaround_creep_reroute++;
-				timestamp = subsec_timestamp();
-			}
-			else
-			{
-				printf("Routing succeeded, or failed later. Stopping lookaround, creep & reroute procedure.\n");
-				if(reret != 0) send_route_end_status(reret);
-				lookaround_creep_reroute = 0;
-			}
-
-		}
-	}
-	else if(lookaround_creep_reroute == 12)
-	{
-		printf("Giving up lookaround, creep & reroute procedure!\n");
-		lookaround_creep_reroute = 0;
-	}
-
+	static int nothing_happening = 0;
 	if(start_route)
 	{
 		printf("Start going id=%d!\n", id_cnt<<4);
@@ -685,25 +449,36 @@ void route_fsm()
 	{
 		int id = move_id;
 
+		static int32_t prev_x, prev_ang, prev_y;
+
+		if(cur_x == prev_x && cur_y == prev_y && prev_ang == cur_ang)
+		{
+			nothing_happening++;
+			if(nothing_happening > 2000)
+			{
+				printf("Nothing happening, re-requesting previous move\n");
+				rerequest_move_to();
+				nothing_happening = 0;
+			}
+		}
+		else
+		{
+			nothing_happening = 0;
+		}
+		prev_x = cur_x;
+		prev_y = cur_y;
+		prev_ang = cur_ang;
+
 		if(((id&0b1110000) == (id_cnt<<4)) && ((id&0b1111) == ((route_pos)&0b1111)))
 		{
 			if(micronavi_stop_flags || feedback_stop_flags)
 			{
-				if(micronavi_stops < 7)
+				printf("Micronavi STOP, rerouting.\n");
+				int reret=rerun_search();
+				if(reret > 0)
 				{
-					printf("Micronavi STOP, entering lookaround_creep_reroute\n");
-					micronavi_stops++;
-					lookaround_creep_reroute = 1;
-				}
-				else
-				{
-					printf("Micronavi STOP, too many of them already, rerouting.\n");
-					int reret;
-					if((reret=rerun_search()) != 0)
-					{
-						printf("Routing failed.\n");
-						send_route_end_status(reret);
-					}
+					printf("Routing failed.\n");
+					send_route_end_status(reret);
 				}
 			}
 			else if(id_cnt == 0) // Zero id move is a special move during route following
@@ -767,12 +542,25 @@ void route_fsm()
 					}
 					else
 					{
-						printf("Done following the route.\n");
-						send_info(INFO_STATE_IDLE);
-						micronavi_stops = 0;
-						do_follow_route = 0;
-						route_finished_or_notfound = 1;
-						send_route_end_status(TCP_RC_ROUTE_STATUS_SUCCESS);
+						if(partial_route)
+						{
+							printf("Done following the partial route.\n");
+							int reret=rerun_search();
+							if(reret > 0)
+							{
+								printf("Routing failed.\n");
+								send_route_end_status(reret);
+							}
+						}
+						else
+						{
+							printf("Done following the route.\n");
+							send_info(INFO_STATE_IDLE);
+							micronavi_stops = 0;
+							do_follow_route = 0;
+							route_finished_or_notfound = 1;
+							send_route_end_status(TCP_RC_ROUTE_STATUS_SUCCESS);
+						}
 					}
 				}
 				else if(live_obstacle_checking_on)
@@ -799,6 +587,8 @@ void route_fsm()
 		}
 
 	}
+	else
+		nothing_happening = 0;
 
 }
 
@@ -948,8 +738,16 @@ int new_mount_charger()
 }
 
 
+static int move_to_prev_x, move_to_prev_y, move_to_prev_id, move_to_prev_backmode, move_to_prev_speedlimit, move_to_prev_accurate_turn;
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn)
 {
+	move_to_prev_x = x;
+	move_to_prev_y = y;
+	move_to_prev_backmode = backmode;
+	move_to_prev_id = id;
+	move_to_prev_speedlimit = speedlimit;
+	move_to_prev_accurate_turn = accurate_turn;
+
 	s2b_move_abs_t *p_msg = spi_init_cmd(CMD_MOVE_ABS);
 
 	if(!p_msg)
@@ -967,6 +765,11 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 
 	cmd_send_to_robot = 1;
 	return 0;
+}
+
+int rerequest_move_to()
+{
+	return new_move_to(move_to_prev_x, move_to_prev_y, move_to_prev_backmode, move_to_prev_id, move_to_prev_speedlimit, move_to_prev_accurate_turn);
 }
 
 int ext_vacuum_cmd(int power, int nozzle)
@@ -1047,18 +850,20 @@ void* main_thread()
 
 	sleep(1);
 	uint64_t subs[B2S_SUBS_U64_ITEMS];
-	ADD_SUB(subs, 4);
+	ADD_SUB(subs, 4); // power status
 //	ADD_SUB(subs, 5); // tof dists
 //	ADD_SUB(subs, 6); // tof ampls
-	ADD_SUB(subs, 8); // tof diagnostics
-	ADD_SUB(subs, 10);
+//	ADD_SUB(subs, 8); // tof diagnostics
+	ADD_SUB(subs, 10); // hw_pose
 	ADD_SUB(subs, 11); // drive module
 	subscribe_to(subs);
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
-	hwmsg_decim[3] = 4;
-	hwmsg_decim[5] = 1;
-	hwmsg_decim[6] = 1;
+	hwmsg_decim[4] = 4;
+	hwmsg_decim[10] = 2;
+	hwmsg_decim[11] = 2;
+//	hwmsg_decim[5] = 1;
+//	hwmsg_decim[6] = 1;
 
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
@@ -1127,7 +932,11 @@ void* main_thread()
 							cur_x = ((hw_pose_t*)&p_data[offs])->x;
 							cur_y = ((hw_pose_t*)&p_data[offs])->y;
 							cur_ang = ((hw_pose_t*)&p_data[offs])->ang;
-							mark_current_as_visited(&world, cur_ang, cur_x, cur_y);
+
+							if(state_vect.v.vacuum_on || state_vect.v.command_source)
+								mark_current_as_visited(&world, cur_ang, cur_x, cur_y);
+
+							clear_within_robot(&world, cur_ang, cur_x, cur_y);
 
 						}
 
@@ -1137,8 +946,11 @@ void* main_thread()
 							move_id = ((drive_diag_t*)&p_data[offs])->id;
 							move_remaining = ((drive_diag_t*)&p_data[offs])->remaining;
 							micronavi_stop_flags = ((drive_diag_t*)&p_data[offs])->micronavi_stop_flags;
+					//		printf("GOT: move_id=%d, move_remaining=%d, stop_flags=%x\n", move_id, move_remaining, micronavi_stop_flags);
 						}
-						if(tcp_client_sock >= 0)
+
+
+						if(tcp_client_sock >= 0) // && s!=1) // !!!!!!!!!! don't send voxmaps
 						{
 							static int hwmsg_decim_cnt[B2S_MAX_MSGIDS];
 							if(++hwmsg_decim_cnt[s] >= hwmsg_decim[s])
@@ -1178,7 +990,7 @@ void* main_thread()
 		if(tcp_client_sock >= 0)
 			FD_SET(tcp_client_sock, &fds);
 
-		struct timeval select_time = {0, 200};
+		struct timeval select_time = {0, 1000}; // has been 200us for a very long time -> use 1000us now
 
 		if(select(fds_size, &fds, NULL, NULL, &select_time) < 0)
 		{
@@ -1334,7 +1146,6 @@ void* main_thread()
 					new_move_to(msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode, 0, cur_speedlim, 1);
 				}
 				find_charger_state = 0;
-				lookaround_creep_reroute = 0;
 				do_follow_route = 0;
 				send_info(msg_cr_dest.backmode?INFO_STATE_REV:INFO_STATE_FWD);
 
@@ -1357,7 +1168,7 @@ void* main_thread()
 				daiju_mode(0);
 				find_charger_state = 0;
 				int ret;
-				if((ret = run_search(msg_cr_route.x, msg_cr_route.y, 0, 1)) != 0)
+				if((ret = run_search(msg_cr_route.x, msg_cr_route.y, 0)) != 0)
 				{
 					send_route_end_status(ret);
 				}
@@ -1402,7 +1213,6 @@ void* main_thread()
 						daiju_mode(0);
 						stop_automapping();
 						find_charger_state = 0;
-						lookaround_creep_reroute = 0;
 						do_follow_route = 0;
 						send_info(INFO_STATE_IDLE);
 						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
@@ -1431,7 +1241,6 @@ void* main_thread()
 					{
 						stop_automapping();
 						find_charger_state = 0;
-						lookaround_creep_reroute = 0;
 						do_follow_route = 0;
 						state_vect.v.keep_position = 1;
 						send_info(INFO_STATE_DAIJUING);
@@ -1443,7 +1252,6 @@ void* main_thread()
 					{
 						stop_automapping();
 						find_charger_state = 0;
-						lookaround_creep_reroute = 0;
 						do_follow_route = 0;
 						send_info(INFO_STATE_IDLE);
 						state_vect.v.keep_position = 0;
@@ -1455,7 +1263,6 @@ void* main_thread()
 					{
 						stop_automapping();
 						find_charger_state = 0;
-						lookaround_creep_reroute = 0;
 						send_info(INFO_STATE_IDLE);
 						do_follow_route = 0;
 						state_vect.v.keep_position = 0;
@@ -1472,7 +1279,6 @@ void* main_thread()
 					{
 						stop_automapping();
 						find_charger_state = 0;
-						lookaround_creep_reroute = 0;
 						do_follow_route = 0;
 						new_stop_movement();
 						send_info(INFO_STATE_IDLE);
@@ -1481,6 +1287,12 @@ void* main_thread()
 					case 9:
 					{
 						
+					} break;
+
+					case 10:
+					{
+						clear_visited(&world, cur_x, cur_y);
+
 					} break;
 
 					default: break;
@@ -1658,7 +1470,7 @@ void* main_thread()
 		{
 			state_vect.v.keep_position = 1;
 			daiju_mode(0);
-			if(run_search(charger_first_x, charger_first_y, 0, 1) != 0)
+			if(run_search(charger_first_x, charger_first_y, 0) != 0)
 			{
 				printf("Finding charger (first point) failed.\n");
 				find_charger_state = 0;
@@ -1668,7 +1480,7 @@ void* main_thread()
 		}
 		else if(find_charger_state == 2)
 		{
-			if(!do_follow_route && !lookaround_creep_reroute)
+			if(!do_follow_route)
 			{
 				if(sq(cur_x-charger_first_x) + sq(cur_y-charger_first_y) > sq(300))
 				{

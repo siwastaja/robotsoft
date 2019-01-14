@@ -5,7 +5,8 @@
 # ./robotsoft
 
 #DEVIP = 10.3.0.6
-DEVIP = 192.168.43.59
+#DEVIP = 192.168.43.59
+DEVIP = 192.168.1.5
 
 CC = gcc
 LD = gcc
@@ -19,7 +20,7 @@ CFLAGS = -I. -Wall -Winline -std=c99 -DROBOTSOFT
 
 CFLAGS += -DCALIBRATOR
 
-#CFLAGS += -g
+CFLAGS += -g
 CFLAGS += -O3
 
 LDFLAGS =

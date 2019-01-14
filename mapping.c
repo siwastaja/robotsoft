@@ -536,6 +536,7 @@ void gen_refmap_lores(world_t* w, int32_t ref_x, int32_t ref_y)
 // Extra weight given to the XY zero-correction (dx=0, dy=0) case:
 // Setting 8 means zero gets a multiplier of 8, other cases 8-1=7
 #define EXTRA_WEIGHT_FOR_ZERO 14
+#define EXTRA_WEIGHT_FOR_ZERO_LORES 10
 
 
 static int score_voxmap_vs_refmap_hires(uint16_t* restrict ref, uint16_t* restrict vox,
@@ -698,7 +699,7 @@ int score_voxmap_vs_refmap_lores(uint16_t* restrict ref, uint16_t* restrict vox,
 			{
 				int weigh_dx = 2*n_dx - abs(weigh_mid_idx - ix);
 				int weigh_dy = 2*n_dy - abs(weigh_mid_idy - iy);
-				int extra_weight = (weigh_mid_idx==ix && weigh_mid_idy==iy)?EXTRA_WEIGHT_FOR_ZERO:(EXTRA_WEIGHT_FOR_ZERO-1);
+				int extra_weight = (weigh_mid_idx==ix && weigh_mid_idy==iy)?EXTRA_WEIGHT_FOR_ZERO_LORES:(EXTRA_WEIGHT_FOR_ZERO_LORES-1);
 				int extra_offset = (weigh_mid_idx==ix && weigh_mid_idy==iy)?1:0;
 				sco = scores[ix][iy]*weigh_dx*weigh_dy*extra_weight+extra_offset;
 			}
@@ -1275,7 +1276,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 
 	static uint16_t rotated_vox[TMPVOX_XS*TMPVOX_YS];
 
-	printf("%d-thread localization & mapping on voxmap, ref_x=%d, ref_y=%d, rota_mid_x=%d, rota_mid_y=%d\n", N_SLAM_THREADS, ref_x, ref_y, rota_mid_x, rota_mid_y);
+//	printf("%d-thread localization & mapping on voxmap, ref_x=%d, ref_y=%d, rota_mid_x=%d, rota_mid_y=%d\n", N_SLAM_THREADS, ref_x, ref_y, rota_mid_x, rota_mid_y);
 
 	time = subsec_timestamp();
 
@@ -1348,7 +1349,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	pass1_args[2].weight[2] = 0;
 
 
-	printf("Pass 1\n");
+//	printf("Pass 1\n");
 
 	time = subsec_timestamp();
 
@@ -1388,7 +1389,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 		}
 	}
 
-	printf("Winner for pass1 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass1_ang_winner), pass1_x_winner, pass1_y_winner, pass1_best_score);
+//	printf("Winner for pass1 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass1_ang_winner), pass1_x_winner, pass1_y_winner, pass1_best_score);
 
 	// Reuse x_winners, y_winners, ang_winners_, winner_scores variables for pass2
 
@@ -1468,7 +1469,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 		}
 	}
 
-	printf("Winner for pass2 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass2_ang_winner), pass2_x_winner, pass2_y_winner, pass2_best_score);
+//	printf("Winner for pass2 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass2_ang_winner), pass2_x_winner, pass2_y_winner, pass2_best_score);
 
 
 
@@ -1505,7 +1506,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 			rotate_tmpvox(rotated_vox, vox, pass2_ang_winner);
 			map_voxmap(w, rotated_vox, ref_x, ref_y, 0, x_corr, y_corr, &insertion_ang_corr);
 		}
-		printf("          ->>>>>>>>>>>>>>>    Mapping with correction ang=%.2f deg, x=%d units, y=%d units\n", RADTODEG(pass2_ang_winner), x_corr, y_corr);
+		printf("  ->>>>  Mapping with correction ang=%.2f deg, x=%d, y=%d units\n", RADTODEG(pass2_ang_winner), x_corr, y_corr);
 
 	}
 	else
@@ -1521,8 +1522,8 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	*corr_x = x_corr*MAP_UNIT_W;
 	*corr_y = y_corr*MAP_UNIT_W;
 
-	printf("Performance: page load %.1fms  gen_lores %.1fms  gen_hires %.1fms  pass1 %.1fms  pass2 %.1fms  insertion %.1fms\n",
-		time_pageload*1000.0, time_gen_lores*1000.0, time_gen_hires*1000.0, time_pass1*1000.0, time_pass2*1000.0, time_insertion*1000.0);
+//	printf("Performance: page load %.1fms  gen_lores %.1fms  gen_hires %.1fms  pass1 %.1fms  pass2 %.1fms  insertion %.1fms\n",
+//		time_pageload*1000.0, time_gen_lores*1000.0, time_gen_hires*1000.0, time_pass1*1000.0, time_pass2*1000.0, time_insertion*1000.0);
 
 	test_first = 0;
 
@@ -1818,19 +1819,36 @@ extern float main_robot_ys;
 #define STOP_REASON_OBSTACLE_BACK_RIGHT 6
 
 
-#ifdef PULU1
-#define ORIGIN_TO_ROBOT_FRONT 70
-#define ASSUMED_ITEM_POS_FROM_MIDDLE_START 40
-#define ASSUMED_ITEM_STEP_SIZE (MAP_UNIT_W)
-#define ASSUMED_ITEM_NUM_STEPS 4
-#define ARSE_OBSTACLE_BACK_LOCATION 170
-#else
-#define ORIGIN_TO_ROBOT_FRONT 130
+// for vacuum app demo
+#define ORIGIN_TO_ROBOT_FRONT 300
 #define ASSUMED_ITEM_POS_FROM_MIDDLE_START 100
 #define ASSUMED_ITEM_STEP_SIZE (MAP_UNIT_W)
 #define ASSUMED_ITEM_NUM_STEPS 5
 #define ARSE_OBSTACLE_BACK_LOCATION 300
-#endif
+
+void clear_visited(world_t* w, int now_x, int now_y)
+{
+	int idx_x, idx_y, offs_x, offs_y;
+
+	page_coords(now_x, now_y, &idx_x, &idx_y, &offs_x, &offs_y);
+
+	load_25pages(&world, idx_x, idx_y);
+
+	for(int py=idx_y-2; py <= idx_y+2; py++)
+	{
+		for(int px=idx_x-2; px < idx_x+2; px++)
+		{
+			if(world.pages[px][py])
+			{
+				for(int i=0; i<(MAP_PAGE_W/2)*(MAP_PAGE_W/2); i++)
+				{
+					world.pages[px][py]->meta[i].num_visited = 0;
+				}
+				world.changed[px][py] = 1;
+			}
+		}
+	}
+}
 
 void mark_current_as_visited(world_t* w, uint32_t now_ang, int now_x, int now_y)
 {
@@ -1845,8 +1863,8 @@ void mark_current_as_visited(world_t* w, uint32_t now_ang, int now_x, int now_y)
 
 	for(int deep=0; deep<1; deep++)
 	{
-		float x = (float)now_x + cos(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT+50.0 + deep*50.0);
-		float y = (float)now_y + sin(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT+50.0 + deep*50.0);
+		float x = (float)now_x + cos(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT-50.0 + deep*50.0);
+		float y = (float)now_y + sin(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT-50.0 + deep*50.0);
 
 		int32_t angle = now_ang + (uint32_t)(-90*ANG_1_DEG);
 		int32_t opposite_angle = now_ang + (uint32_t)(90*ANG_1_DEG);
@@ -1975,47 +1993,38 @@ void map_collision_obstacle(world_t* w, int32_t now_ang, int now_x, int now_y, i
 #endif
 }
 
-void clear_within_robot(world_t* w, pos_t pos)
+void clear_within_robot(world_t* w, int32_t now_ang, int32_t now_x, int32_t now_y)
 {
-#if 0
 	int idx_x, idx_y, offs_x, offs_y;
 	int robot_xs = main_robot_xs;
 	int robot_ys = main_robot_ys;
-	for(int stripe = 1; stripe < robot_xs/20 - 1; stripe++)
+
+//	printf("robot_xs=%d, robot_ys=%d, stripes = %d, i_end = %d\n", robot_xs, robot_ys, robot_xs/20-1, robot_ys/20-1);
+
+	for(int stripe = -3; stripe < robot_xs/20 + 3; stripe++)
 	{
-		float x = (float)pos.x + cos(ANG32TORAD(pos.ang))*(float)(ORIGIN_TO_ROBOT_FRONT-stripe*20);
-		float y = (float)pos.y + sin(ANG32TORAD(pos.ang))*(float)(ORIGIN_TO_ROBOT_FRONT-stripe*20);
+		float x = (float)now_x + cos(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT-stripe*20);
+		float y = (float)now_y + sin(ANG32TORAD(now_ang))*(float)(ORIGIN_TO_ROBOT_FRONT-stripe*20);
 
 		// Shift the result in robot_y direction
-		int32_t angle = pos.ang + (uint32_t)(90*ANG_1_DEG);
+		int32_t angle = now_ang + (uint32_t)(90*ANG_1_DEG);
 
-		x += cos(ANG32TORAD(angle))*((float)robot_ys/-2.0+10);
-		y += sin(ANG32TORAD(angle))*((float)robot_ys/-2.0+10);
+		x += cos(ANG32TORAD(angle))*((float)robot_ys/-2.0-100);
+		y += sin(ANG32TORAD(angle))*((float)robot_ys/-2.0-100);
 
-		for(int i = 0; i < robot_ys/20 - 1; i++)
+		for(int i = 0; i < robot_ys/20 + 6; i++)
 		{
 			x += cos(ANG32TORAD(angle))*(float)20.0;
 			y += sin(ANG32TORAD(angle))*(float)20.0;
 
 			page_coords(x,y, &idx_x, &idx_y, &offs_x, &offs_y);
 			load_1page(&world, idx_x, idx_y);
-			if((world.pages[idx_x][idx_y]->units[offs_x][offs_y].result & UNIT_WALL) ||
-			   (world.pages[idx_x][idx_y]->units[offs_x][offs_y].result & UNIT_ITEM) ||
-			   (world.pages[idx_x][idx_y]->units[offs_x][offs_y].result & UNIT_INVISIBLE_WALL) ||
-			   (world.pages[idx_x][idx_y]->units[offs_x][offs_y].result & UNIT_3D_WALL) ||
-			   (world.pages[idx_x][idx_y]->units[offs_x][offs_y].result & UNIT_DROP) ||
-			   (world.pages[idx_x][idx_y]->units[offs_x][offs_y].result & UNIT_ITEM) )
-			{
-				MINUS_SAT_0(world.pages[idx_x][idx_y]->units[offs_x][offs_y].num_obstacles);
-				world.pages[idx_x][idx_y]->units[offs_x][offs_y].num_3d_obstacles = 0;
-				world.pages[idx_x][idx_y]->units[offs_x][offs_y].result = UNIT_MAPPED;
-				world.pages[idx_x][idx_y]->units[offs_x][offs_y].latest = UNIT_MAPPED;
-				w->changed[idx_x][idx_y] = 1;
-			}
+			world.pages[idx_x][idx_y]->voxmap[MAPIDX(offs_x, offs_y)] &= 0b111;
+			world.changed[idx_x][idx_y] = 1;
 		}
 	}
-#endif
 }
+
 
 
 void map_sonars(world_t* w, int n_sonars, sonar_point_t* p_sonars)
@@ -2143,9 +2152,9 @@ int unfamiliarity_score(world_t* w, int x, int y)
 	int n_walls = 0;
 	int n_seen = 0;
 	int n_visited = 1; // to avoid div per zero
-	for(int xx = x - 400; xx <= x + 400; xx += 40)
+	for(int xx = x - 300; xx <= x + 300; xx += 50)
 	{
-		for(int yy = y - 400; yy <= y + 400; yy += 40)
+		for(int yy = y - 300; yy <= y + 300; yy += 50)
 		{
 			int px, py, ox, oy;
 			page_coords(xx,yy, &px, &py, &ox, &oy);
@@ -2153,8 +2162,6 @@ int unfamiliarity_score(world_t* w, int x, int y)
 			if(w->pages[px][py])
 			{
 				if(w->pages[px][py]->voxmap[MAPIDX(ox, oy)] & 0b1111111111100000) n_walls++;
-				if(n_walls > 1)
-					return 0;
 
 				if(w->pages[px][py]->voxmap[MAPIDX(ox, oy)] & 0b0000000000011111) n_seen++;
 
@@ -2164,10 +2171,13 @@ int unfamiliarity_score(world_t* w, int x, int y)
 		}
 	}
 
+	if(n_walls > 10)
+		return 0;
+
 	if(n_seen < 5)
 		return 0;
 
-	return 1000000/n_visited;
+	return (1000000-90000*n_walls)/n_visited;
 }
 
 typedef struct
@@ -2361,7 +2371,7 @@ void start_automap_only_compass()
 
 extern double subsec_timestamp();
 
-extern int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars, int no_tight);
+extern int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars);
 
 extern int max_speedlim;
 void autofsm()
@@ -2586,14 +2596,12 @@ void autofsm()
 				max_speedlim = 50;
 			}
 
-			int ret = run_search(desired_x, desired_y, !map_lidars_when_searched, 1 /*no tight search*/);
-
-			if(ret == 1)
-				ret = run_search(desired_x, desired_y, !map_lidars_when_searched, 0 /* tight search*/);
+			int ret = run_search(desired_x, desired_y, !map_lidars_when_searched);
 
 
 			map_lidars_when_searched = 0;
 
+			
 			if(ret == 1)
 			{
 				printf("Automapping: run_search() fails in the start due to close obstacles (nonroutable), daijuing for a while.\n");
@@ -2603,7 +2611,7 @@ void autofsm()
 				cur_autostate = S_DAIJUING;
 				daijuing_timestamp = subsec_timestamp();				
 			}
-			else if(ret == 0)
+			else if(ret == 0 || ret == -999)
 			{
 				cur_autostate = S_WAIT_ROUTE;
 			}
@@ -2639,22 +2647,18 @@ void autofsm()
 
 void add_map_constraint(world_t* w, int32_t x, int32_t y)
 {
-#if 0
 	int px, py, ox, oy;
 	page_coords(x, y, &px, &py, &ox, &oy);
 	load_1page(w, px, py);
-	w->pages[px][py]->units[ox][oy].constraints |= CONSTRAINT_FORBIDDEN;
+	w->pages[px][py]->meta[(oy/2)*(MAP_PAGE_W/2)+(ox/2)].constraints |= CONSTRAINT_FORBIDDEN;
 	w->changed[px][py] = 1;
-#endif
 }
 
 void remove_map_constraint(world_t* w, int32_t x, int32_t y)
 {
-#if 0
 	int px, py, ox, oy;
 	page_coords(x, y, &px, &py, &ox, &oy);
 	load_1page(w, px, py);
-	w->pages[px][py]->units[ox][oy].constraints &= ~(CONSTRAINT_FORBIDDEN);
+	w->pages[px][py]->meta[(oy/2)*(MAP_PAGE_W/2)+(ox/2)].constraints &= ~(CONSTRAINT_FORBIDDEN);
 	w->changed[px][py] = 1;
-#endif
 }
