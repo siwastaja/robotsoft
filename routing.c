@@ -120,8 +120,8 @@ static int check_hit(int x, int y, int direction)
 
 		if(!routing_world->pages[pageidx_x][pageidx_y]) // out of bounds (not allocated) - give up instantly
 		{
-			printf("pages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
-			printf("x = %d  y = %d  direction = %d\n", x, y, direction);
+//			printf("pages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
+//			printf("x = %d  y = %d  direction = %d\n", x, y, direction);
 			//exit(1);
 			return 1;
 		}
@@ -927,13 +927,13 @@ static void gen_robot_shapes()
 
         memset(robot_shapes, 0, sizeof(robot_shapes));
 
-	FILE* f_dbg_shapes = fopen("dbg_shapes.txt", "a");
+//	FILE* f_dbg_shapes = fopen("dbg_shapes.txt", "a");
 
 	for(int a=0; a<32; a++)
 	{
 		draw_robot_shape(a, ((float)a*2.0*M_PI)/32.0);
 
-		if(f_dbg_shapes)
+/*		if(f_dbg_shapes)
 		{
 			fprintf(f_dbg_shapes, "a = %d, tight_shapes = %d\n", a, tight_shapes);
 
@@ -949,9 +949,10 @@ static void gen_robot_shapes()
 				fprintf(f_dbg_shapes, "\n");
 			}
 		}
+*/
 	}
 
-	if(f_dbg_shapes) fclose(f_dbg_shapes);
+//	if(f_dbg_shapes) fclose(f_dbg_shapes);
 }
 
 static void wide_search_mode()
@@ -1026,7 +1027,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 	{
 		cnt++;
 
-		if(cnt > 50000)
+		if(cnt > 25000)
 		{
 			printf("Giving up at cnt = %d\n", cnt);
 			return 3;
@@ -1404,7 +1405,7 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 }
 
-#define ROUTING_MASK 0b1111111111111000
+#define ROUTING_MASK 0b1111111111100000
 //#define ROUTING_MASK 0b1111111111111000
 //#define ROUTING_MASK 0
 

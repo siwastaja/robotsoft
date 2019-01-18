@@ -2257,8 +2257,8 @@ int find_unfamiliar_direction_randomly(world_t* w, int *x_out, int *y_out)
 	for(int try=0; try<2000; try++)
 	{
 		extern int32_t cur_x, cur_y;
-		float rand1 = ((float)rand() / (float)RAND_MAX)*10000.0+300.0;
-		float rand2 = ((float)rand() / (float)RAND_MAX)*10000.0+300.0;
+		float rand1 = ((float)rand() / (float)RAND_MAX)*5000.0+300.0;
+		float rand2 = ((float)rand() / (float)RAND_MAX)*5000.0+300.0;
 
 		if(rand()&1)
 			rand1 *= -1.0;

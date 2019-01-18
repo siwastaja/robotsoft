@@ -293,6 +293,10 @@ typedef struct __attribute__((packed))
 	uint8_t cur_state;
 
 	// Live calculation steps and results
+	int32_t nearest_hit_x;
+	int32_t nearest_hit_y;
+	int32_t middle_bar_min_y;
+	int32_t middle_bar_max_y;
 	int32_t left_accum_cnt;
 	int32_t mid_accum_cnt;
 	int32_t right_accum_cnt;
