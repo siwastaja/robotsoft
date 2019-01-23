@@ -531,7 +531,7 @@ void gen_refmap_lores(world_t* w, int32_t ref_x, int32_t ref_y)
 }
 
 #define PERFORMANCE_CROP_LORES 32
-#define PERFORMANCE_CROP 64
+#define PERFORMANCE_CROP 32
 
 // Extra weight given to the XY zero-correction (dx=0, dy=0) case:
 // Setting 8 means zero gets a multiplier of 8, other cases 8-1=7
@@ -1136,7 +1136,8 @@ typedef struct
 	uint16_t* refmap;
 	int n_angles;
 	double angles[16];
-	int weight[16];
+	int weight_offs[16];
+	double weight_mults[16];
 	int x_start;
 	int x_step;
 	int x_nsteps;
@@ -1190,7 +1191,7 @@ void* pass1_thread(void* args_in)
 
 //		printf("Winner for angle %.2f deg is x=%d, y=%d, score=%d\n",  RADTODEG(rota_ang), best_dx, best_dy, score);
 
-		int weighed_score = score + args->weight[a];
+		int weighed_score = (int)(args->weight_mults[a]*(double)score) + args->weight_offs[a];
 
 		if(weighed_score > max_score)
 		{
@@ -1244,7 +1245,7 @@ void* pass2_thread(void* args_in)
 
 //		printf("Winner for angle %.2f deg is x=%d, y=%d, score=%d\n",  RADTODEG(rota_ang), best_dx, best_dy, score);
 
-		int weighed_score = score + args->weight[a];
+		int weighed_score = (int)(args->weight_mults[a]*(double)score) + args->weight_offs[a];
 
 		if(weighed_score > max_score)
 		{
@@ -1326,27 +1327,36 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 
 	pass1_args[0].n_angles = 3;
 	pass1_args[0].angles[0] = DEGTORAD(-6.0);
-	pass1_args[0].weight[0] = 0;
+	pass1_args[0].weight_offs[0] = 0;
+	pass1_args[0].weight_mults[0] = 0.80;
 	pass1_args[0].angles[1] = DEGTORAD(-4.5);
-	pass1_args[0].weight[1] = 0;
+	pass1_args[0].weight_offs[1] = 0;
+	pass1_args[0].weight_mults[1] = 0.85;
 	pass1_args[0].angles[2] = DEGTORAD(-3.0);
-	pass1_args[0].weight[2] = 0;
+	pass1_args[0].weight_offs[2] = 0;
+	pass1_args[0].weight_mults[2] = 0.90;
 
 	pass1_args[1].n_angles = 3;
 	pass1_args[1].angles[0] = DEGTORAD(-1.5);
-	pass1_args[1].weight[0] = 1;
+	pass1_args[1].weight_offs[0] = 1;
+	pass1_args[1].weight_mults[0] = 0.95;
 	pass1_args[1].angles[1] = DEGTORAD(0.0);
-	pass1_args[1].weight[1] = 3;
+	pass1_args[1].weight_offs[1] = 3;
+	pass1_args[1].weight_mults[1] = 1.0;
 	pass1_args[1].angles[2] = DEGTORAD(+1.5);
-	pass1_args[1].weight[2] = 1;
+	pass1_args[1].weight_offs[2] = 1;
+	pass1_args[1].weight_mults[2] = 0.95;
 
 	pass1_args[2].n_angles = 3;
 	pass1_args[2].angles[0] = DEGTORAD(+3.0);
-	pass1_args[2].weight[0] = 0;
+	pass1_args[2].weight_offs[0] = 0;
+	pass1_args[2].weight_mults[0] = 0.90;
 	pass1_args[2].angles[1] = DEGTORAD(+4.5);
-	pass1_args[2].weight[1] = 0;
+	pass1_args[2].weight_offs[1] = 0;
+	pass1_args[2].weight_mults[1] = 0.85;
 	pass1_args[2].angles[2] = DEGTORAD(+6.0);
-	pass1_args[2].weight[2] = 0;
+	pass1_args[2].weight_offs[2] = 0;
+	pass1_args[2].weight_mults[2] = 0.80;
 
 
 //	printf("Pass 1\n");
@@ -1415,19 +1425,24 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 
 	pass2_args[0].n_angles = 2;
 	pass2_args[0].angles[0] = pass1_ang_winner + DEGTORAD(-1.0);
-	pass2_args[0].weight[0] = 0;
+	pass2_args[0].weight_offs[0] = 0;
+	pass2_args[0].weight_mults[0] = 1.0;
 	pass2_args[0].angles[1] = pass1_ang_winner + DEGTORAD(-0.5);
-	pass2_args[0].weight[1] = 0;
+	pass2_args[0].weight_offs[1] = 0;
+	pass2_args[0].weight_mults[1] = 1.0;
 
 	pass2_args[1].n_angles = 2;
 	pass2_args[1].angles[0] = pass1_ang_winner + DEGTORAD(0.0);
-	pass2_args[1].weight[0] = 0;
+	pass2_args[1].weight_offs[0] = 1; // to map as zero to empty maps
+	pass2_args[1].weight_mults[0] = 1.0;
 	pass2_args[1].angles[1] = pass1_ang_winner + DEGTORAD(0.5);
-	pass2_args[1].weight[1] = 0;
+	pass2_args[1].weight_offs[1] = 0;
+	pass2_args[1].weight_mults[1] = 1.0;
 
 	pass2_args[2].n_angles = 1;
 	pass2_args[2].angles[0] = pass1_ang_winner + DEGTORAD(1.0);
-	pass2_args[2].weight[0] = 0;
+	pass2_args[2].weight_offs[0] = 0;
+	pass2_args[2].weight_mults[0] = 1.0;
 
 
 

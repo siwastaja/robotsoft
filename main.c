@@ -869,7 +869,7 @@ void* main_thread()
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
 //	stdout_msgids[8] = 1;
-	stdout_msgids[13] = 1;
+//	stdout_msgids[13] = 1;
 
 	srand(time(NULL));
 
@@ -923,7 +923,7 @@ void* main_thread()
 						if(s==1)
 						{
 							int32_t acorr = 0, xcorr = 0, ycorr=0;
-							//provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &acorr, &xcorr, &ycorr);
+							provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &acorr, &xcorr, &ycorr);
 
 							if(xcorr != 0 || ycorr != 0 || acorr != 0)
 								new_correct_pos(acorr, xcorr, ycorr);

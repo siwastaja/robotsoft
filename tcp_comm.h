@@ -49,6 +49,8 @@ int init_tcp_comm();
 int handle_tcp_client();
 int handle_tcp_listener();
 int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf);
+int tcp_query_sendbuf_space();
+
 void tcp_comm_close();
 
 
