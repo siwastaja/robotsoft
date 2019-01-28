@@ -72,9 +72,10 @@ float main_robot_middle_to_lidar = -183.0;
 #endif
 */
 
+#define MARGIN (50.0)
 
-float main_robot_xs = 850.0;
-float main_robot_ys = 600.0;
+float main_robot_xs = 850.0+(MARGIN*2.0);
+float main_robot_ys = 600.0+(MARGIN*2.0);
 float main_robot_middle_to_lidar = -100.0;
 
 static void wide_search_mode();
@@ -993,8 +994,8 @@ void clear_route(route_unit_t **route)
 
 static int search(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int change_to_normal, int accept_dist_blocks)
 {
-	static search_unit_t* closed_set = NULL;
-	static search_unit_t* open_set = NULL;
+	search_unit_t* closed_set = NULL;
+	search_unit_t* open_set = NULL;
 
 	clear_route(route);
 
@@ -1332,6 +1333,7 @@ chances of getting out of tight spot, but then switches to normal limits.
 int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int change_to_normal, int accept_dist_blocks)
 {
 
+	printf("search2() start_ang=%.1f deg  start (%d,%d), end (%d, %d), accept_dist_blocks=%d\n", RADTODEG(start_ang), start_x_mm, start_y_mm, end_x_mm, end_y_mm, accept_dist_blocks);
 #define SRCH_NUM_A 23
 	static const int a_s[SRCH_NUM_A] =   // back-off angles in degs
 	{	0,	-4,	4,	-8,	8,	-12,	12,	-18,	18,	-24,	24,	-36,	36,	-48,	48,	-60,	60,	-72,	72, 	-84,	84,	-96,	96	};
@@ -1491,28 +1493,21 @@ int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_
 			tight_search_mode();
 			if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, 0)) ) 
 			{
-				printf("Tight search failed - trying to get close enough\n");
-				tight_search_mode();
-				if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, 4)) ) 
-				{
-					printf("Close enough search failed - trying to get halfway\n");
-					double direct_len = sqrt(sq(end_x_mm-start_x_mm)+sq(end_y_mm-start_y_mm));
-					direct_len = direct_len*2.0/3.0;
-					int acceptance = direct_len/MAP_UNIT_W;
+				printf("Tight search failed - trying to get halfway\n");
+				double direct_len = sqrt(sq(end_x_mm-start_x_mm)+sq(end_y_mm-start_y_mm));
+				direct_len = direct_len*2.0/3.0;
+				int acceptance = direct_len/MAP_UNIT_W;
 
-					if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, acceptance)) ) 
-					{
-						printf("Halfway failed - gave up.\n");	
-						return ret;
-					}
-					else
-					{
-						printf("Found route HALFWAY.\n");
-						retval = -999;
-					}
+				if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, acceptance)) ) 
+				{
+					printf("Halfway failed - gave up.\n");	
+					return ret;
 				}
 				else
-					printf("Found route with TIGHT limits, close enough to dest, but not quite.\n");
+				{
+					printf("Found route HALFWAY.\n");
+					retval = -999;
+				}
 			}
 			else
 				printf("Found route with TIGHT limits\n");

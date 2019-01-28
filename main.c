@@ -80,6 +80,7 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include "datatypes.h"
 #include "map_memdisk.h"
@@ -188,23 +189,94 @@ lidar_scan_t* lidars_to_map_at_routing_start[NUM_LATEST_LIDARS_FOR_ROUTING_START
 
 void send_info(info_state_t state)
 {
-	PR_FUNC();
 	if(tcp_client_sock >= 0) tcp_send_info_state(state);
 }
 
 int32_t prev_search_dest_x, prev_search_dest_y;
+
+route_unit_t *some_route = NULL;
+
+int32_t search_thread_dest_x, search_thread_dest_y;
+
+static volatile sig_atomic_t search_thread_running;
+static volatile sig_atomic_t search_thread_retval;
+int search_instructed;
+
+pthread_t thread_search;
+
+void* search_thread()
+{
+	int ret = search_route(&world, &some_route, ANG32TORAD(cur_ang), cur_x, cur_y, search_thread_dest_x, search_thread_dest_y, route_reverse);
+
+	search_thread_retval = ret;
+	search_thread_running = 0;
+
+	return NULL;
+}
+
+// Call from sequential main thread only.
+// Check search_thread_running first.
 int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars)
 {
+	if(search_thread_running)
+	{
+		printf("ERROR: run_search() called while previous search active. Ignoring the search request.\n");
+		return -1234;
+	}
+
+	do_follow_route = 0;
+	route_finished_or_notfound = 1;
+
 	send_info(INFO_STATE_THINK);
 
 	prev_search_dest_x = dest_x;
 	prev_search_dest_y = dest_y;
 
-	route_unit_t *some_route = NULL;
+	search_thread_dest_x = dest_x;
+	search_thread_dest_y = dest_y;
 
-	int ret = search_route(&world, &some_route, ANG32TORAD(cur_ang), cur_x, cur_y, dest_x, dest_y, route_reverse);
+	search_thread_running = 1;
+	search_instructed = 1;
 
-	if(ret==-999)
+	int ret;
+
+	if( (ret = pthread_create(&thread_search, NULL, search_thread, NULL)) )
+	{
+		printf("ERROR: thread_search thread creation, ret = %d\n", ret);
+		return -1;
+	}
+
+	if( (ret = pthread_detach(thread_search)) )
+	{
+		printf("ERROR: thread_search detaching, ret = %d\n", ret);
+		return -1;
+	}
+
+	return 0;
+}
+
+int poll_search_status(int act_as_well)
+{
+	int running = search_thread_running;
+	int retval = search_thread_retval;
+
+	if(running)
+		return 12345;
+
+	if(!act_as_well)
+	{
+		// not running, in other words, is finished, return:
+		return retval;
+	}
+	
+	// Act as well:
+
+	if(!search_instructed)
+		return 23456;
+
+	search_instructed = 0;
+
+	if(retval==-999)
 		partial_route = 1;
 	else
 		partial_route = 0;
@@ -228,22 +300,20 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars)
 		the_route[len].x = x_mm; 
 		the_route[len].y = y_mm;
 		the_route[len].backmode = rt->backmode;
-		the_route[len].take_next_early = 100;
+		the_route[len].take_next_early = 50;
 		len++;
 		if(len >= THE_ROUTE_MAX)
 			break;
 	}
 
-	for(int i = 0; i < len; i++)
+	for(int i = 1; i < len; i++)
 	{
-		if(i < len-1)
-		{
-			float dist = sqrt(sq(the_route[i].x-the_route[i+1].x) + sq(the_route[i].y-the_route[i+1].y));
-			int new_early = dist/10;
-			if(new_early < 50) new_early = 50;
-			else if(new_early > 250) new_early = 250;
-			the_route[i].take_next_early = new_early;
-		}
+		float dist = sqrt(sq(the_route[i-1].x-the_route[i].x) + sq(the_route[i-1].y-the_route[i].y));
+		int new_early = dist/10.0;
+		if(new_early < 30) new_early = 30;
+		else if(new_early > 250) new_early = 250;
+		printf("[%d]=(%d,%d), [%d]=(%d,%d), dist=%.1f, new_early = %d\n", i-1, the_route[i-1].x, the_route[i-1].y, i, the_route[i].x, the_route[i].y, dist, new_early);
+		the_route[i].take_next_early = new_early;
 	}
 
 	the_route[len-1].take_next_early = 20;
@@ -266,10 +336,10 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars)
 		do_follow_route = 0;
 		route_finished_or_notfound = 1;
 		send_info(INFO_STATE_IDLE);
-		ret = 99;
+		retval = 99;
 	}
 
-	return ret;
+	return retval;
 
 }
 
@@ -436,6 +506,7 @@ void route_fsm()
 	static int micronavi_stops = 0;
 	static double timestamp;
 	static int nothing_happening = 0;
+	static int did_reroute = 0;
 	if(start_route)
 	{
 		printf("Start going id=%d!\n", id_cnt<<4);
@@ -473,9 +544,16 @@ void route_fsm()
 		{
 			if(micronavi_stop_flags || feedback_stop_flags)
 			{
-				printf("Micronavi STOP, rerouting.\n");
-				int reret=rerun_search();
-				if(reret > 0)
+				if(!did_reroute)
+				{
+					printf("Micronavi STOP, rerouting.\n");
+					rerun_search();
+					did_reroute = 1;
+				}
+
+				int reret = poll_search_status(1);
+
+				if(reret != 12345 && reret > 0)
 				{
 					printf("Routing failed.\n");
 					send_route_end_status(reret);
@@ -483,6 +561,7 @@ void route_fsm()
 			}
 			else if(id_cnt == 0) // Zero id move is a special move during route following
 			{
+				did_reroute = 0;
 				if(move_remaining < 30)
 				{
 					while(the_route[route_pos].backmode == 0 && route_pos < the_route_len-1)
@@ -508,6 +587,8 @@ void route_fsm()
 			}
 			else
 			{
+				did_reroute = 0;
+
 				if(move_remaining < 250)
 				{
 					good_time_for_lidar_mapping = 1;
@@ -535,7 +616,7 @@ void route_fsm()
 								break;
 							}
 						}
-						printf("Take the next, id=%d!\n", (id_cnt<<4) | ((route_pos)&0b1111));
+						printf("cur id=%d, remaining = %d -> take the next with id=%d!\n", id, move_remaining, (id_cnt<<4) | ((route_pos)&0b1111));
 						new_move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
 						send_info(the_route[route_pos].backmode?INFO_STATE_REV:INFO_STATE_FWD);
 						micronavi_stops = 0;
@@ -545,12 +626,12 @@ void route_fsm()
 						if(partial_route)
 						{
 							printf("Done following the partial route.\n");
-							int reret=rerun_search();
-							if(reret > 0)
-							{
-								printf("Routing failed.\n");
-								send_route_end_status(reret);
-							}
+							rerun_search();
+							//if(reret > 0)
+							//{
+							//	printf("Routing failed.\n");
+							//	send_route_end_status(reret);
+							//}
 						}
 						else
 						{
@@ -587,8 +668,11 @@ void route_fsm()
 		}
 
 	}
-	else
+	else // Not following route
+	{
 		nothing_happening = 0;
+		did_reroute = 0;
+	}
 
 }
 
@@ -856,7 +940,7 @@ void* main_thread()
 //	ADD_SUB(subs, 8); // tof diagnostics
 	ADD_SUB(subs, 10); // hw_pose
 	ADD_SUB(subs, 11); // drive module
-	ADD_SUB(subs, 13); // charger mount diagnostics
+//	ADD_SUB(subs, 13); // charger mount diagnostics
 	subscribe_to(subs);
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
@@ -869,7 +953,7 @@ void* main_thread()
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
 //	stdout_msgids[8] = 1;
-//	stdout_msgids[13] = 1;
+	stdout_msgids[13] = 1;
 
 	srand(time(NULL));
 
@@ -952,7 +1036,7 @@ void* main_thread()
 						}
 
 
-						if(tcp_client_sock >= 0) // && s!=1) // !!!!!!!!!! don't send voxmaps
+						if(tcp_client_sock >= 0 && tcp_is_space_for_noncritical_message())
 						{
 							static int hwmsg_decim_cnt[B2S_MAX_MSGIDS];
 							if(++hwmsg_decim_cnt[s] >= hwmsg_decim[s])
@@ -1169,11 +1253,7 @@ void* main_thread()
 				state_vect.v.keep_position = 1;
 				daiju_mode(0);
 				find_charger_state = 0;
-				int ret;
-				if((ret = run_search(msg_cr_route.x, msg_cr_route.y, 0)) != 0)
-				{
-					send_route_end_status(ret);
-				}
+				run_search(msg_cr_route.x, msg_cr_route.y, 0);
 			}
 			else if(ret == TCP_CR_CHARGE_MID)
 			{
@@ -1381,6 +1461,16 @@ void* main_thread()
 //			prev_compass_ang = cur_compass_ang;
 //			printf("Compass ang=%.1f deg\n", ANG32TOFDEG(cur_compass_ang));
 //		}
+
+		if(!do_follow_route)
+		{
+			int ret;
+			ret = poll_search_status(1);
+			if(ret != 12345 && ret != 23456 && ret != 0)
+			{
+				send_route_end_status(ret);
+			}
+		}
 
 		static int micronavi_stop_flags_printed = 0;
 		if(micronavi_stop_flags)
@@ -1684,7 +1774,7 @@ void* main_thread()
 			// Sync all changed map pages to disk
 			if(save_map_pages(&world))
 			{
-				if(tcp_client_sock >= 0) tcp_send_sync_request();
+				if(tcp_client_sock >= 0 && tcp_is_space_for_noncritical_message()) tcp_send_sync_request();
 			}
 			if(tcp_client_sock >= 0)
 			{

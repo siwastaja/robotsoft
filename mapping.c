@@ -1328,36 +1328,58 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 	pass1_args[0].n_angles = 3;
 	pass1_args[0].angles[0] = DEGTORAD(-6.0);
 	pass1_args[0].weight_offs[0] = 0;
-	pass1_args[0].weight_mults[0] = 0.80;
+	pass1_args[0].weight_mults[0] = 0.75;
 	pass1_args[0].angles[1] = DEGTORAD(-4.5);
 	pass1_args[0].weight_offs[1] = 0;
-	pass1_args[0].weight_mults[1] = 0.85;
+	pass1_args[0].weight_mults[1] = 0.80;
 	pass1_args[0].angles[2] = DEGTORAD(-3.0);
 	pass1_args[0].weight_offs[2] = 0;
-	pass1_args[0].weight_mults[2] = 0.90;
+	pass1_args[0].weight_mults[2] = 0.85;
 
 	pass1_args[1].n_angles = 3;
 	pass1_args[1].angles[0] = DEGTORAD(-1.5);
 	pass1_args[1].weight_offs[0] = 1;
-	pass1_args[1].weight_mults[0] = 0.95;
+	pass1_args[1].weight_mults[0] = 0.90;
 	pass1_args[1].angles[1] = DEGTORAD(0.0);
 	pass1_args[1].weight_offs[1] = 3;
 	pass1_args[1].weight_mults[1] = 1.0;
 	pass1_args[1].angles[2] = DEGTORAD(+1.5);
 	pass1_args[1].weight_offs[2] = 1;
-	pass1_args[1].weight_mults[2] = 0.95;
+	pass1_args[1].weight_mults[2] = 0.90;
 
 	pass1_args[2].n_angles = 3;
 	pass1_args[2].angles[0] = DEGTORAD(+3.0);
 	pass1_args[2].weight_offs[0] = 0;
-	pass1_args[2].weight_mults[0] = 0.90;
+	pass1_args[2].weight_mults[0] = 0.85;
 	pass1_args[2].angles[1] = DEGTORAD(+4.5);
 	pass1_args[2].weight_offs[1] = 0;
-	pass1_args[2].weight_mults[1] = 0.85;
+	pass1_args[2].weight_mults[1] = 0.80;
 	pass1_args[2].angles[2] = DEGTORAD(+6.0);
 	pass1_args[2].weight_offs[2] = 0;
-	pass1_args[2].weight_mults[2] = 0.80;
+	pass1_args[2].weight_mults[2] = 0.75;
 
+/*
+	pass1_args[0].n_angles = 2;
+	pass1_args[0].angles[0] = DEGTORAD(-1.5);
+	pass1_args[0].weight_offs[0] = 0;
+	pass1_args[0].weight_mults[0] = 0.80;
+	pass1_args[0].angles[1] = DEGTORAD(-0.75);
+	pass1_args[0].weight_offs[1] = 0;
+	pass1_args[0].weight_mults[1] = 0.90;
+
+	pass1_args[1].n_angles = 2;
+	pass1_args[1].angles[0] = DEGTORAD(0);
+	pass1_args[1].weight_offs[0] = 1;
+	pass1_args[1].weight_mults[0] = 1.0;
+	pass1_args[1].angles[1] = DEGTORAD(0.75);
+	pass1_args[1].weight_offs[1] = 3;
+	pass1_args[1].weight_mults[1] = 0.90;
+
+	pass1_args[2].n_angles = 1;
+	pass1_args[2].angles[0] = DEGTORAD(+1.5);
+	pass1_args[2].weight_offs[0] = 0;
+	pass1_args[2].weight_mults[0] = 0.80;
+*/
 
 //	printf("Pass 1\n");
 
@@ -1423,28 +1445,52 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 		pass2_args[i].y_nsteps =  5;   // to +100mm
 	}
 
+
 	pass2_args[0].n_angles = 2;
 	pass2_args[0].angles[0] = pass1_ang_winner + DEGTORAD(-1.0);
 	pass2_args[0].weight_offs[0] = 0;
-	pass2_args[0].weight_mults[0] = 1.0;
+	pass2_args[0].weight_mults[0] = (pass2_args[0].angles[0]>DEGTORAD(-0.1)&&pass2_args[0].angles[0]<DEGTORAD(0.1))?1.06:1.0;
 	pass2_args[0].angles[1] = pass1_ang_winner + DEGTORAD(-0.5);
 	pass2_args[0].weight_offs[1] = 0;
-	pass2_args[0].weight_mults[1] = 1.0;
+	pass2_args[0].weight_mults[1] = (pass2_args[0].angles[1]>DEGTORAD(-0.1)&&pass2_args[0].angles[1]<DEGTORAD(0.1))?1.06:1.0;
 
 	pass2_args[1].n_angles = 2;
 	pass2_args[1].angles[0] = pass1_ang_winner + DEGTORAD(0.0);
 	pass2_args[1].weight_offs[0] = 1; // to map as zero to empty maps
-	pass2_args[1].weight_mults[0] = 1.0;
+	pass2_args[1].weight_mults[0] = (pass2_args[1].angles[0]>DEGTORAD(-0.1)&&pass2_args[1].angles[0]<DEGTORAD(0.1))?1.06:1.0;
 	pass2_args[1].angles[1] = pass1_ang_winner + DEGTORAD(0.5);
 	pass2_args[1].weight_offs[1] = 0;
-	pass2_args[1].weight_mults[1] = 1.0;
+	pass2_args[1].weight_mults[1] = (pass2_args[1].angles[1]>DEGTORAD(-0.1)&&pass2_args[1].angles[1]<DEGTORAD(0.1))?1.06:1.0;
 
 	pass2_args[2].n_angles = 1;
 	pass2_args[2].angles[0] = pass1_ang_winner + DEGTORAD(1.0);
 	pass2_args[2].weight_offs[0] = 0;
-	pass2_args[2].weight_mults[0] = 1.0;
+	pass2_args[2].weight_mults[0] = (pass2_args[2].angles[0]>DEGTORAD(-0.1)&&pass2_args[2].angles[0]<DEGTORAD(0.1))?1.06:1.0;
 
+/*
 
+	pass2_args[0].n_angles = 2;
+	pass2_args[0].angles[0] = pass1_ang_winner + DEGTORAD(-0.6);
+	pass2_args[0].weight_offs[0] = 0;
+	pass2_args[0].weight_mults[0] = (pass2_args[0].angles[0]>DEGTORAD(-0.1)&&pass2_args[0].angles[0]<DEGTORAD(0.1))?1.1:1.0;
+	pass2_args[0].angles[1] = pass1_ang_winner + DEGTORAD(-0.3);
+	pass2_args[0].weight_offs[1] = 0;
+	pass2_args[0].weight_mults[1] = (pass2_args[0].angles[1]>DEGTORAD(-0.1)&&pass2_args[0].angles[1]<DEGTORAD(0.1))?1.1:1.0;
+
+	pass2_args[1].n_angles = 2;
+	pass2_args[1].angles[0] = pass1_ang_winner + DEGTORAD(0.0);
+	pass2_args[1].weight_offs[0] = 1; // to map as zero to empty maps
+	pass2_args[1].weight_mults[0] = (pass2_args[1].angles[0]>DEGTORAD(-0.1)&&pass2_args[1].angles[0]<DEGTORAD(0.1))?1.1:1.0;
+	pass2_args[1].angles[1] = pass1_ang_winner + DEGTORAD(0.3);
+	pass2_args[1].weight_offs[1] = 0;
+	pass2_args[1].weight_mults[1] = (pass2_args[1].angles[1]>DEGTORAD(-0.1)&&pass2_args[1].angles[1]<DEGTORAD(0.1))?1.1:1.0;
+
+	pass2_args[2].n_angles = 1;
+	pass2_args[2].angles[0] = pass1_ang_winner + DEGTORAD(0.6);
+	pass2_args[2].weight_offs[0] = 0;
+	pass2_args[2].weight_mults[0] = (pass2_args[2].angles[0]>DEGTORAD(-0.1)&&pass2_args[2].angles[0]<DEGTORAD(0.1))?1.1:1.0;
+
+*/
 
 	time = subsec_timestamp();
 
@@ -1487,6 +1533,8 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 //	printf("Winner for pass2 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass2_ang_winner), pass2_x_winner, pass2_y_winner, pass2_best_score);
 
 
+
+//	pass2_ang_winner /= 2.0; // !!!!!!!!!
 
 
 	int x_corr = -1*pass2_x_winner;
@@ -2329,8 +2377,8 @@ const char* const AUTOSTATE_NAMES[] =
 	"WAIT_MOVEMENT",
 	"DAIJUING",
 	"GEN_ROUTING",
-	"WAIT_ROUTE",
-	"res",
+	"S_WAIT_ROUTING_FINISHED",
+	"WAIT_ROUTE_DRIVE",
 	"res",
 	"res"
 };
@@ -2349,7 +2397,8 @@ typedef enum
 	S_WAIT_MOVEMENT  	= 9,
 	S_DAIJUING		= 10,
 	S_GEN_ROUTING		= 11,
-	S_WAIT_ROUTE		= 12
+	S_WAIT_ROUTING_FINISHED = 12,
+	S_WAIT_ROUTE_DRIVE	= 13
 } autostate_t;
 
 autostate_t cur_autostate;
@@ -2387,6 +2436,8 @@ void start_automap_only_compass()
 extern double subsec_timestamp();
 
 extern int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars);
+extern int poll_search_status(int act_as_well);
+
 
 extern int max_speedlim;
 void autofsm()
@@ -2612,15 +2663,22 @@ void autofsm()
 			}
 
 			int ret = run_search(desired_x, desired_y, !map_lidars_when_searched);
-
-
+			cur_autostate = S_WAIT_ROUTING_FINISHED;
 			map_lidars_when_searched = 0;
-
 			
-			if(ret == 1)
+		} break;
+
+		case S_WAIT_ROUTING_FINISHED: {
+
+			int ret = poll_search_status(0);
+
+			if(ret == 12345)
+			{
+				// Keep waiting...
+			}
+			else if(ret == 1)
 			{
 				printf("Automapping: run_search() fails in the start due to close obstacles (nonroutable), daijuing for a while.\n");
-
 				send_info(INFO_STATE_DAIJUING);
 				daiju_mode(1);
 				cur_autostate = S_DAIJUING;
@@ -2628,7 +2686,7 @@ void autofsm()
 			}
 			else if(ret == 0 || ret == -999)
 			{
-				cur_autostate = S_WAIT_ROUTE;
+				cur_autostate = S_WAIT_ROUTE_DRIVE;
 			}
 			else
 			{
@@ -2636,9 +2694,10 @@ void autofsm()
 				add_cant_goto_place(desired_x, desired_y);
 				cur_autostate = S_GEN_DESIRED_DIR;
 			}
+
 		} break;
 
-		case S_WAIT_ROUTE: {
+		case S_WAIT_ROUTE_DRIVE: {
 			extern int route_finished_or_notfound;
 
 			if(route_finished_or_notfound)
