@@ -45,9 +45,10 @@
 
 int tcp_listener_sock;
 volatile int tcp_client_sock = -1; // One client at the time is allowed. Volatile because accessed in SIGPIPE signal handler.
-#define MAX_PAYLEN_PER_MESSAGE (1024*1024-5)
-//#define TCP_WRITE_BUF_LEN ((MAX_PAYLEN_PER_MESSAGE+5)*3)
-#define TCP_WRITE_BUF_LEN (100)
+#define MAX_MSG_LEN (1024*1024)
+#define MAX_CRITICAL_MSG_LEN (8*1024)
+#define MAX_PAYLEN_PER_MESSAGE ((MAX_MSG_LEN)-5)
+#define TCP_WRITE_BUF_LEN ((MAX_PAYLEN_PER_MESSAGE+5)*3)
 
 static uint8_t txfifo[TCP_WRITE_BUF_LEN];
 static volatile int tx_wr, tx_rd;
@@ -214,13 +215,22 @@ int tcp_query_sendbuf_space()
 	// The consumer thread only locks when it accesses the indeces tx_wr, tx_rd
 	pthread_mutex_lock(&txfifo_mutex);
 
-	int rd_wr = tx_rd - tx_wr;
-	if(rd_wr < 0) rd_wr += TCP_WRITE_BUF_LEN;
-	int space_in_buffer = (TCP_WRITE_BUF_LEN - rd_wr)-1;
+	int space_in_buffer = tx_rd - tx_wr;
+	if(space_in_buffer <= 0) space_in_buffer += TCP_WRITE_BUF_LEN;
+
+	// I have a strange feeling that I want to keep one byte of clearance...
+	space_in_buffer--;
 
 	pthread_mutex_unlock(&txfifo_mutex);
 
 	return space_in_buffer;
+}
+
+int tcp_is_space_for_noncritical_message()
+{
+	if(tcp_query_sendbuf_space() > MAX_MSG_LEN + 10*MAX_CRITICAL_MSG_LEN)
+		return 1;
+	return 0;
 }
 
 // Called from other threads:
@@ -247,7 +257,11 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 	space_in_buffer--;
 
 
+//	printf("tcp_send %d bytes, free %d: wr=%d, rd=%d\n", total_len, space_in_buffer, wr, tx_rd);
+
+	#ifdef TCP_DBGPR
 	printf("tcp_send %d bytes, free %d: wr=%d, rd=%d\n", total_len, space_in_buffer, wr, tx_rd);
+	#endif
 
 	if(total_len > space_in_buffer)
 	{
@@ -292,7 +306,9 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 		int first_write = TCP_WRITE_BUF_LEN-wr;
 		int second_write = paylen-first_write;
 
+		#ifdef TCP_DBGPR
 		printf("Two writes: first %d len %d to %d, second %d len %d to %d\n", wr, first_write, wr+first_write-1, 0, paylen-first_write, paylen-first_write-1);
+		#endif
 
 		memcpy(&txfifo[wr], buf, first_write);
 		memcpy(&txfifo[0], buf, second_write);
@@ -300,7 +316,9 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 	}
 	else
 	{
+		#ifdef TCP_DBGPR
 		printf("One write: %d len %d to %d\n", wr, paylen, wr+paylen-1);
+		#endif
 		memcpy(&txfifo[wr], buf, paylen);
 		wr += paylen;
 	}
@@ -369,8 +387,6 @@ void* tcp_send_thread()
 		ret = pthread_cond_timedwait(&newdata_cond, &txfifo_mutex, &timeout);
 		// Don't unlock, would lock right next:
 
-		sleep(10);
-
 		while(1) // call write() until the FIFO is completely emptied
 		{
 			// Fetch the shared variables:
@@ -391,7 +407,7 @@ void* tcp_send_thread()
 
 			if(ret != 0)
 			{
-				printf("WARNING: tcp_send_thread wakeup by timeout! This is not serious, just interesting.\n");
+				printf("NOTE: tcp_send_thread wakeup by timeout! This is not serious, just interesting.\n");
 			}
 
 			// Ex.: buflen=1000, rd = 900, amount_to_send = 100: over = 0
@@ -408,7 +424,12 @@ void* tcp_send_thread()
 			if(amount_to_write > MAX_WRITE_AT_ONCE)
 				amount_to_write = MAX_WRITE_AT_ONCE;
 
+
+//			printf("write %d...\n", amount_to_write);
+
+			#ifdef TCP_DBGPR
 			printf("write: wr=%d, rd=%d, amount_to_send=%d, over=%d, amount_to_write=%d...\n", wr, rd, amount_to_send, over, amount_to_write);
+			#endif
 			// Write should block if there is no space in the buffer - let it do that
 			int ret = write(tcp_client_sock, &txfifo[rd], amount_to_write);
 			if(ret < 0)
@@ -423,8 +444,10 @@ void* tcp_send_thread()
 				tcp_comm_close();
 				return NULL;
 			}
+//			printf("... done write\n");
+			#ifdef TCP_DBGPR
 			printf("... done write\n");
-
+			#endif
 			rd += ret;
 			if(rd >= TCP_WRITE_BUF_LEN)
 				rd -= TCP_WRITE_BUF_LEN;

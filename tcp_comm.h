@@ -50,6 +50,7 @@ int handle_tcp_client();
 int handle_tcp_listener();
 int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf);
 int tcp_query_sendbuf_space();
+int tcp_is_space_for_noncritical_message();
 
 void tcp_comm_close();
 
