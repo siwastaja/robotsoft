@@ -941,6 +941,7 @@ void* main_thread()
 	ADD_SUB(subs, 10); // hw_pose
 	ADD_SUB(subs, 11); // drive module
 //	ADD_SUB(subs, 13); // charger mount diagnostics
+	ADD_SUB(subs, 15); // compass headings
 	subscribe_to(subs);
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
@@ -953,7 +954,8 @@ void* main_thread()
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
 //	stdout_msgids[8] = 1;
-	stdout_msgids[13] = 1;
+//	stdout_msgids[13] = 1;
+	stdout_msgids[15] = 1;
 
 	srand(time(NULL));
 

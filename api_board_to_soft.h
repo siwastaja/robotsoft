@@ -229,6 +229,70 @@ typedef struct __attribute__((packed))
 void print_drive_diag(void* m);
 
 
+typedef struct __attribute__((packed))
+{
+	/*
+		Four distance buffers & robot poses at corresponding time.
+
+		wid_near:  9600 bytes
+		Supershort acquisition: normally sees about 20cm, but it's possible
+		to have objects up to about 2m if they are extremely reflective.
+		8-bit resolution, unit 8mm.
+		0 = overexposed
+		255 = underexposed
+
+		wid_basic: 19200 bytes
+		Also includes potential flags
+		Reconstructed HDR distance image based on two acquisitions, stray light
+		corrections etc., all the magic.
+		12-bit resolution, unit 8mm
+		0 = overexposed
+		4095 = underexposed
+
+		wid_far: 9600 bytes
+		Inaccurate data seeing further than wid_basic.
+		8-bit resolution, unit 32mm, offset 4096mm
+		0 = overexposed
+		n = 4096 + n*32mm
+		255 = underexposed
+
+		nar_far: 2816 bytes
+		Accurate narrow beam data
+		12-bit resolution, unit 8mm
+		0 = overexposed
+		4095 = underexposed
+
+	*/
+
+	// Sensor indeces: -1 = no image: distance data & corresponding pose are invalid
+	int8_t   wid_near_sidx;
+	int8_t   wid_basic_sidx;
+	int8_t   wid_far_sidx;
+	int8_t   nar_far_sidx;
+
+	uint8_t        wid_near[160*60];  // Unit: 8mm,               [1, 253]  ~ [8mm, 2024mm]
+	uint16_t flags_wid_basic[160*60]; // Unit: 8mm,               [1, 4095] ~ [8mm, 32760mm]
+	uint8_t        wid_far[160*60];   // Unit: 32mm, offs=4096mm. [1, 253]  ~ [4128mm, 12192mm]
+	uint16_t       nar_far[44*32];    // Unit: 8mm,               [1, 4095] ~ [8mm, 32760mm]
+
+	// Poses: 96 bytes
+	hw_pose_t pose_wid_near;
+	hw_pose_t pose_wid_basic;
+	hw_pose_t pose_wid_far;
+	hw_pose_t pose_nar_far;
+
+} tof_slam_set_t;
+void print_tof_slam_set(void* m);
+
+
+typedef struct __attribute__((packed))
+{
+	uint8_t  imus_valid; // bit0 = IMU0, bit1 = IMU1, etc.
+	uint32_t heading_per_imu[6];
+	uint32_t combined_heading;
+} compass_heading_t;
+void print_compass_heading(void* m);
+
 
 
 // z_step = 100 mm
@@ -335,6 +399,8 @@ MAYBE_EXTERN drive_diag_t* drive_diag;
 MAYBE_EXTERN mcu_voxel_map_t* mcu_voxel_map;
 MAYBE_EXTERN mcu_multi_voxel_map_t* mcu_multi_voxel_map;
 MAYBE_EXTERN chafind_results_t* chafind_results;
+MAYBE_EXTERN tof_slam_set_t* tof_slam_set;
+MAYBE_EXTERN compass_heading_t* compass_heading;
 
 
 /*
@@ -406,6 +472,8 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(drive_diag, "Drive module (mech feedbacks) diagnostics"), // 11
 	B2S_MESSAGE_STRUCT(mcu_voxel_map, "Low level voxel map, 1 part of 12"), // 12
 	B2S_MESSAGE_STRUCT(chafind_results, "Automatic charger mounting diagnostics"), // 13
+	B2S_MESSAGE_STRUCT(tof_slam_set, "TOF distance set for SLAM"), // 14
+	B2S_MESSAGE_STRUCT(compass_heading, "MEMS compass heading(s)"), // 15
 	{0}  
 };
 

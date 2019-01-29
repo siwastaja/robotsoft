@@ -115,6 +115,29 @@ void print_hw_pose(void* m)
 //	printf("         ang=%11d   pitch=%11d   roll=%11d LSB\n", (int32_t)mm->ang, (int32_t)mm->pitch, (int32_t)mm->roll);
 }
 
+void print_compass_heading(void* m)
+{
+	compass_heading_t* mm = m;
+	printf("Compass heading: ");
+	for(int i=0; i<6; i++)
+	{
+		if(mm->imus_valid & (1<<i))
+		{
+			printf("IMU%d: %.1f deg ", i, ANG32TOFDEG(mm->heading_per_imu[i]));
+		}
+	}
+
+	if(mm->imus_valid)
+	{
+		printf("Combined: %.1f deg\n", ANG32TOFDEG(mm->combined_heading));
+	}
+	else
+	{
+		printf("(no data)\n");
+	}
+
+}
+
 void print_drive_diag(void* m)
 {
 	drive_diag_t *mm = m;
