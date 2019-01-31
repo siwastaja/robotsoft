@@ -458,8 +458,6 @@ void* tcp_send_thread()
 			tx_rd = rd;
 			// Don't unlock, will use again right away
 			
-
 		} // end while send everything
-		pthread_mutex_unlock(&txfifo_mutex);
 	}
 }
