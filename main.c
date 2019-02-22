@@ -119,11 +119,11 @@ state_vect_t state_vect =
 {
 	.v = {
 	.loca_2d = 1,
-	.loca_3d = 1,
+	.loca_3d = 0,
 	.mapping_2d = 1,
-	.mapping_3d = 1,
+	.mapping_3d = 0,
 	.mapping_collisions = 1,
-	.keep_position = 1, // !!!!!
+	.keep_position = 1,
 	.command_source = USER_IN_COMMAND,
 	.localize_with_big_search_area = 0
 	}
@@ -821,6 +821,24 @@ int new_mount_charger()
 	return 0;
 }
 
+int new_self_calib_request()
+{
+	printf("SELF_CALIB_REQUEST\n");
+	s2b_self_calib_request_t *p_msg = spi_init_cmd(CMD_SELF_CALIB_REQUEST);
+
+	if(!p_msg)
+	{
+		printf(__func__);
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
 
 static int move_to_prev_x, move_to_prev_y, move_to_prev_id, move_to_prev_backmode, move_to_prev_speedlimit, move_to_prev_accurate_turn;
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn)
@@ -955,7 +973,7 @@ void* main_thread()
 //	stdout_msgids[11] = 1;
 //	stdout_msgids[8] = 1;
 //	stdout_msgids[13] = 1;
-	stdout_msgids[15] = 1;
+//	stdout_msgids[15] = 1;
 
 	srand(time(NULL));
 
@@ -1086,14 +1104,6 @@ void* main_thread()
 			return NULL;
 		}
 
-#ifdef MOTCON_PID_EXPERIMENT
-		static uint8_t pid_i_max = 30;
-		static uint8_t pid_feedfwd = 30;
-		static uint8_t pid_p = 80;
-		static uint8_t pid_i = 80;
-		static uint8_t pid_d = 50;
-#endif
-
 		if(FD_ISSET(STDIN_FILENO, &fds))
 		{
 			int cmd = fgetc(stdin);
@@ -1119,24 +1129,12 @@ void* main_thread()
 //				retrieve_robot_pos();
 			}
 
-/*			if(cmd == 'c')
+			if(cmd == 'c')
 			{
-				printf("Starting automapping from compass round.\n");
-				routing_set_world(&world);
-				start_automapping_from_compass();
+				new_self_calib_request();
 			}
-			if(cmd == 'a')
-			{
-				printf("Starting automapping, skipping compass round.\n");
-				routing_set_world(&world);
-				start_automapping_skip_compass();
-			}
-			if(cmd == 'w')
-			{
-				printf("Stopping automapping.\n");
-				stop_automapping();
-			}
-*/			if(cmd == '0')
+
+			if(cmd == '0')
 			{
 				set_robot_pos(0,0,0);
 			}
@@ -1174,34 +1172,6 @@ void* main_thread()
 			{
 				verbose_mode = verbose_mode?0:1;
 			}
-
-
-#if 0
-			if(cmd >= '1' && cmd <= '9')
-			{
-				uint8_t bufings[3];
-				bufings[0] = 0xd0 + cmd-'0';
-				bufings[1] = 0;
-				bufings[2] = 0xff;
-				printf("Sending dev msg: %x\n", bufings[0]);
-				send_uart(bufings, 3);				
-			}
-#endif
-
-#ifdef MOTCON_PID_EXPERIMENT
-			if(cmd == 'A') {int tmp = (int)pid_i_max*5/4; if(tmp>255) tmp=255; pid_i_max=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'a') {int tmp = (int)pid_i_max*3/4; if(tmp<4) tmp=4;     pid_i_max=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'S') {int tmp = (int)pid_feedfwd*5/4; if(tmp>255) tmp=255; pid_feedfwd=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 's') {int tmp = (int)pid_feedfwd*3/4; if(tmp<3) tmp=4;     pid_feedfwd=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'D') {int tmp = (int)pid_p*5/4; if(tmp>255) tmp=255; pid_p=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'd') {int tmp = (int)pid_p*3/4; if(tmp<4) tmp=4;     pid_p=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'F') {int tmp = (int)pid_i*5/4; if(tmp>255) tmp=255; pid_i=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'f') {int tmp = (int)pid_i*3/4; if(tmp<4) tmp=4;     pid_i=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'G') {int tmp = (int)pid_d*5/4; if(tmp>255) tmp=255; pid_d=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'g') {int tmp = (int)pid_d*3/4; if(tmp<4) tmp=4;     pid_d=tmp; send_motcon_pid(pid_i_max, pid_feedfwd, pid_p, pid_i, pid_d);}
-			if(cmd == 'z') {turn_and_go_rel_rel(0, 2000, 25, 1);}
-			if(cmd == 'Z') {turn_and_go_rel_rel(0, -2000, 25, 1);}
-#endif
 		}
 
 		if(tcp_client_sock >= 0 && FD_ISSET(tcp_client_sock, &fds))

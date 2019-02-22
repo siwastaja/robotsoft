@@ -156,6 +156,11 @@ void print_mcu_multi_voxel_map(void* m)
 
 }
 
+void print_tof_slam_set(void* m)
+{
+
+}
+
 void print_chafind_results(void* m)
 {
 	chafind_results_t *mm = m;

@@ -138,6 +138,12 @@ typedef struct __attribute__((packed))
 	uint32_t reserved;
 } s2b_mount_charger_t;
 
+#define CMD_SELF_CALIB_REQUEST 11
+typedef struct __attribute__((packed))
+{
+	uint32_t reserved;
+} s2b_self_calib_request_t;
+
 
 typedef struct __attribute__((packed))
 {
@@ -161,6 +167,7 @@ s2b_message_t const s2b_msgs[256]  =
 	S2B_MESSAGE_STRUCT(s2b_stop_movement_t), // 8
 	S2B_MESSAGE_STRUCT(s2b_ext_vacuum_t), // 9
 	S2B_MESSAGE_STRUCT(s2b_mount_charger_t), // 10
+	S2B_MESSAGE_STRUCT(s2b_self_calib_request_t), // 11
 	{0}
 };
 

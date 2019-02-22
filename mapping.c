@@ -1279,266 +1279,277 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 
 //	printf("%d-thread localization & mapping on voxmap, ref_x=%d, ref_y=%d, rota_mid_x=%d, rota_mid_y=%d\n", N_SLAM_THREADS, ref_x, ref_y, rota_mid_x, rota_mid_y);
 
+	int x_corr = 0, y_corr = 0;
+	double a_corr = 0.0;
+
 	time = subsec_timestamp();
 
 	load_25pages(w, PAGE(ref_x), PAGE(ref_y));
 
 	double time_pageload = subsec_timestamp() - time;
 
-	time = subsec_timestamp();
 
-	gen_refmap_lores(w, ref_x, ref_y);
-
-	double time_gen_lores = subsec_timestamp() - time;
-
-	time = subsec_timestamp();
-
-	gen_refmap_hires(w, ref_x, ref_y);
-
-	double time_gen_hires = subsec_timestamp() - time;
-
-
-	volatile int x_winners[N_SLAM_THREADS];
-	volatile int y_winners[N_SLAM_THREADS];
-	volatile double ang_winners[N_SLAM_THREADS];
-	volatile int winner_scores[N_SLAM_THREADS];
-
-
-	thread_args_t pass1_args[N_SLAM_THREADS];
-	thread_args_t pass2_args[N_SLAM_THREADS];
-	for(int i=0; i<N_SLAM_THREADS; i++)
+	if(state_vect.v.loca_3d)
 	{
-		pass1_args[i].voxmap = vox_lores;
-		pass1_args[i].refmap = refmap_lores;
-		pass1_args[i].x_winner = &x_winners[i];
-		pass1_args[i].y_winner = &y_winners[i];
-		pass1_args[i].ang_winner = &ang_winners[i];
-		pass1_args[i].winner_score = &winner_scores[i];
 
-		// Pass1: 1 unit is 100mm
-		pass1_args[i].x_start  = -4;   //    -400mm
-		pass1_args[i].x_step   =  1;   //     100mm
-		pass1_args[i].x_nsteps =  9;   // to +400mm
 
-		pass1_args[i].y_start  = -4;   //    -400mm
-		pass1_args[i].y_step   =  1;   //     100mm
-		pass1_args[i].y_nsteps =  9;   // to +400mm
-	}
+		time = subsec_timestamp();
 
-	pass1_args[0].n_angles = 3;
-	pass1_args[0].angles[0] = DEGTORAD(-6.0);
-	pass1_args[0].weight_offs[0] = 0;
-	pass1_args[0].weight_mults[0] = 0.75;
-	pass1_args[0].angles[1] = DEGTORAD(-4.5);
-	pass1_args[0].weight_offs[1] = 0;
-	pass1_args[0].weight_mults[1] = 0.80;
-	pass1_args[0].angles[2] = DEGTORAD(-3.0);
-	pass1_args[0].weight_offs[2] = 0;
-	pass1_args[0].weight_mults[2] = 0.85;
+		gen_refmap_lores(w, ref_x, ref_y);
 
-	pass1_args[1].n_angles = 3;
-	pass1_args[1].angles[0] = DEGTORAD(-1.5);
-	pass1_args[1].weight_offs[0] = 1;
-	pass1_args[1].weight_mults[0] = 0.90;
-	pass1_args[1].angles[1] = DEGTORAD(0.0);
-	pass1_args[1].weight_offs[1] = 3;
-	pass1_args[1].weight_mults[1] = 1.0;
-	pass1_args[1].angles[2] = DEGTORAD(+1.5);
-	pass1_args[1].weight_offs[2] = 1;
-	pass1_args[1].weight_mults[2] = 0.90;
+		double time_gen_lores = subsec_timestamp() - time;
 
-	pass1_args[2].n_angles = 3;
-	pass1_args[2].angles[0] = DEGTORAD(+3.0);
-	pass1_args[2].weight_offs[0] = 0;
-	pass1_args[2].weight_mults[0] = 0.85;
-	pass1_args[2].angles[1] = DEGTORAD(+4.5);
-	pass1_args[2].weight_offs[1] = 0;
-	pass1_args[2].weight_mults[1] = 0.80;
-	pass1_args[2].angles[2] = DEGTORAD(+6.0);
-	pass1_args[2].weight_offs[2] = 0;
-	pass1_args[2].weight_mults[2] = 0.75;
+		time = subsec_timestamp();
 
-/*
-	pass1_args[0].n_angles = 2;
-	pass1_args[0].angles[0] = DEGTORAD(-1.5);
-	pass1_args[0].weight_offs[0] = 0;
-	pass1_args[0].weight_mults[0] = 0.80;
-	pass1_args[0].angles[1] = DEGTORAD(-0.75);
-	pass1_args[0].weight_offs[1] = 0;
-	pass1_args[0].weight_mults[1] = 0.90;
+		gen_refmap_hires(w, ref_x, ref_y);
 
-	pass1_args[1].n_angles = 2;
-	pass1_args[1].angles[0] = DEGTORAD(0);
-	pass1_args[1].weight_offs[0] = 1;
-	pass1_args[1].weight_mults[0] = 1.0;
-	pass1_args[1].angles[1] = DEGTORAD(0.75);
-	pass1_args[1].weight_offs[1] = 3;
-	pass1_args[1].weight_mults[1] = 0.90;
+		double time_gen_hires = subsec_timestamp() - time;
 
-	pass1_args[2].n_angles = 1;
-	pass1_args[2].angles[0] = DEGTORAD(+1.5);
-	pass1_args[2].weight_offs[0] = 0;
-	pass1_args[2].weight_mults[0] = 0.80;
-*/
 
-//	printf("Pass 1\n");
+		volatile int x_winners[N_SLAM_THREADS];
+		volatile int y_winners[N_SLAM_THREADS];
+		volatile double ang_winners[N_SLAM_THREADS];
+		volatile int winner_scores[N_SLAM_THREADS];
 
-	time = subsec_timestamp();
 
-	pthread_t threads[N_SLAM_THREADS];
-	pthread_t threads_pass2[N_SLAM_THREADS];
-
-	for(int th=0; th<N_SLAM_THREADS; th++)
-	{
-		if( (ret = pthread_create(&threads[th], NULL, pass1_thread, (void*)&pass1_args[th])) )
+		thread_args_t pass1_args[N_SLAM_THREADS];
+		thread_args_t pass2_args[N_SLAM_THREADS];
+		for(int i=0; i<N_SLAM_THREADS; i++)
 		{
-			printf("ERROR: pass1 processing thread #%d creation, ret = %d\n", th, ret);
-			return -1;
+			pass1_args[i].voxmap = vox_lores;
+			pass1_args[i].refmap = refmap_lores;
+			pass1_args[i].x_winner = &x_winners[i];
+			pass1_args[i].y_winner = &y_winners[i];
+			pass1_args[i].ang_winner = &ang_winners[i];
+			pass1_args[i].winner_score = &winner_scores[i];
+
+			// Pass1: 1 unit is 100mm
+			pass1_args[i].x_start  = -4;   //    -400mm
+			pass1_args[i].x_step   =  1;   //     100mm
+			pass1_args[i].x_nsteps =  9;   // to +400mm
+
+			pass1_args[i].y_start  = -4;   //    -400mm
+			pass1_args[i].y_step   =  1;   //     100mm
+			pass1_args[i].y_nsteps =  9;   // to +400mm
 		}
-	}
 
-	for(int th=N_SLAM_THREADS-1; th>=0; th--)
-	{
-		pthread_join(threads[th], NULL);
-	}
+		pass1_args[0].n_angles = 3;
+		pass1_args[0].angles[0] = DEGTORAD(-6.0);
+		pass1_args[0].weight_offs[0] = 0;
+		pass1_args[0].weight_mults[0] = 0.80;
+		pass1_args[0].angles[1] = DEGTORAD(-4.5);
+		pass1_args[0].weight_offs[1] = 0;
+		pass1_args[0].weight_mults[1] = 0.80;
+		pass1_args[0].angles[2] = DEGTORAD(-3.0);
+		pass1_args[0].weight_offs[2] = 0;
+		pass1_args[0].weight_mults[2] = 0.85;
 
-	double time_pass1 = subsec_timestamp() - time;
+		pass1_args[1].n_angles = 3;
+		pass1_args[1].angles[0] = DEGTORAD(-1.5);
+		pass1_args[1].weight_offs[0] = 1;
+		pass1_args[1].weight_mults[0] = 0.90;
+		pass1_args[1].angles[1] = DEGTORAD(0.0);
+		pass1_args[1].weight_offs[1] = 3;
+		pass1_args[1].weight_mults[1] = 1.0;
+		pass1_args[1].angles[2] = DEGTORAD(+1.5);
+		pass1_args[1].weight_offs[2] = 1;
+		pass1_args[1].weight_mults[2] = 0.90;
 
-	int pass1_best_score = -99999999;
-	int pass1_x_winner = 0;
-	int pass1_y_winner = 0;
-	double pass1_ang_winner = 0;
-	for(int th=0; th<N_SLAM_THREADS; th++)
-	{
-		//printf("Pass1 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
+		pass1_args[2].n_angles = 3;
+		pass1_args[2].angles[0] = DEGTORAD(+3.0);
+		pass1_args[2].weight_offs[0] = 0;
+		pass1_args[2].weight_mults[0] = 0.85;
+		pass1_args[2].angles[1] = DEGTORAD(+4.5);
+		pass1_args[2].weight_offs[1] = 0;
+		pass1_args[2].weight_mults[1] = 0.80;
+		pass1_args[2].angles[2] = DEGTORAD(+6.0);
+		pass1_args[2].weight_offs[2] = 0;
+		pass1_args[2].weight_mults[2] = 0.80;
 
-		if(winner_scores[th] > pass1_best_score)
+	/*
+		pass1_args[0].n_angles = 2;
+		pass1_args[0].angles[0] = DEGTORAD(-1.5);
+		pass1_args[0].weight_offs[0] = 0;
+		pass1_args[0].weight_mults[0] = 0.80;
+		pass1_args[0].angles[1] = DEGTORAD(-0.75);
+		pass1_args[0].weight_offs[1] = 0;
+		pass1_args[0].weight_mults[1] = 0.90;
+
+		pass1_args[1].n_angles = 2;
+		pass1_args[1].angles[0] = DEGTORAD(0);
+		pass1_args[1].weight_offs[0] = 1;
+		pass1_args[1].weight_mults[0] = 1.0;
+		pass1_args[1].angles[1] = DEGTORAD(0.75);
+		pass1_args[1].weight_offs[1] = 3;
+		pass1_args[1].weight_mults[1] = 0.90;
+
+		pass1_args[2].n_angles = 1;
+		pass1_args[2].angles[0] = DEGTORAD(+1.5);
+		pass1_args[2].weight_offs[0] = 0;
+		pass1_args[2].weight_mults[0] = 0.80;
+	*/
+
+	//	printf("Pass 1\n");
+
+		time = subsec_timestamp();
+
+		pthread_t threads[N_SLAM_THREADS];
+		pthread_t threads_pass2[N_SLAM_THREADS];
+
+		for(int th=0; th<N_SLAM_THREADS; th++)
 		{
-			pass1_best_score = winner_scores[th];
-			pass1_x_winner = x_winners[th];
-			pass1_y_winner = y_winners[th];
-			pass1_ang_winner = ang_winners[th];
+			if( (ret = pthread_create(&threads[th], NULL, pass1_thread, (void*)&pass1_args[th])) )
+			{
+				printf("ERROR: pass1 processing thread #%d creation, ret = %d\n", th, ret);
+				return -1;
+			}
 		}
-	}
 
-//	printf("Winner for pass1 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass1_ang_winner), pass1_x_winner, pass1_y_winner, pass1_best_score);
-
-	// Reuse x_winners, y_winners, ang_winners_, winner_scores variables for pass2
-
-	for(int i=0; i<N_SLAM_THREADS; i++)
-	{
-
-		pass2_args[i].voxmap = vox;
-		pass2_args[i].refmap = refmap_hires;
-		pass2_args[i].x_winner = &x_winners[i];
-		pass2_args[i].y_winner = &y_winners[i];
-		pass2_args[i].ang_winner = &ang_winners[i];
-		pass2_args[i].winner_score = &winner_scores[i];
-
-		// Pass2: 1 unit is 50mm
-		pass2_args[i].x_start  = -2 + pass1_x_winner;   //    -100mm
-		pass2_args[i].x_step   =  1;   //      50mm
-		pass2_args[i].x_nsteps =  5;   // to +100mm
-
-		pass2_args[i].y_start  = -2 + pass1_y_winner;   //    -100mm
-		pass2_args[i].y_step   =  1;   //      50mm
-		pass2_args[i].y_nsteps =  5;   // to +100mm
-	}
-
-
-	pass2_args[0].n_angles = 2;
-	pass2_args[0].angles[0] = pass1_ang_winner + DEGTORAD(-1.0);
-	pass2_args[0].weight_offs[0] = 0;
-	pass2_args[0].weight_mults[0] = (pass2_args[0].angles[0]>DEGTORAD(-0.1)&&pass2_args[0].angles[0]<DEGTORAD(0.1))?1.06:1.0;
-	pass2_args[0].angles[1] = pass1_ang_winner + DEGTORAD(-0.5);
-	pass2_args[0].weight_offs[1] = 0;
-	pass2_args[0].weight_mults[1] = (pass2_args[0].angles[1]>DEGTORAD(-0.1)&&pass2_args[0].angles[1]<DEGTORAD(0.1))?1.06:1.0;
-
-	pass2_args[1].n_angles = 2;
-	pass2_args[1].angles[0] = pass1_ang_winner + DEGTORAD(0.0);
-	pass2_args[1].weight_offs[0] = 1; // to map as zero to empty maps
-	pass2_args[1].weight_mults[0] = (pass2_args[1].angles[0]>DEGTORAD(-0.1)&&pass2_args[1].angles[0]<DEGTORAD(0.1))?1.06:1.0;
-	pass2_args[1].angles[1] = pass1_ang_winner + DEGTORAD(0.5);
-	pass2_args[1].weight_offs[1] = 0;
-	pass2_args[1].weight_mults[1] = (pass2_args[1].angles[1]>DEGTORAD(-0.1)&&pass2_args[1].angles[1]<DEGTORAD(0.1))?1.06:1.0;
-
-	pass2_args[2].n_angles = 1;
-	pass2_args[2].angles[0] = pass1_ang_winner + DEGTORAD(1.0);
-	pass2_args[2].weight_offs[0] = 0;
-	pass2_args[2].weight_mults[0] = (pass2_args[2].angles[0]>DEGTORAD(-0.1)&&pass2_args[2].angles[0]<DEGTORAD(0.1))?1.06:1.0;
-
-/*
-
-	pass2_args[0].n_angles = 2;
-	pass2_args[0].angles[0] = pass1_ang_winner + DEGTORAD(-0.6);
-	pass2_args[0].weight_offs[0] = 0;
-	pass2_args[0].weight_mults[0] = (pass2_args[0].angles[0]>DEGTORAD(-0.1)&&pass2_args[0].angles[0]<DEGTORAD(0.1))?1.1:1.0;
-	pass2_args[0].angles[1] = pass1_ang_winner + DEGTORAD(-0.3);
-	pass2_args[0].weight_offs[1] = 0;
-	pass2_args[0].weight_mults[1] = (pass2_args[0].angles[1]>DEGTORAD(-0.1)&&pass2_args[0].angles[1]<DEGTORAD(0.1))?1.1:1.0;
-
-	pass2_args[1].n_angles = 2;
-	pass2_args[1].angles[0] = pass1_ang_winner + DEGTORAD(0.0);
-	pass2_args[1].weight_offs[0] = 1; // to map as zero to empty maps
-	pass2_args[1].weight_mults[0] = (pass2_args[1].angles[0]>DEGTORAD(-0.1)&&pass2_args[1].angles[0]<DEGTORAD(0.1))?1.1:1.0;
-	pass2_args[1].angles[1] = pass1_ang_winner + DEGTORAD(0.3);
-	pass2_args[1].weight_offs[1] = 0;
-	pass2_args[1].weight_mults[1] = (pass2_args[1].angles[1]>DEGTORAD(-0.1)&&pass2_args[1].angles[1]<DEGTORAD(0.1))?1.1:1.0;
-
-	pass2_args[2].n_angles = 1;
-	pass2_args[2].angles[0] = pass1_ang_winner + DEGTORAD(0.6);
-	pass2_args[2].weight_offs[0] = 0;
-	pass2_args[2].weight_mults[0] = (pass2_args[2].angles[0]>DEGTORAD(-0.1)&&pass2_args[2].angles[0]<DEGTORAD(0.1))?1.1:1.0;
-
-*/
-
-	time = subsec_timestamp();
-
-
-
-	for(int th=0; th<N_SLAM_THREADS; th++)
-	{
-		if( (ret = pthread_create(&threads_pass2[th], NULL, pass2_thread, (void*)&pass2_args[th])) )
+		for(int th=N_SLAM_THREADS-1; th>=0; th--)
 		{
-			printf("ERROR: pass2 processing thread #%d creation, ret = %d\n", th, ret);
-			return -1;
+			pthread_join(threads[th], NULL);
 		}
-	}
 
+		double time_pass1 = subsec_timestamp() - time;
 
-	for(int th=N_SLAM_THREADS-1; th>=0; th--)
-	{
-		pthread_join(threads_pass2[th], NULL);
-	}
-
-	double time_pass2 = subsec_timestamp() - time;
-
-	int pass2_best_score = -99999999;
-	int pass2_x_winner = 0;
-	int pass2_y_winner = 0;
-	double pass2_ang_winner = 0;
-	for(int th=0; th<N_SLAM_THREADS; th++)
-	{
-		//printf("Pass2 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
-
-		if(winner_scores[th] > pass2_best_score)
+		int pass1_best_score = -99999999;
+		int pass1_x_winner = 0;
+		int pass1_y_winner = 0;
+		double pass1_ang_winner = 0;
+		for(int th=0; th<N_SLAM_THREADS; th++)
 		{
-			pass2_best_score = winner_scores[th];
-			pass2_x_winner = x_winners[th];
-			pass2_y_winner = y_winners[th];
-			pass2_ang_winner = ang_winners[th];
+			//printf("Pass1 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
+
+			if(winner_scores[th] > pass1_best_score)
+			{
+				pass1_best_score = winner_scores[th];
+				pass1_x_winner = x_winners[th];
+				pass1_y_winner = y_winners[th];
+				pass1_ang_winner = ang_winners[th];
+			}
 		}
-	}
 
-//	printf("Winner for pass2 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass2_ang_winner), pass2_x_winner, pass2_y_winner, pass2_best_score);
+	//	printf("Winner for pass1 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass1_ang_winner), pass1_x_winner, pass1_y_winner, pass1_best_score);
+
+		// Reuse x_winners, y_winners, ang_winners_, winner_scores variables for pass2
+
+		for(int i=0; i<N_SLAM_THREADS; i++)
+		{
+
+			pass2_args[i].voxmap = vox;
+			pass2_args[i].refmap = refmap_hires;
+			pass2_args[i].x_winner = &x_winners[i];
+			pass2_args[i].y_winner = &y_winners[i];
+			pass2_args[i].ang_winner = &ang_winners[i];
+			pass2_args[i].winner_score = &winner_scores[i];
+
+			// Pass2: 1 unit is 50mm
+			pass2_args[i].x_start  = -2 + pass1_x_winner;   //    -100mm
+			pass2_args[i].x_step   =  1;   //      50mm
+			pass2_args[i].x_nsteps =  5;   // to +100mm
+
+			pass2_args[i].y_start  = -2 + pass1_y_winner;   //    -100mm
+			pass2_args[i].y_step   =  1;   //      50mm
+			pass2_args[i].y_nsteps =  5;   // to +100mm
+		}
+
+
+		pass2_args[0].n_angles = 2;
+		pass2_args[0].angles[0] = pass1_ang_winner + DEGTORAD(-1.0);
+		pass2_args[0].weight_offs[0] = 0;
+		pass2_args[0].weight_mults[0] = (pass2_args[0].angles[0]>DEGTORAD(-0.1)&&pass2_args[0].angles[0]<DEGTORAD(0.1))?1.06:1.0;
+		pass2_args[0].angles[1] = pass1_ang_winner + DEGTORAD(-0.5);
+		pass2_args[0].weight_offs[1] = 0;
+		pass2_args[0].weight_mults[1] = (pass2_args[0].angles[1]>DEGTORAD(-0.1)&&pass2_args[0].angles[1]<DEGTORAD(0.1))?1.06:1.0;
+
+		pass2_args[1].n_angles = 2;
+		pass2_args[1].angles[0] = pass1_ang_winner + DEGTORAD(0.0);
+		pass2_args[1].weight_offs[0] = 1; // to map as zero to empty maps
+		pass2_args[1].weight_mults[0] = (pass2_args[1].angles[0]>DEGTORAD(-0.1)&&pass2_args[1].angles[0]<DEGTORAD(0.1))?1.06:1.0;
+		pass2_args[1].angles[1] = pass1_ang_winner + DEGTORAD(0.5);
+		pass2_args[1].weight_offs[1] = 0;
+		pass2_args[1].weight_mults[1] = (pass2_args[1].angles[1]>DEGTORAD(-0.1)&&pass2_args[1].angles[1]<DEGTORAD(0.1))?1.06:1.0;
+
+		pass2_args[2].n_angles = 1;
+		pass2_args[2].angles[0] = pass1_ang_winner + DEGTORAD(1.0);
+		pass2_args[2].weight_offs[0] = 0;
+		pass2_args[2].weight_mults[0] = (pass2_args[2].angles[0]>DEGTORAD(-0.1)&&pass2_args[2].angles[0]<DEGTORAD(0.1))?1.06:1.0;
+
+	/*
+
+		pass2_args[0].n_angles = 2;
+		pass2_args[0].angles[0] = pass1_ang_winner + DEGTORAD(-0.6);
+		pass2_args[0].weight_offs[0] = 0;
+		pass2_args[0].weight_mults[0] = (pass2_args[0].angles[0]>DEGTORAD(-0.1)&&pass2_args[0].angles[0]<DEGTORAD(0.1))?1.1:1.0;
+		pass2_args[0].angles[1] = pass1_ang_winner + DEGTORAD(-0.3);
+		pass2_args[0].weight_offs[1] = 0;
+		pass2_args[0].weight_mults[1] = (pass2_args[0].angles[1]>DEGTORAD(-0.1)&&pass2_args[0].angles[1]<DEGTORAD(0.1))?1.1:1.0;
+
+		pass2_args[1].n_angles = 2;
+		pass2_args[1].angles[0] = pass1_ang_winner + DEGTORAD(0.0);
+		pass2_args[1].weight_offs[0] = 1; // to map as zero to empty maps
+		pass2_args[1].weight_mults[0] = (pass2_args[1].angles[0]>DEGTORAD(-0.1)&&pass2_args[1].angles[0]<DEGTORAD(0.1))?1.1:1.0;
+		pass2_args[1].angles[1] = pass1_ang_winner + DEGTORAD(0.3);
+		pass2_args[1].weight_offs[1] = 0;
+		pass2_args[1].weight_mults[1] = (pass2_args[1].angles[1]>DEGTORAD(-0.1)&&pass2_args[1].angles[1]<DEGTORAD(0.1))?1.1:1.0;
+
+		pass2_args[2].n_angles = 1;
+		pass2_args[2].angles[0] = pass1_ang_winner + DEGTORAD(0.6);
+		pass2_args[2].weight_offs[0] = 0;
+		pass2_args[2].weight_mults[0] = (pass2_args[2].angles[0]>DEGTORAD(-0.1)&&pass2_args[2].angles[0]<DEGTORAD(0.1))?1.1:1.0;
+
+	*/
+
+		time = subsec_timestamp();
 
 
 
-//	pass2_ang_winner /= 2.0; // !!!!!!!!!
+		for(int th=0; th<N_SLAM_THREADS; th++)
+		{
+			if( (ret = pthread_create(&threads_pass2[th], NULL, pass2_thread, (void*)&pass2_args[th])) )
+			{
+				printf("ERROR: pass2 processing thread #%d creation, ret = %d\n", th, ret);
+				return -1;
+			}
+		}
 
 
-	int x_corr = -1*pass2_x_winner;
-	int y_corr = -1*pass2_y_winner;
+		for(int th=N_SLAM_THREADS-1; th>=0; th--)
+		{
+			pthread_join(threads_pass2[th], NULL);
+		}
+
+		double time_pass2 = subsec_timestamp() - time;
+
+		int pass2_best_score = -99999999;
+		int pass2_x_winner = 0;
+		int pass2_y_winner = 0;
+		double pass2_ang_winner = 0;
+		for(int th=0; th<N_SLAM_THREADS; th++)
+		{
+			//printf("Pass2 thread #%d winner ang=%.2f x=%d y=%d score=%d\n", th, RADTODEG(ang_winners[th]), x_winners[th], y_winners[th], winner_scores[th]);
+
+			if(winner_scores[th] > pass2_best_score)
+			{
+				pass2_best_score = winner_scores[th];
+				pass2_x_winner = x_winners[th];
+				pass2_y_winner = y_winners[th];
+				pass2_ang_winner = ang_winners[th];
+			}
+		}
+
+	//	printf("Winner for pass2 is %.2f deg, x=%d, y=%d, score=%d\n", RADTODEG(pass2_ang_winner), pass2_x_winner, pass2_y_winner, pass2_best_score);
+
+
+
+	//	pass2_ang_winner /= 2.0; // !!!!!!!!!
+
+
+		x_corr = -1*pass2_x_winner;
+		y_corr = -1*pass2_y_winner;
+		a_corr = pass2_ang_winner;
+
+	} // End localization enabled
 
 /*
 	if(test_first)
@@ -1558,7 +1569,8 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 
 	if(state_vect.v.mapping_3d)
 	{
-		if(pass2_ang_winner > DEGTORAD(-0.1) && pass2_ang_winner < DEGTORAD(0.1))
+		printf("  ->>>>  Mapping with correction ang=%.2f deg, x=%d, y=%d units\n", RADTODEG(a_corr), x_corr, y_corr);
+		if(a_corr > DEGTORAD(-0.1) && a_corr < DEGTORAD(0.1))
 		{
 			// no rotation
 			map_voxmap(w, vox, ref_x, ref_y, 0, x_corr, y_corr, &insertion_ang_corr);
@@ -1566,10 +1578,9 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 		else
 		{
 			memset(rotated_vox, 0, sizeof(rotated_vox));
-			rotate_tmpvox(rotated_vox, vox, pass2_ang_winner);
+			rotate_tmpvox(rotated_vox, vox, a_corr);
 			map_voxmap(w, rotated_vox, ref_x, ref_y, 0, x_corr, y_corr, &insertion_ang_corr);
 		}
-		printf("  ->>>>  Mapping with correction ang=%.2f deg, x=%d, y=%d units\n", RADTODEG(pass2_ang_winner), x_corr, y_corr);
 
 	}
 	else
@@ -1579,7 +1590,6 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 
 	double time_insertion = subsec_timestamp() - time;
 
-	double a_corr = pass2_ang_winner;
 
 	*corr_a = RADTOANG32(a_corr);
 	*corr_x = x_corr*MAP_UNIT_W;
@@ -1588,7 +1598,7 @@ int slam_voxmap(world_t* w, uint16_t* vox, uint16_t* vox_lores, int32_t ref_x, i
 //	printf("Performance: page load %.1fms  gen_lores %.1fms  gen_hires %.1fms  pass1 %.1fms  pass2 %.1fms  insertion %.1fms\n",
 //		time_pageload*1000.0, time_gen_lores*1000.0, time_gen_hires*1000.0, time_pass1*1000.0, time_pass2*1000.0, time_insertion*1000.0);
 
-	test_first = 0;
+	//test_first = 0;
 
 	return 0;
 }

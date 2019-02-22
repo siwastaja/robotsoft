@@ -6,7 +6,7 @@
 
 #DEVIP = 10.3.0.6
 #DEVIP = 192.168.43.59
-DEVIP = 192.168.1.6
+DEVIP = 10.42.0.242
 
 CC = gcc
 LD = gcc

@@ -171,6 +171,9 @@ typedef struct __attribute__((packed))
 void print_tof_raw_img(void* m);
 
 
+#define ANG_360_DEG_ULL 4294967296ULL
+#define ANG_360_DEG_LL  4294967296LL
+
 #define ANG_180_DEG 2147483648UL
 #define ANG_90_DEG  1073741824
 #define ANG_2_5_DEG   29826162
@@ -183,6 +186,19 @@ void print_tof_raw_img(void* m);
 #define ANG_0_01_DEG    119305
 #define ANG_0_001_DEG    11930
 #define ANG_1PER16_DEG  745654  // cumulated full circle rounding error: 0.000006%
+
+#define UANG_180_DEG 2147483648UL
+#define UANG_90_DEG  1073741824UL
+#define UANG_2_5_DEG   29826162UL
+#define UANG_1_DEG     11930465UL
+#define UANG_0_5_DEG    5965232UL
+#define UANG_0_25_DEG   2982616UL
+#define UANG_0_125_DEG  1491308UL
+#define UANG_0_1_DEG    1193047UL
+#define UANG_0_05_DEG    596523UL
+#define UANG_0_01_DEG    119305UL
+#define UANG_0_001_DEG    11930UL
+#define UANG_1PER16_DEG  745654UL  // cumulated full circle rounding error: 0.000006%
 
 #define ANG32TORAD(x) ( ((float)((uint32_t)(x)))/683565275.576432)
 #define ANG_I32TORAD(x) ( ((float)((int32_t)(x)))/683565275.576432)

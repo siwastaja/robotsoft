@@ -72,7 +72,7 @@ float main_robot_middle_to_lidar = -183.0;
 #endif
 */
 
-#define MARGIN (50.0)
+#define MARGIN (150.0)
 
 float main_robot_xs = 850.0+(MARGIN*2.0);
 float main_robot_ys = 600.0+(MARGIN*2.0);
