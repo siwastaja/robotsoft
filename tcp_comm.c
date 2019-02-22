@@ -102,8 +102,7 @@ int build_socket(uint16_t port)
 void sigpipe_handler(int signum)
 {
 	printf("Info: Broken pipe, closing TCP connection.\n");
-	close(tcp_client_sock);
-	tcp_client_sock = -1;
+	tcp_comm_close();
 }
 
 int init_tcp_comm()
@@ -126,11 +125,13 @@ void tcp_comm_close()
 {
 	close(tcp_client_sock);
 	int ret;
-	if( (ret = pthread_cancel(send_thread)) )
-	{
-		printf("ERROR: tcp_comm_close pthread_cancel failed, ret = %d\n", ret);
-	}
+//	if( (ret = pthread_cancel(send_thread)) )
+//	{
+//		printf("ERROR: tcp_comm_close pthread_cancel failed, ret = %d\n", ret);
+//	}
 	tcp_client_sock = -1;
+
+	pthread_cond_signal(&newdata_cond);
 }
 
 
@@ -188,8 +189,7 @@ int handle_tcp_client()
 	if(ret == -10 || ret == -11)
 	{
 		printf("Info: closing TCP connection.\n");
-		close(tcp_client_sock);
-		tcp_client_sock = -1;
+		tcp_comm_close();
 	}
 	return ret;
 }
@@ -292,6 +292,7 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 
 	int last_wr_idx = wr + paylen - 1; // example: wr = 100, paylen = 10, last_wr_idx = 109
 
+	// 3145728
 	if(last_wr_idx >= TCP_WRITE_BUF_LEN)
 	{
 		// Would go beyond the ringbuf: copy in two pieces
@@ -306,27 +307,33 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 		int first_write = TCP_WRITE_BUF_LEN-wr;
 		int second_write = paylen-first_write;
 
-		#ifdef TCP_DBGPR
-		printf("Two writes: first %d len %d to %d, second %d len %d to %d\n", wr, first_write, wr+first_write-1, 0, paylen-first_write, paylen-first_write-1);
-		#endif
+//		#ifdef TCP_DBGPR
+		printf("Two writes: first at %d len %d to %d, second at %d len %d to %d\n", wr, first_write, wr+first_write-1, 0, second_write, second_write-1);
+//		#endif
 
-		memcpy(&txfifo[wr], buf, first_write);
-		memcpy(&txfifo[0], buf, second_write);
+		memcpy(&txfifo[wr], &buf[0], first_write);
+		memcpy(&txfifo[0], &buf[first_write], second_write);
 		wr = second_write;
 	}
 	else
 	{
-		#ifdef TCP_DBGPR
-		printf("One write: %d len %d to %d\n", wr, paylen, wr+paylen-1);
-		#endif
+//		#ifdef TCP_DBGPR
+//		printf("One write: %d len %d to %d\n", wr, paylen, wr+paylen-1);
+//		#endif
 		memcpy(&txfifo[wr], buf, paylen);
 		wr += paylen;
 	}
 
+
+	if(wr < tx_wr)
+	{
+		printf("wr wrapped around %d -> %d\n", tx_wr, wr);
+	}
+
 	tx_wr = wr;
 
-	pthread_cond_signal(&newdata_cond);
 	pthread_mutex_unlock(&txfifo_mutex);
+	pthread_cond_signal(&newdata_cond);
 
 
 	return 0;
@@ -349,11 +356,12 @@ void* tcp_send_thread()
 	while(1)
 	{
 		// We want a simple timeout on condition variable.
-		// This is not possible: only absolute time is supported.
+		// Of course, in POSIX API / linux, this is colossally difficult.
+		// Simple timeout is impossible: only absolute time is supported.
 		// To make things worse, it's poorly specified WHAT
 		// "absolute time" means. Finally,
 		// https://sector7.xray.aps.anl.gov/~dohnarms/programming/glibc/html/Condition-Variables.html
-		// seems to be the only document which specified this:
+		// seems to be the only document which specifies this:
 		// "with the same origin as time and gettimeofday"
 		// So, clock_gettime, which would work with the same timespec struct,
 		// is illogically not supported.
@@ -394,6 +402,12 @@ void* tcp_send_thread()
 			int wr = tx_wr;
 			int rd = tx_rd;
 			pthread_mutex_unlock(&txfifo_mutex);
+
+			if(tcp_client_sock < 0)
+			{
+				tx_rd = 0;
+				return NULL;
+			}
 
 
 			int amount_to_send = wr - rd;
@@ -436,13 +450,13 @@ void* tcp_send_thread()
 			{
 				fprintf(stderr, "ERROR: tcp_send_thread(): socket write error %d (%s). Closing TCP connection.\n", errno, strerror(errno));
 				tcp_comm_close();
-				return NULL;
+				//return NULL;
 			}
 			if(ret == 0)
 			{
 				fprintf(stderr, "ERROR: blocking write() returned 0 unexpectedly. Closing TCP connection.\n");
 				tcp_comm_close();
-				return NULL;
+				//return NULL;
 			}
 //			printf("... done write\n");
 			#ifdef TCP_DBGPR
