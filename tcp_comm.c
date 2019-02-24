@@ -307,9 +307,9 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 		int first_write = TCP_WRITE_BUF_LEN-wr;
 		int second_write = paylen-first_write;
 
-//		#ifdef TCP_DBGPR
+		#ifdef TCP_DBGPR
 		printf("Two writes: first at %d len %d to %d, second at %d len %d to %d\n", wr, first_write, wr+first_write-1, 0, second_write, second_write-1);
-//		#endif
+		#endif
 
 		memcpy(&txfifo[wr], &buf[0], first_write);
 		memcpy(&txfifo[0], &buf[first_write], second_write);
@@ -317,18 +317,20 @@ int tcp_send(uint16_t msgid, uint32_t paylen, uint8_t* buf)
 	}
 	else
 	{
-//		#ifdef TCP_DBGPR
-//		printf("One write: %d len %d to %d\n", wr, paylen, wr+paylen-1);
-//		#endif
+		#ifdef TCP_DBGPR
+		printf("One write: %d len %d to %d\n", wr, paylen, wr+paylen-1);
+		#endif
 		memcpy(&txfifo[wr], buf, paylen);
 		wr += paylen;
 	}
 
 
-	if(wr < tx_wr)
-	{
-		printf("wr wrapped around %d -> %d\n", tx_wr, wr);
-	}
+	#ifdef TCP_DBGPR
+		if(wr < tx_wr)
+		{
+			printf("wr wrapped around %d -> %d\n", tx_wr, wr);
+		}
+	#endif
 
 	tx_wr = wr;
 

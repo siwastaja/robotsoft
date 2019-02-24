@@ -375,6 +375,7 @@ typedef struct __attribute__((packed))
 	// Live calculation steps and results
 	int32_t nearest_hit_x;
 	int32_t nearest_hit_y;
+	int32_t nearest_hit_z;
 	int32_t middle_bar_min_y;
 	int32_t middle_bar_max_y;
 	int32_t left_accum_cnt;

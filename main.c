@@ -99,6 +99,8 @@
 #include "spi.h"
 
 #include "mcu_micronavi_docu.c"
+#include "config.h"
+
 
 #define DEFAULT_SPEEDLIM 45
 #define MAX_CONFIGURABLE_SPEEDLIM 70
@@ -114,6 +116,9 @@ int32_t move_remaining;
 
 uint32_t micronavi_stop_flags;
 uint32_t feedback_stop_flags;
+
+
+pwr_status_t latest_pwr_status;
 
 state_vect_t state_vect =
 {
@@ -225,7 +230,7 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars)
 	}
 
 	do_follow_route = 0;
-	route_finished_or_notfound = 1;
+	route_finished_or_notfound = 0;
 
 	send_info(INFO_STATE_THINK);
 
@@ -401,7 +406,7 @@ void do_live_obstacle_checking()
 
 		int hitcnt = check_direct_route_non_turning_hitcnt_mm(cur_x, cur_y, target_x, target_y);
 
-		printf("    HITCNT = %d, dist_to_next=%d\n", hitcnt, dist_to_next);
+		//printf("    HITCNT = %d, dist_to_next=%d\n", hitcnt, dist_to_next);
 
 #if 0
 		if(hitcnt > 0 && maneuver_cnt < 2)
@@ -501,6 +506,7 @@ void do_live_obstacle_checking()
 	}
 }
 
+static int route_finished_for_charger;
 void route_fsm()
 {
 	static int micronavi_stops = 0;
@@ -640,10 +646,12 @@ void route_fsm()
 							micronavi_stops = 0;
 							do_follow_route = 0;
 							route_finished_or_notfound = 1;
+							route_finished_for_charger = 1;
 							send_route_end_status(TCP_RC_ROUTE_STATUS_SUCCESS);
 						}
 					}
 				}
+#if 0
 				else if(live_obstacle_checking_on)
 				{
 					// Check if obstacles have appeared in the map.
@@ -664,6 +672,7 @@ void route_fsm()
 						}
 					}
 				}
+#endif
 			}
 		}
 
@@ -685,7 +694,7 @@ int charger_first_x, charger_first_y, charger_second_x, charger_second_y;
 
 void save_robot_pos()
 {
-	FILE* f_cha = fopen("/home/hrst/rn1-host/robot_pos.txt", "w");
+	FILE* f_cha = fopen(MAP_DIR"/robot_pos.txt", "w");
 	if(f_cha)
 	{
 		fprintf(f_cha, "%d %d %d\n", cur_ang, cur_x, cur_y);
@@ -697,7 +706,7 @@ void retrieve_robot_pos()
 {
 	int32_t ang;
 	int x; int y;
-	FILE* f_cha = fopen("/home/hrst/rn1-host/robot_pos.txt", "r");
+	FILE* f_cha = fopen(MAP_DIR"/robot_pos.txt", "r");
 	if(f_cha)
 	{
 		fscanf(f_cha, "%d %d %d", &ang, &x, &y);
@@ -708,13 +717,8 @@ void retrieve_robot_pos()
 
 void conf_charger_pos()  // call when the robot is *in* the charger.
 {
-	int32_t da, dx, dy;
-//	map_lidars(&world, NUM_LATEST_LIDARS_FOR_ROUTING_START, lidars_to_map_at_routing_start, &da, &dx, &dy);
-	INCR_POS_CORR_ID();
+	int32_t cha_ang = cur_ang; int cha_x = cur_x; int cha_y = cur_y;
 
-	int32_t cha_ang = cur_ang-da; int cha_x = cur_x+dx; int cha_y = cur_y+dy;
-
-	correct_robot_pos(da, dx, dy, pos_corr_id);
 
 	printf("Set charger pos at ang=%d, x=%d, y=%d\n", cha_ang, cha_x, cha_y);
 	charger_first_x = (float)cha_x - cos(ANG32TORAD(cha_ang))*(float)CHARGER_FIRST_DIST;
@@ -724,7 +728,7 @@ void conf_charger_pos()  // call when the robot is *in* the charger.
 	charger_fwd = CHARGER_SECOND_DIST-CHARGER_THIRD_DIST;
 	charger_ang = cha_ang;
 
-	FILE* f_cha = fopen("/home/hrst/rn1-host/charger_pos.txt", "w");
+	FILE* f_cha = fopen(MAP_DIR"/charger_pos.txt", "w");
 	if(f_cha)
 	{
 		fprintf(f_cha, "%d %d %d %d %d %d\n", charger_first_x, charger_first_y, charger_second_x, charger_second_y, charger_ang, charger_fwd);
@@ -734,7 +738,7 @@ void conf_charger_pos()  // call when the robot is *in* the charger.
 
 void read_charger_pos()
 {
-	FILE* f_cha = fopen("/home/hrst/rn1-host/charger_pos.txt", "r");
+	FILE* f_cha = fopen(MAP_DIR"/charger_pos.txt", "r");
 	if(f_cha)
 	{
 		fscanf(f_cha, "%d %d %d %d %d %d", &charger_first_x, &charger_first_y, &charger_second_x, &charger_second_y, &charger_ang, &charger_fwd);
@@ -958,8 +962,9 @@ void* main_thread()
 //	ADD_SUB(subs, 8); // tof diagnostics
 	ADD_SUB(subs, 10); // hw_pose
 	ADD_SUB(subs, 11); // drive module
-//	ADD_SUB(subs, 13); // charger mount diagnostics
-	ADD_SUB(subs, 15); // compass headings
+	ADD_SUB(subs, 13); // charger mount diagnostics
+//	ADD_SUB(subs, 15); // compass headings
+	printf("Subscribing...\n");
 	subscribe_to(subs);
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
 	static int hwmsg_decim[B2S_MAX_MSGIDS];
@@ -972,12 +977,11 @@ void* main_thread()
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
 //	stdout_msgids[8] = 1;
-//	stdout_msgids[13] = 1;
+	stdout_msgids[13] = 1;
 //	stdout_msgids[15] = 1;
 
 	srand(time(NULL));
 
-	send_keepalive();
 	daiju_mode(0);
 	correct_robot_pos(0,0,0, pos_corr_id); // To set the pos_corr_id.
 /*	turn_and_go_rel_rel(-5*ANG_1_DEG, 0, 25, 1);
@@ -998,6 +1002,8 @@ void* main_thread()
 	{
 		printf("ERROR: initial spi_init_cmd_queue error\n");
 	}
+
+	printf("Run.\n");
 
 	double chafind_timestamp = 0.0;
 	while(1)
@@ -1044,6 +1050,11 @@ void* main_thread()
 
 							clear_within_robot(&world, cur_ang, cur_x, cur_y);
 
+						}
+
+						if(s==4)
+						{
+							memcpy(&latest_pwr_status, &p_data[offs], sizeof(pwr_status_t));
 						}
 
 
@@ -1523,26 +1534,40 @@ void* main_thread()
 			prev_move_remaining = move_remaining;
 		}
 	
-//		if(find_charger_state < 4)
-//			live_obstacle_checking_on = 1;
-//		else
-//			live_obstacle_checking_on = 0;
+		if(find_charger_state < 4)
+			live_obstacle_checking_on = 1;
+		else
+			live_obstacle_checking_on = 0;
 
-#if 0
 
 		if(find_charger_state == 1)
 		{
+			route_finished_for_charger = 0;
 			state_vect.v.keep_position = 1;
 			daiju_mode(0);
 			if(run_search(charger_first_x, charger_first_y, 0) != 0)
 			{
-				printf("Finding charger (first point) failed.\n");
+				printf("Finding charger (first point) failed (run_search() called).\n");
 				find_charger_state = 0;
 			}
 			else
 				find_charger_state++;
 		}
 		else if(find_charger_state == 2)
+		{
+			if(route_finished_for_charger)
+			{
+				printf("Search succeeded, route followed.\n");
+				find_charger_state++;
+			}
+			else if(route_finished_or_notfound)
+			{
+				printf("Finding charger (first point) failed\n");
+				find_charger_state = 0;
+			}
+
+		}
+		else if(find_charger_state == 3)
 		{
 			if(!do_follow_route)
 			{
@@ -1554,46 +1579,28 @@ void* main_thread()
 				else
 				{
 					send_info(INFO_STATE_THINK);
-					printf("At first charger point, turning for charger.\n");
-					turn_and_go_abs_rel(charger_ang, 0, 23, 1);
+//					printf("At first charger point, turning for charger.\n");
+					printf("At first charger point...\n");
+//					turn_and_go_abs_rel(charger_ang, 0, 23, 1);
 					find_charger_state++;
 					chafind_timestamp = subsec_timestamp();
 
 				}
 			}
 		}
-		else if(find_charger_state == 3)
-		{
-			double stamp;
-			if( (stamp=subsec_timestamp()) > chafind_timestamp+2.5)
-			{
-				send_info(INFO_STATE_THINK);
-
-				chafind_timestamp = stamp;
-
-				printf("Turned at first charger point, mapping lidars for exact pos.\n");
-
-				int32_t da, dx, dy;
-				map_lidars(&world, NUM_LATEST_LIDARS_FOR_ROUTING_START, lidars_to_map_at_routing_start, &da, &dx, &dy);
-				INCR_POS_CORR_ID();
-				correct_robot_pos(da, dx, dy, pos_corr_id);
-				lidar_ignore_over = 0;
-				find_charger_state++;
-			}
-		}
 		else if(find_charger_state == 4)
 		{
-			if(lidar_ignore_over && subsec_timestamp() > chafind_timestamp+3.0)
+			if(subsec_timestamp() > chafind_timestamp+3.0)
 			{
 				printf("Going to second charger point.\n");
 				send_info(INFO_STATE_FWD);
-				new_move_to(charger_second_x, charger_second_y, 0, 0x7f, 20, 1);
+				new_move_to(charger_second_x, charger_second_y, 1, 0x7f, 20, 1);
 				find_charger_state++;
 			}
 		}
 		else if(find_charger_state == 5)
 		{
-			if(move_id == 0x7f && move_remaining < 10)
+			if(move_id == 0x7f && move_remaining < 40)
 			{
 				if(sq(cur_x-charger_second_x) + sq(cur_y-charger_second_y) > sq(180))
 				{
@@ -1602,42 +1609,19 @@ void* main_thread()
 				}
 				else
 				{
-					send_info(INFO_STATE_THINK);
-
-					turn_and_go_abs_rel(charger_ang, charger_fwd, 20, 1);
 					chafind_timestamp = subsec_timestamp();
+					send_info(INFO_STATE_THINK);
+					printf("Requesting charger mount.\n");
+					new_mount_charger();
 					find_charger_state++;
 				}
 			}
 		}
 		else if(find_charger_state == 6)
 		{
-			double stamp;
-			if( (stamp=subsec_timestamp()) > chafind_timestamp+3.0)
+			if(!(latest_pwr_status.flags & PWR_STATUS_FLAG_CHARGING) && !(latest_pwr_status.flags & PWR_STATUS_FLAG_FULL))
 			{
-				send_info(INFO_STATE_THINK);
-				chafind_timestamp = stamp;
-				turn_and_go_abs_rel(charger_ang, 0, 23, 1);
-				find_charger_state++;
-			}
-		}
-		else if(find_charger_state == 7)
-		{
-			double stamp;
-			if( (stamp=subsec_timestamp()) > chafind_timestamp+1.5)
-			{
-				chafind_timestamp = stamp;
-				send_info(INFO_STATE_THINK);
-				printf("Requesting charger mount.\n");
-				hw_find_charger();
-				find_charger_state++;
-			}
-		}
-		else if(find_charger_state == 8)
-		{
-			if(!pwr_status.charging && !pwr_status.charged)
-			{
-				if(subsec_timestamp() > chafind_timestamp+90.0)
+				if(subsec_timestamp() > chafind_timestamp+180.0)
 				{
 					printf("WARNING: Not charging (charger mount failure?). Retrying driving to charger.\n");
 					find_charger_state = 1;
@@ -1650,12 +1634,6 @@ void* main_thread()
 				printf("Robot charging succesfully.\n");
 			}
 		}
-
-		route_fsm();
-		autofsm();
-
-#endif
-
 
 		route_fsm();
 		autofsm();

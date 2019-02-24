@@ -173,6 +173,7 @@ void print_chafind_results(void* m)
 		"WAIT_FWD1",
 		"WAIT_FWD1_STOPEXTRA1",
 		"WAIT_FWD1_STOPEXTRA2",
+		"ACCUM_PREDATA",
 		"ACCUM_DATA",
 		"WAIT_BACKING",
 		"START_REBACKING",
@@ -192,9 +193,9 @@ void print_chafind_results(void* m)
 		cur_state = 16;
 	}
 
-	printf("Charger mount diagnostics: cur_state=%d[%s] nearest_hit_x=%d, y=%d, middle_bar_y=%d...%d,\naccum_cnt left=%d, mid=%d, right=%d --> backwall_ang=%.2f deg, midmark_x=%d, midmark_y=%d --> shift=%d, dist=%d,\n"
+	printf("Charger mount diagnostics: cur_state=%d[%s] nearest_hit_x=%d, y=%d, z=%d, middle_bar_y=%d...%d,\naccum_cnt left=%d, mid=%d, right=%d --> backwall_ang=%.2f deg, midmark_x=%d, midmark_y=%d --> shift=%d, dist=%d,\n"
 	       "first_movement = %d mm, num angle adjustment passes = %d, num vexling passes = %d,\npositioning success = %d, dist before push = %d, result code = %d\n",
-		mm->cur_state, state_names[cur_state], mm->nearest_hit_x, mm->nearest_hit_y, mm->middle_bar_min_y, mm->middle_bar_max_y, mm->left_accum_cnt, mm->mid_accum_cnt, mm->right_accum_cnt, ANG_I32TOFDEG(mm->backwall_ang), mm->midmark_x, mm->midmark_y, mm->shift, mm->dist, 
+		mm->cur_state, state_names[cur_state], mm->nearest_hit_x, mm->nearest_hit_y, mm->nearest_hit_z, mm->middle_bar_min_y, mm->middle_bar_max_y, mm->left_accum_cnt, mm->mid_accum_cnt, mm->right_accum_cnt, ANG_I32TOFDEG(mm->backwall_ang), mm->midmark_x, mm->midmark_y, mm->shift, mm->dist, 
 		mm->first_movement_needed, mm->turning_passes_needed, mm->vexling_passes_needed, mm->accepted_pos, mm->dist_before_push, mm->result);
 }
 
