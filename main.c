@@ -563,7 +563,7 @@ void route_fsm()
 				if(reret != 12345 && reret > 0)
 				{
 					printf("Routing failed.\n");
-					send_route_end_status(reret);
+					send_route_end_status(4);
 				}
 			}
 			else if(id_cnt == 0) // Zero id move is a special move during route following
@@ -1451,7 +1451,7 @@ void* main_thread()
 		{
 			int ret;
 			ret = poll_search_status(1);
-			if(ret != 12345 && ret != 23456 && ret != 0)
+			if(ret != 12345 && ret != 23456 && ret != 0 && ret != -999)
 			{
 				send_route_end_status(ret);
 			}
