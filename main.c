@@ -110,6 +110,7 @@ volatile int verbose_mode = 0;
 int max_speedlim = DEFAULT_SPEEDLIM;
 int cur_speedlim = DEFAULT_SPEEDLIM;
 
+int32_t move_run;
 int32_t move_id;
 int32_t move_remaining;
 
@@ -962,7 +963,7 @@ void* main_thread()
 //	ADD_SUB(subs, 8); // tof diagnostics
 	ADD_SUB(subs, 10); // hw_pose
 	ADD_SUB(subs, 11); // drive module
-	ADD_SUB(subs, 13); // charger mount diagnostics
+//	ADD_SUB(subs, 13); // charger mount diagnostics
 //	ADD_SUB(subs, 15); // compass headings
 	printf("Subscribing...\n");
 	subscribe_to(subs);
@@ -1060,6 +1061,7 @@ void* main_thread()
 
 						if(s==11)
 						{
+							move_run = ((drive_diag_t*)&p_data[offs])->run; 
 							move_id = ((drive_diag_t*)&p_data[offs])->id;
 							move_remaining = ((drive_diag_t*)&p_data[offs])->remaining;
 							micronavi_stop_flags = ((drive_diag_t*)&p_data[offs])->micronavi_stop_flags;
@@ -1456,6 +1458,8 @@ void* main_thread()
 		}
 
 		static int micronavi_stop_flags_printed = 0;
+		static int prev_move_remaining;
+
 		if(micronavi_stop_flags)
 		{
 			if(!micronavi_stop_flags_printed)
@@ -1505,33 +1509,26 @@ void* main_thread()
 
 
 
-		if(cmd_state == TCP_CR_DEST_MID)
+		if(cmd_state == TCP_CR_DEST_MID && tcp_client_sock >= 0)
 		{
-//			static int joocnt = 0;
-//			joocnt++;
-//			if(joocnt%16==15)
-//				printf("%d\n", move_remaining);
+			static int32_t prev_move_run;
 
-			static int prev_move_remaining;
-			if(move_remaining < 5 && prev_move_remaining > 5)
+			if(prev_move_run && (!move_run))
 			{
+			
 //				printf(" MOVEMENT FINISHED !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
-				if(tcp_client_sock >= 0)
-				{
-					msg_rc_movement_status.cur_ang = cur_ang>>16;
-					msg_rc_movement_status.cur_x = cur_x;
-					msg_rc_movement_status.cur_y = cur_y;
-					msg_rc_movement_status.status = TCP_RC_MOVEMENT_STATUS_SUCCESS;
-					msg_rc_movement_status.obstacle_flags = 0;
-					tcp_send_msg(&msgmeta_rc_movement_status, &msg_rc_movement_status);
-					send_info(INFO_STATE_IDLE);
-
-				}
+				msg_rc_movement_status.cur_ang = cur_ang>>16;
+				msg_rc_movement_status.cur_x = cur_x;
+				msg_rc_movement_status.cur_y = cur_y;
+				msg_rc_movement_status.status = TCP_RC_MOVEMENT_STATUS_SUCCESS;
+				msg_rc_movement_status.obstacle_flags = 0;
+				tcp_send_msg(&msgmeta_rc_movement_status, &msg_rc_movement_status);
+				send_info(INFO_STATE_IDLE);
 
 				cmd_state = 0;
-
 			}
 			prev_move_remaining = move_remaining;
+			prev_move_run = move_run;
 		}
 	
 		if(find_charger_state < 4)
