@@ -1183,7 +1183,8 @@ void* main_thread()
 
 			if(cmd == 'V')
 			{
-				verbose_mode = verbose_mode?0:1;
+			//	verbose_mode = verbose_mode?0:1;
+				state_vect.v.vacuum_on = state_vect.v.vacuum_on?0:1;
 			}
 		}
 
@@ -1358,7 +1359,7 @@ void* main_thread()
 
 					case 10:
 					{
-						clear_visited(&world, cur_x, cur_y);
+					//	clear_visited(&world, cur_x, cur_y);
 
 					} break;
 
