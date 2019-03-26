@@ -1056,6 +1056,12 @@ void* main_thread()
 						if(s==4)
 						{
 							memcpy(&latest_pwr_status, &p_data[offs], sizeof(pwr_status_t));
+
+							if(latest_pwr_status.flags & PWR_STATUS_FLAG_TURNOFF)
+							{
+								retval = 136;
+								goto BREAK_LOOP;
+							}
 						}
 
 
@@ -1752,6 +1758,8 @@ void* main_thread()
 
 
 	}
+
+	BREAK_LOOP:;
 
 	spi_comm_thread_quit();
 	return NULL;
