@@ -244,58 +244,54 @@ typedef struct __attribute__((packed))
 } drive_diag_t;
 void print_drive_diag(void* m);
 
+#define TOF_SLAM_SET_FLAG_LONG_IS_NARROW (1<<0)
 
 typedef struct __attribute__((packed))
 {
 	/*
-		Four distance buffers & robot poses at corresponding time.
+		Two distance buffers & robot poses at corresponding time.
 
-		wid_near:  9600 bytes
-		Supershort acquisition: normally sees about 20cm, but it's possible
-		to have objects up to about 2m if they are extremely reflective.
-		8-bit resolution, unit 8mm.
-		0 = overexposed
-		255 = underexposed
-
-		wid_basic: 19200 bytes
+		Set 0: basic_set: 19200 bytes
 		Also includes potential flags
-		Reconstructed HDR distance image based on two acquisitions, stray light
-		corrections etc., all the magic.
-		12-bit resolution, unit 8mm
-		0 = overexposed
-		4095 = underexposed
+		Reconstructed HDR distance image based on two or three acquisitions,
+		ambient, stray light, lens corrections etc., all the magic.
+		11-bit resolution, unit 8mm, range 8..16368 mm
+		0 (DIST_OVEREXP) = overexposed (obstacle very close)
+		2047 (DIST_UNDEREXP) = underexposed (no object in range)
 
-		wid_far: 9600 bytes
-		Inaccurate data seeing further than wid_basic.
-		8-bit resolution, unit 32mm, offset 4096mm
-		0 = overexposed
-		n = 4096 + n*32mm
-		255 = underexposed
+		Bits 15..12: amplitude val 0..15
+		Bit 11: Reserved for future flag
 
-		nar_far: 2816 bytes
-		Accurate narrow beam data
-		12-bit resolution, unit 8mm
-		0 = overexposed
-		4095 = underexposed
+
+		Set 1: long_set:
+		Reconstructed HDR distance image based on two acquisitions,
+		all corrections.
+
+		Contains either wide image (160*60) (when TOF_SLAM_SET_FLAG_LONG_IS_NARROW = 0)
+		or narrow image (TOF_XS_NARROW*TOF_YS_NARROW), (when TOF_SLAM_SET_FLAG_LONG_IS_NARROW = 1).
+		Narrow image is linearly in the beginning of the array (not a square within big image),
+		indexed y*TOF_XS_NARROW+x.
+
+		11-bit resolution, unit 16mm, range 16..32736mm
+		0 = overexposed (obstacle very close)
+		2047 = underexposed (no object in range)
+
+		Bits 15..12: amplitude val 0..15
+		Bit 11: Reserved for future flag
+
+
 
 	*/
 
-	// Sensor indeces: -1 = no image: distance data & corresponding pose are invalid
-	int8_t   wid_near_sidx;
-	int8_t   wid_basic_sidx;
-	int8_t   wid_far_sidx;
-	int8_t   nar_far_sidx;
+	uint16_t flags;
 
-	uint8_t        wid_near[160*60];  // Unit: 8mm,               [1, 253]  ~ [8mm, 2024mm]
-	uint16_t flags_wid_basic[160*60]; // Unit: 8mm,               [1, 4095] ~ [8mm, 32760mm]
-	uint8_t        wid_far[160*60];   // Unit: 32mm, offs=4096mm. [1, 253]  ~ [4128mm, 12192mm]
-	uint16_t       nar_far[44*32];    // Unit: 8mm,               [1, 4095] ~ [8mm, 32760mm]
-
-	// Poses: 96 bytes
-	hw_pose_t pose_wid_near;
-	hw_pose_t pose_wid_basic;
-	hw_pose_t pose_wid_far;
-	hw_pose_t pose_nar_far;
+	struct
+	{
+		// Sensor index: -1 = no image: distance data & corresponding pose are invalid
+		int8_t sidx;
+		uint16_t ampl_dist[160*60];
+		hw_pose_t pose;
+	} sets[2];
 
 } tof_slam_set_t;
 void print_tof_slam_set(void* m);
