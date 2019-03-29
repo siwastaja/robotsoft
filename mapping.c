@@ -174,16 +174,6 @@ extern double subsec_timestamp();
 
 
 
-
-
-
-// Temporary horror show begin here:
-// Going to completely remove the voxmap data type and related processing.
-// For now, just moved it from the MCU, to here, as is.
-// This is for driving for a few days, to collect some more data before full rewrite.
-
-
-
 #define N_SENSORS 10
 
 
