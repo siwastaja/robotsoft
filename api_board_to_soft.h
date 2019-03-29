@@ -245,23 +245,24 @@ typedef struct __attribute__((packed))
 } drive_diag_t;
 void print_drive_diag(void* m);
 
-#define TOF_SLAM_SET_FLAG_LONG_IS_NARROW (1<<0)
+#define TOF_SLAM_SET_FLAG_VALID (1<<0)
+#define TOF_SLAM_SET_FLAG_SET1_WIDE (1<<1)
+#define TOF_SLAM_SET_FLAG_SET1_NARROW (1<<2)
 
 typedef struct __attribute__((packed))
 {
 	/*
-		Two distance buffers & robot poses at corresponding time.
+		Two distance buffers & robot poses at corresponding times.
 
 		Set 0: basic_set: 19200 bytes
 		Also includes potential flags
 		Reconstructed HDR distance image based on two or three acquisitions,
 		ambient, stray light, lens corrections etc., all the magic.
-		11-bit resolution, unit 8mm, range 8..16368 mm
-		0 (DIST_OVEREXP) = overexposed (obstacle very close)
-		2047 (DIST_UNDEREXP) = underexposed (no object in range)
+		12-bit resolution, unit 8mm, range 16..32760 mm
+		0 (DIST_UNDEREXP) = underexposed (no object in range)
+		1 (DIST_OVEREXP) = overexposed (obstacle very close, can assume 8mm)
 
 		Bits 15..12: amplitude val 0..15
-		Bit 11: Reserved for future flag
 
 
 		Set 1: long_set:
@@ -273,25 +274,33 @@ typedef struct __attribute__((packed))
 		Narrow image is linearly in the beginning of the array (not a square within big image),
 		indexed y*TOF_XS_NARROW+x.
 
-		11-bit resolution, unit 16mm, range 16..32736mm
-		0 = overexposed (obstacle very close)
-		2047 = underexposed (no object in range)
+		12-bit resolution, unit 8mm, range 16..32760mm
+		0 = underexposed (no object in range)
+		1 = overexposed (obstacle very close, can assume 8mm)
 
 		Bits 15..12: amplitude val 0..15
-		Bit 11: Reserved for future flag
-
-
 
 	*/
 
 	uint16_t flags;
+	uint8_t sidx;
+	uint8_t  sensor_orientation; // for diagnostics display of the image in correct orientation
 
+	/*
+		The second set is:
+		- Invalid (FLAG_SET1_WIDE, FLAG_SET1_NARROW both unset). It was not acquired, to save time/energy.
+
+		- An extra long range, less accurate wide image, FLAG_SET1_WIDE
+		  This is exposed right after the basic set, but in high motion
+		   situations, there is enough lag so that using the separate pose is crucial, thus included.
+
+		- An extra long range, accurate narrow image, FLAG_SET1_NARROW. Similarly,
+		  exposed right after the basic set, but you should use the separate pose to map it.
+	*/
 	struct
 	{
-		// Sensor index: -1 = no image: distance data & corresponding pose are invalid
-		int8_t sidx;
-		uint16_t ampl_dist[160*60];
 		hw_pose_t pose;
+		uint16_t ampldist[160*60];
 	} sets[2];
 
 } tof_slam_set_t;

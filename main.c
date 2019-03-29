@@ -965,6 +965,7 @@ void* main_thread()
 	ADD_SUB(subs, 11); // drive module
 //	ADD_SUB(subs, 13); // charger mount diagnostics
 //	ADD_SUB(subs, 15); // compass headings
+	ADD_SUB(subs, 14); // TOF slam set
 	printf("Subscribing...\n");
 	subscribe_to(subs);
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
@@ -1029,15 +1030,6 @@ void* main_thread()
 							printf("msgid=%u  name=%s  comment=%s\n", s, b2s_msgs[s].name, b2s_msgs[s].comment);
 							if(b2s_msgs[s].p_print)
 								b2s_msgs[s].p_print(&p_data[offs]);
-						}
-
-						if(s==1)
-						{
-							int32_t acorr = 0, xcorr = 0, ycorr=0;
-							provide_mcu_voxmap(&world, (mcu_multi_voxel_map_t*)&p_data[offs], &acorr, &xcorr, &ycorr);
-
-							if(xcorr != 0 || ycorr != 0 || acorr != 0)
-								new_correct_pos(acorr, xcorr, ycorr);
 						}
 
 						if(s==10)
