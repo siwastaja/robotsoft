@@ -156,8 +156,30 @@ void print_mcu_multi_voxel_map(void* m)
 
 }
 
+
 void print_tof_slam_set(void* m)
 {
+	tof_slam_set_t *mm = m;
+
+	printf("TOF slam set: sidx=%d %s %s %s\n", mm->sidx,
+		(mm->flags&TOF_SLAM_SET_FLAG_VALID)?"VALID":"", 
+		(mm->flags&TOF_SLAM_SET_FLAG_SET1_WIDE)?"SET1_WIDE":"", 
+		(mm->flags&TOF_SLAM_SET_FLAG_SET1_NARROW)?"SET1_NARROW":"");
+
+	printf("SET0: mid = %dmm, pose = ", ((mm->sets[0].ampldist[30*160+80])&DIST_MASK)<<DIST_SHIFT);
+	print_hw_pose(&mm->sets[0].pose);
+
+	if(mm->flags&TOF_SLAM_SET_FLAG_SET1_WIDE)
+	{
+		printf("SET1 (wide): mid = %dmm, pose = ", ((mm->sets[1].ampldist[30*160+80])&DIST_MASK)<<DIST_SHIFT);
+		print_hw_pose(&mm->sets[1].pose);
+	}
+	else if(mm->flags&TOF_SLAM_SET_FLAG_SET1_NARROW)
+	{
+		printf("SET1 (narrow): mid = %dmm, pose = ", ((mm->sets[1].ampldist[(TOF_YS_NARROW/2)*TOF_XS_NARROW+(TOF_XS_NARROW/2)])&DIST_MASK)<<DIST_SHIFT);
+		print_hw_pose(&mm->sets[1].pose);
+	}
+	
 
 }
 
@@ -183,8 +205,8 @@ void print_chafind_results(void* m)
 		"ACCUM_FRONTAVG",
 		"WAIT_PUSH",
 		"SUCCESS",
-		"FAIL",
-		"INVALID STATE NUMBER"
+		"FAIL"
+//		"INVALID STATE NUMBER"
 	};
 
 	int cur_state = mm->cur_state;

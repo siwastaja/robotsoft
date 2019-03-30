@@ -249,6 +249,23 @@ void print_drive_diag(void* m);
 #define TOF_SLAM_SET_FLAG_SET1_WIDE (1<<1)
 #define TOF_SLAM_SET_FLAG_SET1_NARROW (1<<2)
 
+#ifndef DIST_MASK
+	#define DIST_MASK (0x0fff)
+	#define DIST_SHIFT (3)
+#endif
+
+#ifndef TOF_XS
+	#define TOF_XS (160)
+	#define TOF_YS (60)
+#endif
+
+#ifndef TOF_XS_NARROW
+	#define TOF_XS_NARROW (32)
+	#define TOF_YS_NARROW (44)
+	#define TOF_NARROW_Y_START (8)
+	#define TOF_NARROW_X_START (64)
+#endif
+
 typedef struct __attribute__((packed))
 {
 	/*
