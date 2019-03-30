@@ -944,6 +944,38 @@ int new_correct_pos(int32_t da, int32_t dx, int32_t dy)
 	return 0;
 }
 
+int trace_ena = 0;
+int trace_seq = 0;
+
+void save_trace(int seq, uint8_t* p_data)
+{
+	char fname[256];
+	sprintf(fname, "trace%08d.rb2", seq);
+
+	FILE* fil = fopen(fname, "wb");
+	if(!fil)
+	{
+		printf("ERROR: Trace: Error opening %s for write\n", fname);
+		return;
+	}
+
+	int size = ((b2s_header_t*)p_data)->payload_len + B2S_TOTAL_OVERHEAD_WITHOUT_CRC;
+	if(size < B2S_TOTAL_OVERHEAD_WITHOUT_CRC || size > B2S_MAX_LEN)
+	{
+		printf("ERROR: Trace: invalid size %d\n", size);
+		return;
+	}
+
+	if(fwrite(p_data, size, 1, fil) != 1)
+	{
+		printf("ERROR: Trace: fwrite failed\n");
+		return;
+	}
+
+	trace_seq++;
+}
+
+
 void* main_thread()
 {
 	int find_charger_state = 0;
@@ -1010,11 +1042,15 @@ void* main_thread()
 	double chafind_timestamp = 0.0;
 	while(1)
 	{
-
 		uint8_t* p_data = spi_rx_pop();
 		if(p_data != NULL)
 		{
 //			printf("Got something! Messages:\n");
+
+			if(trace_ena)
+			{
+				save_trace(trace_seq, p_data);
+			}
 
 			int offs = sizeof(b2s_header_t);
 			for(int i=0; i<B2S_SUBS_U64_ITEMS; i++)
@@ -1184,6 +1220,28 @@ void* main_thread()
 			//	verbose_mode = verbose_mode?0:1;
 				state_vect.v.vacuum_on = state_vect.v.vacuum_on?0:1;
 			}
+
+			if(cmd == '1')
+			{
+				trace_ena = 1;
+				trace_seq = 0;
+				printf("Start saving trace from %d\n", trace_seq);
+			}
+
+			if(cmd == '2')
+			{
+				trace_ena = 0;
+				printf("Paused/stopped trace at %d\n", trace_seq);
+			}
+
+			if(cmd == '3')
+			{
+				trace_ena = 1;
+				printf("Resumed trace at %d\n", trace_seq);
+			}
+
+			
+
 		}
 
 		if(tcp_client_sock >= 0 && FD_ISSET(tcp_client_sock, &fds))
