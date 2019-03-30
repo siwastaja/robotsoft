@@ -26,6 +26,62 @@ uint64_t subs_test4[4] = {0b0100,0,0,0};
 
 volatile uint64_t subs[B2S_SUBS_U64_ITEMS];
 
+int read_file(char* fname)
+{
+	FILE* fil = fopen(fname, "rb");
+	if(!fil)
+	{
+		printf("Error opening file %s for read\n", fname);
+	}
+
+	static uint8_t buf[B2S_MAX_LEN];
+
+	int n_bytes_read = fread(buf, 1, B2S_MAX_LEN, fil);
+
+	fclose(fil);
+
+	printf("Read %d bytes\n", n_bytes_read);
+	if(n_bytes_read < B2S_TOTAL_OVERHEAD_WITHOUT_CRC)
+	{
+		printf("ERROR: File is too short.\n");
+		return -2;
+	}
+
+	int expected_size = ((b2s_header_t*)buf)->payload_len + B2S_TOTAL_OVERHEAD_WITHOUT_CRC;
+
+	if(n_bytes_read != expected_size)
+	{
+		printf("ERROR: File size vs. header information mismatch, bytes_read=%d, expected_size=%d\n", n_bytes_read, expected_size);
+		return -3;
+	}
+
+
+	uint8_t* p_data = buf;
+
+	printf("Got something! Messages:\n");
+
+	int offs = sizeof(b2s_header_t);
+	for(int i=0; i<B2S_SUBS_U64_ITEMS; i++)
+	{
+		uint64_t t = ((b2s_header_t*)p_data)->subs[i];
+		for(int s=i*64; s<(i+1)*64; s++)
+		{
+			if(t & 1)
+			{
+				// id #s is enabled
+				printf("msgid=%u  name=%s  comment=%s\n", s, b2s_msgs[s].name, b2s_msgs[s].comment);
+				if(b2s_msgs[s].p_print)
+					b2s_msgs[s].p_print(&p_data[offs]);
+				offs += b2s_msgs[s].size;
+			}
+			t >>= 1;
+		}
+	}
+
+	return 0;
+	
+}
+
 void* main_thread()
 {
 	printf("Hello!\n");
@@ -125,7 +181,7 @@ void* main_thread()
 
 int main(int argc, char** argv)
 {
-	if(argc == 1)
+	if(argc <= 1)
 	{
 		printf("Usage: boardmon <msgid1> [msgid2] [msgid3] ...\n");
 		printf("Following subscriptions are available:\n");
@@ -137,45 +193,60 @@ int main(int argc, char** argv)
 				printf("%3u  %5u  %s   (%s)\n", i, b2s_msgs[i].size, b2s_msgs[i].name, b2s_msgs[i].comment);
 			}
 		}
+
+		printf("Alternative usage: boardmon -f <filename>: reads one SPI data packet from a file, prints it normally.\n");
+
 		return -1;
 	}
 
-	printf("Subscribing to...\n");
-	for(int i=1; i<argc; i++)
+	if(argv[1][0] == '-' && argv[1][0] == 'f')
 	{
-		int msgid = atoi(argv[i]);
-
-		if(msgid < 1 || msgid >= B2S_MAX_MSGIDS || b2s_msgs[msgid].name == NULL)
+		if(argc != 3)
 		{
-			printf("Invalid msgid %s  (atoi)-> %u\n", argv[i], msgid); 
+			printf("Error: expecting filename after -f\n");
+			return -1;
 		}
-		else
+		return read_file(argv[2]);
+	}
+	else
+	{
+		printf("Subscribing to...\n");
+		for(int i=1; i<argc; i++)
 		{
-			printf("%3u %s %s ", msgid, b2s_msgs[msgid].name, b2s_msgs[msgid].comment);
-			subs[msgid/64] |= 1ULL<<(msgid - msgid/64);
+			int msgid = atoi(argv[i]);
+
+			if(msgid < 1 || msgid >= B2S_MAX_MSGIDS || b2s_msgs[msgid].name == NULL)
+			{
+				printf("Invalid msgid %s  (atoi)-> %u\n", argv[i], msgid); 
+			}
+			else
+			{
+				printf("%3u %s %s ", msgid, b2s_msgs[msgid].name, b2s_msgs[msgid].comment);
+				subs[msgid/64] |= 1ULL<<(msgid - msgid/64);
+			}
 		}
+
+		pthread_t thread_main, thread_spi;
+
+		int ret;
+
+		signal(SIGINT, handle_sigint);
+
+		if( (ret = pthread_create(&thread_main, NULL, main_thread, NULL)) )
+		{
+			printf("ERROR: main thread creation, ret = %d\n", ret);
+			return -1;
+		}
+
+		if( (ret = pthread_create(&thread_spi, NULL, spi_comm_thread, NULL)) )
+		{
+			printf("ERROR: spi access thread creation, ret = %d\n", ret);
+			return -1;
+		}
+
+		pthread_join(thread_main, NULL);
+		pthread_join(thread_spi, NULL);
+
+		return retval;
 	}
-
-	pthread_t thread_main, thread_spi;
-
-	int ret;
-
-	signal(SIGINT, handle_sigint);
-
-	if( (ret = pthread_create(&thread_main, NULL, main_thread, NULL)) )
-	{
-		printf("ERROR: main thread creation, ret = %d\n", ret);
-		return -1;
-	}
-
-	if( (ret = pthread_create(&thread_spi, NULL, spi_comm_thread, NULL)) )
-	{
-		printf("ERROR: spi access thread creation, ret = %d\n", ret);
-		return -1;
-	}
-
-	pthread_join(thread_main, NULL);
-	pthread_join(thread_spi, NULL);
-
-	return retval;
 }
