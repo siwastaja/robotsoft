@@ -199,7 +199,7 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
-	if(argv[1][0] == '-' && argv[1][0] == 'f')
+	if(argv[1][0] == '-' && argv[1][1] == 'f')
 	{
 		if(argc != 3)
 		{

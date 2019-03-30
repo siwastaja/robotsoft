@@ -314,7 +314,7 @@ typedef struct __attribute__((packed))
 		- An extra long range, accurate narrow image, FLAG_SET1_NARROW. Similarly,
 		  exposed right after the basic set, but you should use the separate pose to map it.
 	*/
-	struct
+	struct __attribute__((packed))
 	{
 		hw_pose_t pose;
 		uint16_t ampldist[160*60];

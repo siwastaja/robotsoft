@@ -955,7 +955,7 @@ void save_trace(int seq, uint8_t* p_data)
 	FILE* fil = fopen(fname, "wb");
 	if(!fil)
 	{
-		printf("ERROR: Trace: Error opening %s for write\n", fname);
+		printf("ERROR: Trace: Error opening %s for write, errno=%d (%s)\n", fname, errno, strerror(errno));
 		return;
 	}
 
@@ -969,10 +969,13 @@ void save_trace(int seq, uint8_t* p_data)
 	if(fwrite(p_data, size, 1, fil) != 1)
 	{
 		printf("ERROR: Trace: fwrite failed\n");
+		fclose(fil);
 		return;
 	}
-
+	fclose(fil);
 	trace_seq++;
+	if(trace_seq%500==0)
+		printf("trace_seg at %d...\n", trace_seq);
 }
 
 
@@ -988,7 +991,7 @@ void* main_thread()
 
 
 	sleep(1);
-	uint64_t subs[B2S_SUBS_U64_ITEMS];
+	uint64_t subs[B2S_SUBS_U64_ITEMS] = {0, 0};
 	ADD_SUB(subs, 4); // power status
 //	ADD_SUB(subs, 5); // tof dists
 //	ADD_SUB(subs, 6); // tof ampls
@@ -1011,8 +1014,10 @@ void* main_thread()
 	static int stdout_msgids[B2S_MAX_MSGIDS];
 //	stdout_msgids[11] = 1;
 //	stdout_msgids[8] = 1;
-	stdout_msgids[13] = 1;
+//	stdout_msgids[13] = 1;
 //	stdout_msgids[15] = 1;
+//	stdout_msgids[14] = 1;
+
 
 	srand(time(NULL));
 
