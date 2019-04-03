@@ -12,7 +12,8 @@ DEVIP = 10.42.0.242
 CC = gcc
 LD = gcc
 
-ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o map_memdisk.o mapping.o routing.o hwdata.o
+EXTRA_HEADERS = config.h api_board_to_soft.h api_soft_to_board.h api_tcp.h misc.h datatypes.h
+ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o map_memdisk.o mapping.o routing.o hwdata.o voxmap.o
 BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
 CALIBRATOR_OBJ = ../robotsoft-calibrator/calibrator.o spi.o b2s_prints.o
 CALIBPROC_OBJ = ../robotsoft-calibrator/calibproc.o
@@ -54,7 +55,7 @@ cp:
 	scp ../robotsoft-calibrator/*.c ../robotsoft-calibrator/*.h $(DEVIP):~/robotsoft-calibrator
 
 e:
-	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h api_tcp.h misc.h datatypes.h `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
+	gedit --new-window makefile $(EXTRA_HEADERS) `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(ROBOTSOFT_OBJ)" | sed s/"\.o"/"\.h"/g` &
 
 e_boardmon:
 	gedit --new-window makefile config.h api_board_to_soft.h api_soft_to_board.h misc.h `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.c"/g` `echo "$(BOARDMON_OBJ)" | sed s/"\.o"/"\.h"/g` &

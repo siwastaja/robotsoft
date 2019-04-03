@@ -1,7 +1,7 @@
 /*
 	PULUROBOT RN1-HOST Computer-on-RobotBoard main software
 
-	(c) 2017-2018 Pulu Robotics and other contributors
+	(c) 2017-2019 Pulu Robotics and other contributors
 	Maintainer: Antti Alhonen <antti.alhonen@iki.fi>
 
 	This program is free software; you can redistribute it and/or modify
@@ -75,23 +75,32 @@ Memory footprint is around 15Mbytes for the 25 pages
 
 typedef struct  __attribute__ ((packed))
 {
+	uint32_t magic; // 0xAA1337AA
+	uint32_t file_version; // Currently 0x420
+
+	int32_t xy_step_mm;
+	int32_t z_step_mm;
 
 	/*
 		Voxel map:
-		1 bit per voxel: something's there, or isn't.
+		
+		Each voxel is 2-bit value: another is stored in vox_occu, another in vox_free
 
-		An example:
-		z_step    = 100 mm
-		base_z_mm = -250 mm
-		...
-		b3:  +50 .. +149
-		b2:  -50 ..  +49
-		b1: -150 ..  -51
-		b0: -250 .. -151
+		Occu	Free	Description
+		0	0	Not seen (initial state)
+		0	1	Seen as free space
+		1	0	Seen as occupied space
+		1	1	Uncertain occupance. Exact nature will reveal in the future; the needs are not clear yet.
 
-		With z_step = 100mm, uint64_t ranges 6.4m.
+
 
 	*/
+
+	uint64_t vox_occu[MAP_PAGE_W*MAP_PAGE_W];
+	uint64_t vox_free[MAP_PAGE_W*MAP_PAGE_W];
+
+
+
 
 	int32_t  base_z_mm; // Reference Z level, bit0 spans  [base_z_mm...base_z_mm+z_step[
 	uint32_t voxmap[MAP_PAGE_W*MAP_PAGE_W];
@@ -109,7 +118,8 @@ typedef struct  __attribute__ ((packed))
 } map_page_t;
 
 
-#define MAPIDX(x_,y_) ((y_)*MAP_PAGE_W+(x_))
+// Voxel Coordinate macro: index vox_occu[VC(x,y)] and vox_free[VC(x,y)]
+#define VC(x_,y_) ((y_)*MAP_PAGE_W+(x_))
 
 
 
