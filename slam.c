@@ -333,7 +333,167 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 
 }
 
-void tof_to_voxmap(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int sidx, int32_t ref_x, int32_t ref_y)
+
+typedef struct
+{
+	int32_t src_seq_id; // Sequence ID gives us both pose and sensor idx, for exact source x,y,z for raytracing empty space. 0 is an invalid id
+
+	int32_t cnt;
+	int32_t x;
+	int32_t y;
+	int32_t z;
+} voxfilter_point_t;
+
+// 20MB of memory with these, coverage 4.1x4.1x2.0 m
+// Outside of the filter, all points go through as they are.
+// When robot is fully stationary, max two sensors can see the same spot per full scan.
+// When moving, three sensors can see the same spot per full scan.
+// It's very unlikely that 16 references would run out for 6 full scans.
+
+#define VOXFILTER_N_SCANS 6
+#define MAX_SRC_POSE_REFS 16
+#define VOXFILTER_XS 128
+#define VOXFILTER_YS 128
+#define VOXFILTER_ZS 64
+#define VOXFILTER_STEP 32
+
+// Remember to zero this struct out first.
+typedef struct
+{
+	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS][MAX_SRC_POSE_REFS];
+} voxfilter_t;
+
+typedef struct
+{
+	int32_t src_seq_id; // Sequence ID gives us both pose and sensor idx, for exact source x,y,z for raytracing empty space. 0 is an invalid id
+
+	int32_t x;
+	int32_t y;
+	int32_t z;
+} tmp_cloud_point_t;
+
+/*
+#define MAX_POINTS_PER_INDEX_LIST
+#define INDEX_LIST_XS 160
+#define INDEX_LIST_YS 160
+#define INDEX_LIST_ZS 64
+#define INDEX_LIST_STEP 256
+tmp_cloud_list_indeces[
+*/
+
+#define MAX_POINTS (5000*10*64)
+typedef struct
+{
+	int n_points;
+	tmp_cloud_point_t points[MAX_POINTS];
+} tmp_cloud_t;
+
+static inline void cloud_insert_point(tmp_cloud_t* cloud, int seq_id, int32_t x, int32_t y, int32_t z)
+{
+	if(cloud->n_points >= MAX_POINTS)
+	{
+		printf("WARNING: Ignoring point seq=%d, (%d,%d,%d), cloud full.\n", seq_id, x, y, z);
+		return;
+	}
+	assert(cloud->n_points >= 0);
+
+	cloud->points[cloud->n_points].src_seq_id = seq_id;
+	cloud->points[cloud->n_points].x = x;
+	cloud->points[cloud->n_points].y = y;
+	cloud->points[cloud->n_points].z = z;
+
+	cloud->n_points++;
+}
+
+static void voxfilter_to_cloud(voxfilter_t* voxfilter, tmp_cloud_t* cloud)
+{
+	int insert_cnt = 0;
+	for(int yy=0; yy<VOXFILTER_YS; yy++)
+	{
+		for(int xx=0; xx<VOXFILTER_XS; xx++)
+		{
+			for(int zz=0; zz<VOXFILTER_ZS; zz++)
+			{
+				for(int i=0; i<MAX_SRC_POSE_REFS; i++)
+				{
+					voxfilter_point_t* p = &(voxfilter->points[xx][yy][zz][i]);
+					if(p->src_seq_id == 0)
+					{
+						break;
+					}
+
+					assert(p->cnt > 0); // if seq_id is valid, there must be at least one point.
+
+					int32_t x = p->x / p->cnt;
+					int32_t y = p->y / p->cnt;
+					int32_t z = p->z / p->cnt;
+
+					cloud_insert_point(cloud, p->src_seq_id, x, y, z);
+					insert_cnt++;
+				}
+			}
+		}
+	}
+
+	printf("INFO: voxfilter_to_cloud inserted %d points\n", insert_cnt);
+}
+
+static inline void voxfilter_insert_point(tmp_cloud_t* cloud, voxfilter_t* voxfilter, int seq_id, int32_t x, int32_t y, int32_t z)
+{
+	int vox_x = x/VOXFILTER_STEP + VOXFILTER_XS/2;
+	int vox_y = y/VOXFILTER_STEP + VOXFILTER_YS/2;
+	int vox_z = z/VOXFILTER_STEP + VOXFILTER_ZS/2;
+
+	if(vox_x < 0 || vox_x > VOXFILTER_XS-1 || vox_y < 0 || vox_y > VOXFILTER_YS-1 || vox_z < 0 || vox_z > VOXFILTER_ZS-1)
+	{
+//		printf("INFO: voxfilter: skipping OOR point %d, %d, %d\n", vox_x, vox_y, vox_z);
+		cloud_insert_point(cloud, seq_id, x, y, z);
+		return;
+	}
+
+	
+	int found = 0;
+	for(int i=0; i < MAX_SRC_POSE_REFS; i++)
+	{
+		if(voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id == seq_id)
+		{
+			// Existing point with the same seq_id - average on the top of this.
+			voxfilter->points[vox_x][vox_y][vox_z][i].cnt++;
+			voxfilter->points[vox_x][vox_y][vox_z][i].x += x;
+			voxfilter->points[vox_x][vox_y][vox_z][i].y += y;
+			voxfilter->points[vox_x][vox_y][vox_z][i].z += z;
+			found = 1;
+			break;
+		}
+	}
+
+	if(!found)
+	{
+		int empty_spot_found = 0;
+		for(int i=0; i < MAX_SRC_POSE_REFS; i++)
+		{
+			if(voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id == 0)
+			{
+				// Take this new, empty spot
+				voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id = seq_id;
+				voxfilter->points[vox_x][vox_y][vox_z][i].cnt = 1;
+				voxfilter->points[vox_x][vox_y][vox_z][i].x = x;
+				voxfilter->points[vox_x][vox_y][vox_z][i].y = y;
+				voxfilter->points[vox_x][vox_y][vox_z][i].z = z;
+				empty_spot_found = 1;
+				break;
+			}
+		}
+
+		if(!empty_spot_found)
+		{
+			printf("INFO: voxfilter_insert_point had to ignore a point due to reference indeces running out.\n");
+		}
+	}
+	
+}
+
+void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int seq_id, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z, voxfilter_t* voxfilter, tmp_cloud_t* cloud, int voxfilter_threshold)
 {
 	if(sidx < 0 || sidx >= N_SENSORS)
 	{
@@ -343,38 +503,9 @@ void tof_to_voxmap(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int sidx,
 
 	int32_t robot_x = pose->x;
 	int32_t robot_y = pose->y;
+	int32_t robot_z = pose->z;
 
 	uint16_t robot_ang = pose->ang>>16;
-
-	static int32_t prev_x, prev_y;
-	static uint16_t prev_ang;
-	static int ignore = 0;
-
-	if(sidx == 1)
-	{
-		int dx = robot_x - prev_x;
-		int dy = robot_y - prev_y;
-		int da = (int16_t)((uint16_t)robot_ang - (uint16_t)prev_ang);
-
-
-		if(abso(dx) < 40 && abso(dy) < 40 && abso(da) < 700)
-		{
-			printf("Not much movement, ignoring until next sidx=1\n");
-			ignore = 1;
-		}
-		else
-		{
-			ignore = 0;
-
-			prev_x = robot_x;
-			prev_y = robot_y;
-			prev_ang = robot_ang;
-		}
-
-	}
-
-	if(ignore)
-		return;
 
 	// Rotation: xr = x*cos(a) + y*sin(a)
 	//           yr = -x*sin(a) + y*cos(a)
@@ -405,7 +536,8 @@ void tof_to_voxmap(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int sidx,
 	int32_t  global_sensor_y = robot_y - ref_y + 
 			((lut_sin_from_u16(robot_ang)*sensor_mounts[sidx].x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
 			((lut_cos_from_u16(robot_ang)*sensor_mounts[sidx].y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
-	int32_t  global_sensor_z = sensor_mounts[sidx].z_rel_ground;
+
+	int32_t  global_sensor_z = robot_z - ref_z + sensor_mounts[sidx].z_rel_ground;
 
 
 	int32_t  local_sensor_x = sensor_mounts[sidx].x_rel_robot;
@@ -413,7 +545,6 @@ void tof_to_voxmap(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int sidx,
 	int32_t  local_sensor_z = sensor_mounts[sidx].z_rel_ground;
 
 
-	int insertion_cnt = 0;
 	for(int py=1; py<TOF_YS-1; py++)
 //	for(int py=29; py<32; py++)
 	{
@@ -431,8 +562,23 @@ void tof_to_voxmap(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int sidx,
 				if(npx < 1 || npy < 1 || npx >= TOF_XS_NARROW-1 || npx >= TOF_YS_NARROW-1)
 					continue;
 
-//						int32_t dist = (ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK)<<DIST_SHIFT;
-				return; // todo: implement
+				int32_t refdist = ampldist[(npy+0)*TOF_XS_NARROW+(npx+0)]&DIST_MASK;
+				if(refdist == DIST_UNDEREXP)
+					continue;
+
+				for(int iy=-1; iy<=1; iy++)
+				{
+					for(int ix=-1; ix<=1; ix++)
+					{
+						int32_t dist = ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK;
+						if(dist != DIST_UNDEREXP && dist > refdist-100 && dist < refdist+100)
+						{
+							avg+=dist;
+							n_conform++;
+						}
+					
+					}
+				}
 
 			}
 			else
@@ -518,29 +664,10 @@ void tof_to_voxmap(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int sidx,
 					continue;
 
 
-				int z_coord = ((z-BASE_Z)/Z_STEP);
-				
-				x /= XY_STEP;
-				y /= XY_STEP;
-
-				x += XS/2;
-				y += YS/2;
-
-				if(x < 0 || x >= XS || y < 0 || y >= YS || z_coord < 0 || z_coord > 63)
-				{
-				//	printf("Ignore OOR point x=%d, y=%d, z=%d\n", x, y, z_coord);
-					continue;
-
-				}
-/*
-				int oldval = voxmap[y*XS+x][z_coord];
-				int increment = d/1000;
-				if(increment < 1) increment = 1;
-				else if(increment > 10) increment = 10;
-				int newval = oldval + increment;
-				if(newval > 255)
-					newval = 255;
-				voxmap[y*XS+x][z_coord] = newval;*/
+				if(voxfilter && d < voxfilter_threshold)
+					voxfilter_insert_point(cloud, voxfilter, seq_id, x, y, z);
+				else
+					cloud_insert_point(cloud, seq_id, x, y, z);
 
 			}
 		}
@@ -548,10 +675,8 @@ void tof_to_voxmap(int is_narrow, uint16_t* ampldist, hw_pose_t* pose, int sidx,
 
 }
 
-static uint8_t buf[B2S_MAX_LEN];
-
-
 // Not thread safe, supplies pointer to internal static buf
+static uint8_t buf[B2S_MAX_LEN];
 int process_file(char* fname, tof_slam_set_t** tss)
 {
 	*tss = NULL;
@@ -634,7 +759,7 @@ int process_file(char* fname, tof_slam_set_t** tss)
 
 int main()
 {
-	printf("Kak?\n");
+	printf("Super Slammings 2.0 2000\n");
 	static firstsidx_pose_t firstsidx_poses[MAX_FIRSTSIDX_POSES];
 	static submap_meta_t submap_metas[MAX_SUBMAPS];
 
@@ -660,6 +785,35 @@ int main()
 			submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 	}	
 
+	for(int sm=0; sm<1; sm++)
+	{
+		printf("Optimizing pointcloud for submap %d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+		printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
+			submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+		static tmp_cloud_t tmp_cloud;
+		tmp_cloud.n_points = 0;
+
+		for(int idx=submap_metas[sm].start_idx; idx<submap_metas[sm].end_idx; idx++)
+		{
+			char fname[1024];
+			sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", idx);
+			tof_slam_set_t* tss;
+			if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
+			{
+				tof_to_voxfilter_and_cloud(0, 
+					tss->sets[0].ampldist, &tss->sets[0].pose,
+					idx, tss->sidx, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, NULL, &tmp_cloud, 1500);
+			}
+			else
+			{
+				printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
+			}
+		}
+
+		printf("---> n_points = %d\n", tmp_cloud.n_points);
+
+	}
 
 	return 0;
 } 

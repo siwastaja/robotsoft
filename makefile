@@ -13,7 +13,7 @@ CC = gcc
 LD = gcc
 
 EXTRA_HEADERS = config.h api_board_to_soft.h api_soft_to_board.h api_tcp.h misc.h datatypes.h
-ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o map_memdisk.o mapping.o routing.o hwdata.o voxmap.o
+ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o mapping.o routing.o hwdata.o voxmap.o voxmap_memdisk.o
 BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
 CALIBRATOR_OBJ = ../robotsoft-calibrator/calibrator.o spi.o b2s_prints.o
 CALIBPROC_OBJ = ../robotsoft-calibrator/calibproc.o

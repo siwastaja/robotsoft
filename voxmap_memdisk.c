@@ -47,7 +47,11 @@ static int find_free_slot()
 {
 	for(int i = 0; i < MAX_LOADED_PAGES; i++)
 	{
-		if(!page_pointers[i].loaded)
+		int px_idx = page_pointers[i].px_idx;
+		int py_idx = page_pointers[i].py_idx;
+		int pz_idx = page_pointers[i].pz_idx;
+
+		if(!page_pointers[i]->loaded)
 			return i;
 	}
 	return -1;
@@ -65,7 +69,7 @@ static void store_page(int idx)
 
 	for(int rl=0; rl < MAX_RESOLEVELS; rl++)
 	{
-		if(page_metas[px_idx][py_idx][pz_idx].loaded & (1<<rl))
+		if(page_metas[px_idx][py_idx][pz_idx]->loaded & (1<<rl))
 		{
 			printf("INFO: Storing page (%d,%d,%d,rl%d)\n", PX(px_idx), PY(py_idx), PZ(pz_idx), rl);
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);

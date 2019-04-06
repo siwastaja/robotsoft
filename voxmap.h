@@ -22,7 +22,7 @@
 	The byte stream, or file generated contains:
 
 		voxmap_header_t
-		variable-length voxmap data (xs*ys*zs bytes)
+		variable-length voxel data (xs*ys*zs bytes)
 
 
 	The API functions handle the file access, compression/decompression, etc.
@@ -110,7 +110,7 @@ typedef struct  __attribute__ ((packed))
 typedef struct  __attribute__ ((packed))
 {
 	voxmap_header_t header;
-	uint8_t* voxmap;
+	uint8_t* voxels;
 } voxmap_t;
 
 /*
@@ -128,10 +128,10 @@ typedef struct  __attribute__ ((packed))
 	VOXEL(*voxmap_in, ...)
 	
 */
-#define VOXEL(vm_, x_, y_, z_) ((vm_).voxmap[((y_)*((vm_).voxmap[(vm_).header.xs)*((vm_).voxmap[(vm_).header.zs) + (x_)*((vm_).voxmap[(vm_).header.zs)  + (z_))])
+#define VOXEL(vm_, x_, y_, z_) ((vm_).voxels[((y_)*((vm_).voxels[(vm_).header.xs)*((vm_).voxels[(vm_).header.zs) + (x_)*((vm_).voxels[(vm_).header.zs)  + (z_))])
 
 
 
 
 
-
+#define ERR_MAPFILE_NOT_FOUND (-10)
