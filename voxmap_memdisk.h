@@ -83,10 +83,39 @@
 #endif
 
 static const int VOX_UNITS[MAX_RESOLEVELS] =
-{MIN_UNIT, MIN_UNIT*2, MIN_UNIT*4, MIN_UNIT*8, MIN_UNIT*16, MIN_UNIT*32};
+{MIN_UNIT, 
+ MIN_UNIT*2, 
+ MIN_UNIT*4, 
+ MIN_UNIT*8, 
+ MIN_UNIT*16, 
+ MIN_UNIT*32};
 
 static const int VOX_XS[MAX_RESOLEVELS] =
-{MIN_UNIT, MIN_UNIT*2, MIN_UNIT*4, MIN_UNIT*8, MIN_UNIT*16, MIN_UNIT*32};
+{MAP_PAGE_XY_W_MM/MIN_UNIT,
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*2),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*4),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*8),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*16),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*32),
+};
+
+static const int VOX_YS[MAX_RESOLEVELS] =
+{MAP_PAGE_XY_W_MM/MIN_UNIT,
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*2),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*4),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*8),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*16),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*32),
+};
+
+static const int VOX_ZS[MAX_RESOLEVELS] =
+{MAP_PAGE_Z_H_MM/MIN_UNIT,
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*2),
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*4),
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*8),
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*16),
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*32),
+};
 
 
 #define PAGE_META_FLAG_CHANGED (1<<12)
@@ -117,6 +146,17 @@ typedef struct __attribute__ ((packed))
 
 #define MAX_LOADED_PAGES (7*7*5+20)
 
+// Valid ranges of page indeces, inclusive
+#define PX_MIN (PX(0))
+#define PY_MIN (PY(0))
+#define PZ_MIN (PZ(0))
+
+#define PX_MAX (PX(MAX_PAGES_X-1))
+#define PY_MAX (PY(MAX_PAGES_Y-1))
+#define PZ_MAX (PZ(MAX_PAGES_Z-1))
+
+
+
 #if (MAX_LOADED_PAGES>4096)
 #error MAX_LOADED_PAGES too big, mem_idx wont fit into 12 bits
 #endif
@@ -138,7 +178,36 @@ typedef struct __attribute__ ((packed))
 
 } page_pointer_t;
 
+extern page_pointer_t page_pointers[MAX_LOADED_PAGES];
 
-extern page_pointer_t* page_pointers[MAX_LOADED_PAGES];
+typedef struct 
+{
+	int px;
+	int ox;
+	int py;
+	int oy;
+	int pz;
+	int oz;
+} po_coords_t;
 
+static inline po_coords_t po_idx_coords(int x, int y, int z, int rl)
+{
+	x /= VOX_UNITS[rl];
+	y /= VOX_UNITS[rl];
+	z /= VOX_UNITS[rl];
+
+	po_coords_t ret;
+	ret.px = PIDX(x/VOX_XS[rl]);
+	ret.py = PIDY(y/VOX_YS[rl]);
+	ret.pz = PIDZ(z/VOX_ZS[rl]);
+	ret.ox = x%VOX_XS[rl];
+	ret.oz = y%VOX_YS[rl];
+	ret.oy = z%VOX_ZS[rl];
+	return ret;
+}
+
+
+void mark_page_accessed(int px, int py, int pz);
+void mem_manage_pages(int time_threshold);
+void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_end, int py_start, int py_end, int pz_start, int pz_end);
 

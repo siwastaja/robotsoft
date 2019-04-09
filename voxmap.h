@@ -131,7 +131,11 @@ typedef struct  __attribute__ ((packed))
 #define VOXEL(vm_, x_, y_, z_) ((vm_).voxels[((y_)*((vm_).voxels[(vm_).header.xs)*((vm_).voxels[(vm_).header.zs) + (x_)*((vm_).voxels[(vm_).header.zs)  + (z_))])
 
 
-
-
-
 #define ERR_MAPFILE_NOT_FOUND (-10)
+
+
+int init_empty_voxmap(voxmap_t* vm, int ref_x, int ref_y, int ref_z, int xs, int ys, int zs, int xy_step, int z_step);
+void deinit_voxmap(voxmap_t* vm);
+int write_uncompressed_voxmap(voxmap_t* vm, char* fname);
+int read_uncompressed_voxmap(voxmap_t* vm, char* fname);
+
