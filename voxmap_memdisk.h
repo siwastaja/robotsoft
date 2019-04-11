@@ -82,6 +82,15 @@
 #error Invalid MAX_RESOLEVELS
 #endif
 
+static const int VOX_RELATIONS[MAX_RESOLEVELS] =
+{1, 
+ 2, 
+ 4, 
+ 8, 
+ 16, 
+ 32};
+
+
 static const int VOX_UNITS[MAX_RESOLEVELS] =
 {MIN_UNIT, 
  MIN_UNIT*2, 
@@ -133,27 +142,18 @@ typedef struct __attribute__ ((packed))
 
 #define MAX_PAGES_X 512
 #define MAX_PAGES_Y 512
-#define MAX_PAGES_Z 8
-
-// Macros to get between the 0-referenced page indeces and always-positive array indeces:
-#define PIDX(x_) ((x_)+MAX_PAGES_X/2)
-#define PIDY(y_) ((y_)+MAX_PAGES_Y/2)
-#define PIDZ(z_) ((z_)+MAX_PAGES_Z/2)
-
-#define PX(x_) ((x_)-MAX_PAGES_X/2)
-#define PY(y_) ((y_)-MAX_PAGES_Y/2)
-#define PZ(z_) ((z_)-MAX_PAGES_Z/2)
+#define MAX_PAGES_Z 32
 
 #define MAX_LOADED_PAGES (7*7*5+20)
 
 // Valid ranges of page indeces, inclusive
-#define PX_MIN (PX(0))
-#define PY_MIN (PY(0))
-#define PZ_MIN (PZ(0))
+#define PX_MIN (0)
+#define PY_MIN (0)
+#define PZ_MIN (0)
 
-#define PX_MAX (PX(MAX_PAGES_X-1))
-#define PY_MAX (PY(MAX_PAGES_Y-1))
-#define PZ_MAX (PZ(MAX_PAGES_Z-1))
+#define PX_MAX (MAX_PAGES_X-1)
+#define PY_MAX (MAX_PAGES_Y-1)
+#define PZ_MAX (MAX_PAGES_Z-1)
 
 
 
@@ -172,13 +172,23 @@ typedef struct __attribute__ ((packed))
 	voxmap_t* p_voxmap[8]; // [0] = highest resolevel
 
 	// reference back to the meta
-	uint16_t px_idx;
-	uint16_t py_idx;
-	uint16_t pz_idx;
+	uint16_t px;
+	uint16_t py;
+	uint16_t pz;
 
 } page_pointer_t;
 
+
 extern page_pointer_t page_pointers[MAX_LOADED_PAGES];
+
+#include <assert.h>
+
+static inline voxmap_t* get_p_voxmap(int px, int py, int pz, int rl)
+{
+	assert(px >= PX_MIN && px <= PX_MAX && py >= PY_MIN && py <= PY_MAX && pz >= PZ_MIN && pz <= PZ_MAX);
+	assert(page_metas[px][py][pz].loaded & (1<<rl));
+	return page_pointers[(page_metas[px][py][pz].flags_mem_idx&PAGE_META_MEM_IDX_MASK)].p_voxmap[rl];
+}
 
 typedef struct 
 {
@@ -190,24 +200,54 @@ typedef struct
 	int oz;
 } po_coords_t;
 
-static inline po_coords_t po_idx_coords(int x, int y, int z, int rl)
+static inline po_coords_t po_coords(int x, int y, int z, int rl)
 {
+	x += VOX_UNITS[rl]*VOX_XS[rl]*(MAX_PAGES_X/2);
+	y += VOX_UNITS[rl]*VOX_YS[rl]*(MAX_PAGES_Y/2);
+	z += VOX_UNITS[rl]*VOX_ZS[rl]*(MAX_PAGES_Z/2);
+
 	x /= VOX_UNITS[rl];
 	y /= VOX_UNITS[rl];
 	z /= VOX_UNITS[rl];
 
 	po_coords_t ret;
-	ret.px = PIDX(x/VOX_XS[rl]);
-	ret.py = PIDY(y/VOX_YS[rl]);
-	ret.pz = PIDZ(z/VOX_ZS[rl]);
+	ret.px = x/VOX_XS[rl];
+	ret.py = y/VOX_YS[rl];
+	ret.pz = z/VOX_ZS[rl];
 	ret.ox = x%VOX_XS[rl];
-	ret.oz = y%VOX_YS[rl];
-	ret.oy = z%VOX_ZS[rl];
+	ret.oy = y%VOX_YS[rl];
+	ret.oz = z%VOX_ZS[rl];
 	return ret;
 }
 
+static inline uint8_t* get_p_voxel(po_coords_t c, int rl)
+{
+	if(!(c.px >= PX_MIN && c.px <= PX_MAX && c.py >= PY_MIN && c.py <= PY_MAX && c.pz >= PZ_MIN && c.pz <= PZ_MAX) ||
+	   !(c.ox >= 0 && c.oy <= VOX_XS[rl]-1 &&  c.oy >= 0 && c.oy <= VOX_YS[rl]-1 && c.oz >= 0 && c.oz <= VOX_ZS[rl]-1))
+	{
+		printf("OOR coords, page (%d,%d,%d) offs (%d,%d,%d), rl%d\n", c.px, c.py, c.pz, c.ox, c.oy, c.oz, rl);
+		abort();
+	}
+	if(!(page_metas[c.px][c.py][c.pz].loaded & (1<<rl)))
+	{
+		printf("Page (%d,%d,%d,rl%d) not loaded\n", c.px, c.py, c.pz, rl);
+		abort();
+	}
+
+	return &page_pointers[(page_metas[c.px][c.py][c.pz].flags_mem_idx&PAGE_META_MEM_IDX_MASK)].p_voxmap[rl]->
+		voxels[c.oy*VOX_XS[rl]*VOX_ZS[rl] + c.ox*VOX_ZS[rl] + c.oz];
+}
+
+static inline void mark_page_changed(int px, int py, int pz)
+{
+	assert(px >= PX_MIN && px <= PX_MAX && py >= PY_MIN && py <= PY_MAX && pz >= PZ_MIN && pz <= PZ_MAX);
+
+	page_metas[px][py][pz].flags_mem_idx |= PAGE_META_FLAG_CHANGED;
+}
 
 void mark_page_accessed(int px, int py, int pz);
 void mem_manage_pages(int time_threshold);
 void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_end, int py_start, int py_end, int pz_start, int pz_end);
+void free_all_pages();
+char* gen_fname(char* dir, int px, int py, int pz, int resolevel);
 

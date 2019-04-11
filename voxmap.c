@@ -66,6 +66,7 @@ void deinit_voxmap(voxmap_t* vm)
 	assert(vm);
 	assert(vm->header.magic == 0xaa13);
 
+//	printf("deinit_voxmap: freeing %lx\n", (uint64_t)vm->voxels);
 	free(vm->voxels);
 }
 
@@ -121,8 +122,13 @@ int read_uncompressed_voxmap(voxmap_t* vm, char* fname)
 	FILE* f = fopen(fname, "rb");
 	if(!f)
 	{
-		printf("Error opening %s for read: %s\n", fname, strerror(errno));
-		return ERR_MAPFILE_NOT_FOUND;
+		if(errno == ENOENT)
+			return ERR_MAPFILE_NOT_FOUND;
+		else
+		{		
+			printf("ERROR: Error opening %s for read: %s\n", fname, strerror(errno));
+			return -2;
+		}
 	}
 
 	if(fread(&vm->header, 4, 1, f) != 1)

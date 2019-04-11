@@ -5,10 +5,13 @@
 #include <stdlib.h>
 #include <assert.h>
 
-
 #define DEFINE_API_VARIABLES
 #include "api_board_to_soft.h"
 #undef DEFINE_API_VARIABLES
+
+#include "voxmap.h"
+#include "voxmap_memdisk.h"
+
 
 #include "sin_lut.c"
 #include "geotables.h"
@@ -381,12 +384,31 @@ typedef struct
 tmp_cloud_list_indeces[
 */
 
-#define MAX_POINTS (5000*10*64)
+#define MAX_POINTS (8000*10*64)
 typedef struct
 {
 	int n_points;
 	tmp_cloud_point_t points[MAX_POINTS];
 } tmp_cloud_t;
+
+#define RESOLEVELS 0b1111
+
+static void cloud_to_voxmap(tmp_cloud_t* cloud)
+{
+	for(int rl=0; rl<8; rl++)
+	{
+		if(!(RESOLEVELS & (1<<rl)))
+			continue;
+
+		for(int i=0; i<cloud->n_points; i++)
+		{
+			po_coords_t po = po_coords(cloud->points[i].x, cloud->points[i].y, cloud->points[i].z, rl);
+			uint8_t* p_vox = get_p_voxel(po, rl);
+			*p_vox = 0x0f;
+			mark_page_changed(po.px, po.py, po.pz);
+		}
+	}
+}
 
 static inline void cloud_insert_point(tmp_cloud_t* cloud, int seq_id, int32_t x, int32_t y, int32_t z)
 {
@@ -756,7 +778,6 @@ int process_file(char* fname, tof_slam_set_t** tss)
 }
 
 
-
 int main()
 {
 	printf("Super Slammings 2.0 2000\n");
@@ -785,7 +806,7 @@ int main()
 			submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 	}	
 
-	for(int sm=0; sm<1; sm++)
+	for(int sm=0; sm<n_submaps; sm+=1)
 	{
 		printf("Optimizing pointcloud for submap %d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
 		printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
@@ -803,7 +824,7 @@ int main()
 			{
 				tof_to_voxfilter_and_cloud(0, 
 					tss->sets[0].ampldist, &tss->sets[0].pose,
-					idx, tss->sidx, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, NULL, &tmp_cloud, 1500);
+					idx, tss->sidx, 0, 0, 0, NULL, &tmp_cloud, 1500);
 			}
 			else
 			{
@@ -813,7 +834,29 @@ int main()
 
 		printf("---> n_points = %d\n", tmp_cloud.n_points);
 
+		po_coords_t po;
+		po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
+		load_pages(RESOLEVELS, RESOLEVELS, po.px-2, po.px+2, po.py-2, po.py+2, po.pz-2, po.pz+2);
+
+		cloud_to_voxmap(&tmp_cloud);
+
+
 	}
+
+
+	for(int rl = 0; rl < 4; rl++)
+	{
+		po_coords_t po = po_coords(0, 0, 10000, rl);
+		load_pages(RESOLEVELS, RESOLEVELS, po.px, po.px, po.py, po.py, po.pz, po.pz);
+		uint8_t* p_vox = get_p_voxel(po, rl);
+		*p_vox = 0x0f;
+		mark_page_changed(po.px, po.py, po.pz);
+	}
+
+
+
+
+	free_all_pages();
 
 	return 0;
 } 

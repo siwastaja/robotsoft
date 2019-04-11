@@ -36,10 +36,10 @@ page_meta_t page_metas[MAX_PAGES_X][MAX_PAGES_Y][MAX_PAGES_Z];
 
 page_pointer_t page_pointers[MAX_LOADED_PAGES];
 
-static char* gen_fname(int px, int py, int pz, int resolevel)
+char* gen_fname(char* dir, int px, int py, int pz, int resolevel)
 {
 	static char fname[2048];
-	int snprintf_ret = snprintf(fname, 2048, "voxmap_x%d_y%d_z%d_r%d.pluuvox", px, py, pz, resolevel);
+	int snprintf_ret = snprintf(fname, 2048, "%s/voxmap_x%d_y%d_z%d_r%d.pluuvox", dir, px, py, pz, resolevel);
 	assert(snprintf_ret < 2048);
 	return fname;
 }
@@ -49,33 +49,37 @@ static int find_free_slot()
 {
 	for(int i = 0; i < MAX_LOADED_PAGES; i++)
 	{
-		int px_idx = page_pointers[i].px_idx;
-		int py_idx = page_pointers[i].py_idx;
-		int pz_idx = page_pointers[i].pz_idx;
+		int px = page_pointers[i].px;
+		int py = page_pointers[i].py;
+		int pz = page_pointers[i].pz;
 
-		if(!(page_metas[px_idx][py_idx][pz_idx].loaded)) // All resolevels must be free
+		if(!(page_metas[px][py][pz].loaded)) // All resolevels must be free
 			return i;
 	}
 	return -1;
 }
 
-// Naming convention: px, py, pz run in the user-exposed range (both sides around 0). px_idx, py_idx, pz_idx run from 0 to MAX_PAGES_*-1
-
 static void store_page(int idx)
 {
 	assert(idx >= 0 && idx < MAX_LOADED_PAGES);
 
-	int px_idx = page_pointers[idx].px_idx;
-	int py_idx = page_pointers[idx].py_idx;
-	int pz_idx = page_pointers[idx].pz_idx;
+	int px = page_pointers[idx].px;
+	int py = page_pointers[idx].py;
+	int pz = page_pointers[idx].pz;
+
+	if(!(page_metas[px][py][pz].flags_mem_idx & PAGE_META_FLAG_CHANGED))
+	{
+		//printf("INFO: page (%d,%d,%d) unchanged, not storing.\n", px, py, pz);
+		return;
+	}
 
 	for(int rl=0; rl < MAX_RESOLEVELS; rl++)
 	{
-		if(page_metas[px_idx][py_idx][pz_idx].loaded & (1<<rl))
+		if(page_metas[px][py][pz].loaded & (1<<rl))
 		{
-			printf("INFO: Storing page (%d,%d,%d,rl%d)\n", PX(px_idx), PY(py_idx), PZ(pz_idx), rl);
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);
-			write_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname(PX(px_idx), PY(py_idx), PZ(pz_idx), rl));
+			//printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
+			write_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl));			
 		}
 	}
 }
@@ -85,13 +89,13 @@ static int alloc_read_page_single_rl(int idx, int rl)
 	assert(idx >= 0 && idx < MAX_LOADED_PAGES);
 	assert(rl >= 0 && rl < MAX_RESOLEVELS);
 
-	int px_idx = page_pointers[idx].px_idx;
-	int py_idx = page_pointers[idx].py_idx;
-	int pz_idx = page_pointers[idx].pz_idx;
+	int px = page_pointers[idx].px;
+	int py = page_pointers[idx].py;
+	int pz = page_pointers[idx].pz;
 
-	assert(px_idx >= 0 && px_idx < MAX_PAGES_X && py_idx >= 0 && py_idx < MAX_PAGES_X && pz_idx >= 0 && pz_idx < MAX_PAGES_X);
+	assert(px >= 0 && px < MAX_PAGES_X && py >= 0 && py < MAX_PAGES_X && pz >= 0 && pz < MAX_PAGES_X);
 
-	assert(!(page_metas[px_idx][py_idx][pz_idx].loaded & (1<<rl)));
+	assert(!(page_metas[px][py][pz].loaded & (1<<rl)));
 
 	page_pointers[idx].p_voxmap[rl] = malloc(sizeof(voxmap_t));
 
@@ -101,11 +105,12 @@ static int alloc_read_page_single_rl(int idx, int rl)
 		abort();
 	}
 
-	int ret = read_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname(PX(px_idx), PY(py_idx), PZ(pz_idx), rl));
+	int ret = read_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl));
 
 	if(ret >= 0)
 	{
-		page_metas[px_idx][py_idx][pz_idx].loaded |= 1<<rl;
+//		printf("INFO: Succesfully loaded file from the disk (%d,%d,%d,rl%d), memslot %d\n", px, py, pz, rl, idx);
+		page_metas[px][py][pz].loaded |= 1<<rl;
 		page_pointers[idx].access_timestamp = cur_timestamp;
 	}
 
@@ -119,16 +124,18 @@ static void free_page(int idx)
 
 	for(int rl=0; rl < MAX_RESOLEVELS; rl++)
 	{
-		if(page_metas[page_pointers[idx].px_idx][page_pointers[idx].py_idx][page_pointers[idx].pz_idx].loaded & (1<<rl))
+		//printf("rl = %d\n", rl);
+		if(page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz].loaded & (1<<rl))
 		{
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);
+			//printf("page_pointers[idx].p_voxmap[rl] = %lx\n", (uint64_t)page_pointers[idx].p_voxmap[rl]);
 			deinit_voxmap(page_pointers[idx].p_voxmap[rl]);
 			free(page_pointers[idx].p_voxmap[rl]);
 			page_pointers[idx].p_voxmap[rl] = NULL;
 		}
 	}
 
-	page_metas[page_pointers[idx].px_idx][page_pointers[idx].py_idx][page_pointers[idx].pz_idx].loaded = 0;
+	page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz].loaded = 0;
 
 }
 
@@ -142,7 +149,7 @@ static int create_memslot_for_page()
 	{
 		uint64_t smallest_stamp = UINT64_MAX;
 		int oldest_i = 0;
-		for(int i = 0; i < MAX_LOADED_PAGES; i += 8)
+		for(int i = 0; i < MAX_LOADED_PAGES; i++)
 		{
 			if(page_pointers[i].access_timestamp < smallest_stamp)
 			{
@@ -151,12 +158,14 @@ static int create_memslot_for_page()
 			}
 		}
 
-		printf("INFO: Kicking out oldest page idx=%d (%d,%d,%d), timestamp %" PRIu64 "\n", oldest_i,
-			PX(page_pointers[oldest_i].px_idx), PY(page_pointers[oldest_i].py_idx), PZ(page_pointers[oldest_i].pz_idx),
-			smallest_stamp);
+		//printf("INFO: Kicking out oldest page idx=%d (%d,%d,%d), timestamp %" PRIu64 "\n", oldest_i,
+		//	page_pointers[oldest_i].px, page_pointers[oldest_i].py, page_pointers[oldest_i].pz,
+		//	smallest_stamp);
 
 		store_page(oldest_i);
 		free_page(oldest_i);
+
+		idx = oldest_i;
 	}
 
 	return idx;
@@ -164,8 +173,8 @@ static int create_memslot_for_page()
 
 static int find_memslot_for_page(int px, int py, int pz)
 {
-	if(page_metas[PIDX(px)][PIDY(py)][PIDZ(pz)].loaded) // If any resolevel is loaded, this is the page...
-		return page_metas[PIDX(px)][PIDY(py)][PIDZ(pz)].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
+	if(page_metas[px][py][pz].loaded) // If any resolevel is loaded, this is the page...
+		return page_metas[px][py][pz].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
 	else
 		return -1;
 }
@@ -174,17 +183,13 @@ static int alloc_empty_page_single_rl(int idx, int rl)
 {
 	assert(rl >= 0 && rl < MAX_RESOLEVELS);
 
-	int px_idx = page_pointers[idx].px_idx;
-	int py_idx = page_pointers[idx].py_idx;
-	int pz_idx = page_pointers[idx].pz_idx;
+	int px = page_pointers[idx].px;
+	int py = page_pointers[idx].py;
+	int pz = page_pointers[idx].pz;
 
-	int px = PX(px_idx);
-	int py = PY(py_idx);
-	int pz = PZ(pz_idx);
+	assert(!(page_metas[px][py][pz].loaded&(1<<rl)));
 
-	assert(!(page_metas[px_idx][py_idx][pz_idx].loaded&(1<<rl)));
-
-	assert(px_idx >= 0 && px_idx < MAX_PAGES_X && py_idx >= 0 && py_idx < MAX_PAGES_X && pz_idx >= 0 && pz_idx < MAX_PAGES_X);
+	assert(px >= 0 && px < MAX_PAGES_X && py >= 0 && py < MAX_PAGES_X && pz >= 0 && pz < MAX_PAGES_X);
 
 	page_pointers[idx].p_voxmap[rl] = malloc(sizeof(voxmap_t));
 	int ret = init_empty_voxmap(page_pointers[idx].p_voxmap[rl],
@@ -193,7 +198,7 @@ static int alloc_empty_page_single_rl(int idx, int rl)
 	assert(ret >= 0);
 
 	page_pointers[idx].access_timestamp = cur_timestamp;
-	page_metas[px_idx][py_idx][pz_idx].loaded |= 1<<rl;
+	page_metas[px][py][pz].loaded |= 1<<rl;
 
 	return 0;
 }
@@ -243,11 +248,16 @@ void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_
 	int n_y = py_end - py_start + 1;
 	int n_z = pz_end - pz_start + 1;
 
-	printf("n_x=%d, n_y=%d, n_z=%d\n", n_x, n_y, n_z);
-
+	// We use an assumption that all pages to be loaded at once will fit.
+	// Worst case, we kick out everything earlier, but we assume we don't kick
+	// the pages we are currently loading, during the loading.
 	assert(n_x*n_y*n_z < MAX_LOADED_PAGES);
 
-	printf("Allocation round:\n");
+	cur_timestamp++;
+
+	//printf("load_pages: n_x=%d, n_y=%d, n_z=%d, n_total = %d, cur_timestamp = %"PRIu64"\n", n_x, n_y, n_z, n_x*n_y*n_z, cur_timestamp);
+
+	//printf("Allocation round:\n");
 	for(int xx=px_start; xx<=px_end; xx++)
 	{
 		for(int yy=py_start; yy<=py_end; yy++)
@@ -259,27 +269,29 @@ void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_
 					if(!(open_files & (1<<rl)) && !(create_emptys & (1<<rl)))
 						continue; // Don't want to do anything on this rl
 
-					printf("xx=%d, yy=%d, zz=%d, rl=%d\n", xx, yy, zz, rl);
+					//printf("xx=%d, yy=%d, zz=%d, rl=%d\n", xx, yy, zz, rl);
 
-					if(page_metas[PIDX(xx)][PIDY(yy)][PIDZ(zz)].loaded & (1<<rl))
+					if(page_metas[xx][yy][zz].loaded & (1<<rl))
 					{
-						printf("INFO: load_pages(): page (%d,%d,%d,rl%d) already loaded\n", xx, yy, zz, rl);
+						//printf("INFO: load_pages(): page (%d,%d,%d,rl%d) already loaded\n", xx, yy, zz, rl);
+						// Need to update the timestamp: otherwise this page we need could be kicked out.
+						page_pointers[page_metas[xx][yy][zz].flags_mem_idx&PAGE_META_MEM_IDX_MASK].access_timestamp = cur_timestamp;
 						continue;
 					}
 
 					int idx = find_memslot_for_page(xx, yy, zz);
 					if(idx < 0)
 						idx = create_memslot_for_page();
-					page_pointers[idx].px_idx = PIDX(xx);
-					page_pointers[idx].py_idx = PIDY(yy);
-					page_pointers[idx].pz_idx = PIDZ(zz);
+					page_pointers[idx].px = xx;
+					page_pointers[idx].py = yy;
+					page_pointers[idx].pz = zz;
 					assert((idx&PAGE_META_MEM_IDX_MASK) == idx); // idx must fit into its bitmask.
-					page_metas[PIDX(xx)][PIDY(yy)][PIDZ(zz)].flags_mem_idx = idx; // Zero the flags at the same time.
+					page_metas[xx][yy][zz].flags_mem_idx = idx; // Zero the flags at the same time.
 
 					int do_empty = 0;
 					if(open_files & (1<<rl))
 					{
-						//page_meta_t* m = &page_metas[page_pointers[idx].px_idx][page_pointers[idx].py_idx][page_pointers[idx].pz_idx];
+						//page_meta_t* m = &page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz];
 						
 						int ret = alloc_read_page_single_rl(idx, rl);
 						if(ret == ERR_MAPFILE_NOT_FOUND)
@@ -293,14 +305,14 @@ void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_
 
 					if(do_empty && create_emptys & (1<<rl))
 					{
-						printf("INFO: load_pages(): allocating a new empty page (%d,%d,%d,rl%d), memslot %d\n", xx, yy, zz, rl, idx);
+						//printf("INFO: load_pages(): allocating a new empty page (%d,%d,%d,rl%d), memslot %d\n", xx, yy, zz, rl, idx);
 						alloc_empty_page_single_rl(idx, rl);
 					}
 
 					// As a result, we must have a loaded page, and a valid pointer, leading to a valid voxmap struct. Test everything:
-					assert(page_metas[PIDX(xx)][PIDY(yy)][PIDZ(zz)].loaded & (1<<rl));
-					int check_idx = page_metas[PIDX(xx)][PIDY(yy)][PIDZ(zz)].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
-					printf("PIDXES (%d, %d, %d), check_idx=%d\n", PIDX(xx), PIDY(yy), PIDZ(zz), check_idx);
+					assert(page_metas[xx][yy][zz].loaded & (1<<rl));
+					int check_idx = page_metas[xx][yy][zz].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
+					//printf("PIDXES (%d, %d, %d), check_idx=%d\n", xx, yy, zz, check_idx);
 
 					assert(page_pointers[check_idx].p_voxmap[rl]);
 					assert(page_pointers[check_idx].p_voxmap[rl]->header.magic == 0xaa13);
@@ -312,7 +324,7 @@ void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_
 
 	}
 
-	printf("verification round:\n");
+	//printf("verification round:\n");
 	
 	// Verification after the operations:
 	for(int xx=px_start; xx<=px_end; xx++)
@@ -326,20 +338,20 @@ void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_
 					if(!(open_files & (1<<rl)) && !(create_emptys & (1<<rl)))
 						continue; // Don't want to do anything on this rl
 
-					printf("xx=%d, yy=%d, zz=%d, rl=%d\n", xx, yy, zz, rl);
+					//printf("xx=%d, yy=%d, zz=%d, rl=%d\n", xx, yy, zz, rl);
 
 
-					int check_idx = page_metas[PIDX(xx)][PIDY(yy)][PIDZ(zz)].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
-					printf("PIDXES (%d, %d, %d), check_idx=%d\n", PIDX(xx), PIDY(yy), PIDZ(zz), check_idx);
+					int check_idx = page_metas[xx][yy][zz].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
+					//printf("PIDXES (%d, %d, %d), check_idx=%d\n", xx, yy, zz, check_idx);
 
-					assert(page_metas[PIDX(xx)][PIDY(yy)][PIDZ(zz)].loaded & (1<<rl));
+					assert(page_metas[xx][yy][zz].loaded & (1<<rl));
 					assert(page_pointers[check_idx].p_voxmap[rl]);
 					assert(page_pointers[check_idx].p_voxmap[rl]->header.magic == 0xaa13);
 				}
 			}
 		}
 	}
-	printf("Verification OK\n");
+	//printf("Verification OK\n");
 }
 
 
@@ -349,7 +361,7 @@ void mark_page_accessed(int px, int py, int pz)
 
 	assert(px >= PX_MIN && px <= PX_MAX && py >= PY_MIN && py <= PY_MAX && pz >= PZ_MIN && pz <= PZ_MAX);
 
-	unsigned int idx = page_metas[PIDX(px)][PIDY(py)][PIDZ(pz)].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
+	unsigned int idx = page_metas[px][py][pz].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
 	assert(idx < MAX_LOADED_PAGES);
 
 	page_pointers[idx].access_timestamp = cur_timestamp;
@@ -358,7 +370,7 @@ void mark_page_accessed(int px, int py, int pz)
 void mem_manage_pages(int time_threshold)
 {
 	cur_timestamp++;
-	printf("mem_manage_pages, cur_timestamp=%"PRIu64"\n", cur_timestamp);
+	//printf("mem_manage_pages, cur_timestamp=%"PRIu64"\n", cur_timestamp);
 
 	uint64_t thresh = (uint64_t)time_threshold;
 	if(thresh > cur_timestamp) thresh = cur_timestamp;
@@ -367,16 +379,32 @@ void mem_manage_pages(int time_threshold)
 
 	for(int idx=0; idx < MAX_LOADED_PAGES; idx++)
 	{
-		if(page_metas[page_pointers[idx].px_idx][page_pointers[idx].py_idx][page_pointers[idx].pz_idx].loaded &&
+		if(page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz].loaded &&
 		   page_pointers[idx].access_timestamp < kickout_timestamp)
 		{
-			printf("INFO: mem_manage_pages: kicking out old page (%d,%d,%d), access timestamp = %"PRIu64", cur_timestamp = %"PRIu64"\n",
-				PX(page_pointers[idx].px_idx), PY(page_pointers[idx].py_idx), PZ(page_pointers[idx].pz_idx),
-				page_pointers[idx].access_timestamp, cur_timestamp);
+			//printf("INFO: mem_manage_pages: kicking out old page (%d,%d,%d), access timestamp = %"PRIu64", cur_timestamp = %"PRIu64"\n",
+			//	page_pointers[idx].px, page_pointers[idx].py, page_pointers[idx].pz,
+			//	page_pointers[idx].access_timestamp, cur_timestamp);
 
 			store_page(idx);
 			free_page(idx);
 		}
 	} 
+}
+
+void free_all_pages()
+{
+	for(int idx=0; idx < MAX_LOADED_PAGES; idx++)
+	{
+		if(page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz].loaded)
+		{
+//			printf("free_all_pages: idx=%d, (%d,%d,%d)\n", idx, 
+//				page_pointers[idx].px, page_pointers[idx].py, page_pointers[idx].pz);
+			store_page(idx);
+			free_page(idx);
+		}
+	}
+
+	
 }
 

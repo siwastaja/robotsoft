@@ -128,7 +128,7 @@ typedef struct  __attribute__ ((packed))
 	VOXEL(*voxmap_in, ...)
 	
 */
-#define VOXEL(vm_, x_, y_, z_) ((vm_).voxels[((y_)*((vm_).voxels[(vm_).header.xs)*((vm_).voxels[(vm_).header.zs) + (x_)*((vm_).voxels[(vm_).header.zs)  + (z_))])
+#define VOXEL(vm_, x_, y_, z_) ((vm_).voxels[((y_)*(vm_).header.xs*(vm_).header.zs) + ((x_)*(vm_).header.zs)  + (z_)])
 
 
 #define ERR_MAPFILE_NOT_FOUND (-10)
