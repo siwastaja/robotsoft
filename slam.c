@@ -110,6 +110,17 @@ typedef struct
 {
 	int start_idx;
 	int end_idx;
+	int32_t avg_x;
+	int32_t avg_y;
+	int32_t avg_z;
+} subsubmap_meta_t;
+
+#define MAX_SUBSUBMAPS 16
+
+typedef struct
+{
+	int start_idx;
+	int end_idx;
 
 	int32_t min_x;
 	int32_t avg_x;
@@ -123,7 +134,13 @@ typedef struct
 	int32_t avg_z;
 	int32_t max_z;
 
+	int n_subsubmaps;
+	subsubmap_meta_t subsubmaps[MAX_SUBSUBMAPS];
+
 } submap_meta_t;
+
+
+#define VOXFILTER_N_SCANS 6
 
 #define MAX_SUBMAPS 100 //16384
 
@@ -208,11 +225,15 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 	printf(" n_fsp=%d\n", n_fsp);
 
 	// Count limit of full sensor rotations:
-	int count_limit = 64;
+	int count_limit = 10*VOXFILTER_N_SCANS;
 	// When max_x-min_x exceeds the limit, new submap group is initiated (at the next FIRST_SIDX edge)
-	int dx_limit = 5000;
-	int dy_limit = 5000;
+	int dx_limit = 4000;
+	int dy_limit = 4000;
 	int dz_limit = 2000;
+
+	int overlap_dx_limit = 2500;
+	int overlap_dy_limit = 2500;
+	int overlap_dz_limit = 1200;
 
 	int start_fsp = 0;
 
@@ -238,6 +259,15 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 		int64_t avg_y = 0;
 		int64_t avg_z = 0;
 		int avg_n = 0;
+
+		int64_t subsub_avg_x = 0;
+		int64_t subsub_avg_y = 0;
+		int64_t subsub_avg_z = 0;
+		int subsub_avg_n = 0;
+
+		smm_out[n_smm].n_subsubmaps = 0;
+		smm_out[n_smm].subsubmaps[0].start_idx = fsp[start_fsp].idx;
+
 		while(1)
 		{
 			assert(cur_fsp < n_fsp);
@@ -255,6 +285,11 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 			avg_z += fsp[cur_fsp].pose.z;
 			avg_n++;
 
+			subsub_avg_x += fsp[cur_fsp].pose.x;
+			subsub_avg_y += fsp[cur_fsp].pose.y;
+			subsub_avg_z += fsp[cur_fsp].pose.z;
+			subsub_avg_n++;
+
 			if(cur_fsp == n_fsp-1)
 			{
 				// Input data ended, work done.
@@ -270,6 +305,12 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 				smm_out[n_smm].avg_y = avg_y/avg_n;
 				smm_out[n_smm].avg_z = avg_z/avg_n;
 
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].end_idx = fsp[cur_fsp].idx;
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].avg_x = subsub_avg_x / subsub_avg_n;
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].avg_y = subsub_avg_y / subsub_avg_n;
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].avg_z = subsub_avg_z / subsub_avg_n;
+				smm_out[n_smm].n_subsubmaps++;
+
 				n_smm++;
 				break;
 			}
@@ -282,12 +323,32 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 			int dy = max_y - min_y;
 			int dz = max_z - min_z;
 
-			if(next_start_fsp == -1 && (abso(dx) > dx_limit/2 || abso(dy) > dy_limit/2 || abso(dz) > dz_limit/2))
+			if(next_start_fsp == -1 && (abso(dx) > overlap_dx_limit || abso(dy) > overlap_dy_limit || abso(dz) > overlap_dz_limit))
 			{
 				next_start_fsp = cur_fsp;
 			}
 
-			if(abso(dx) > dx_limit || abso(dy) > dy_limit || abso(dz) > dz_limit || cur_fsp >= start_fsp + count_limit)
+			if((cur_fsp-start_fsp)%VOXFILTER_N_SCANS == 0) // Also includes the case when the count limit is reached
+			{
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].end_idx = fsp[cur_fsp].idx;
+				assert(subsub_avg_n == VOXFILTER_N_SCANS);
+
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].avg_x = subsub_avg_x / subsub_avg_n;
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].avg_y = subsub_avg_y / subsub_avg_n;
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].avg_z = subsub_avg_z / subsub_avg_n;
+
+				smm_out[n_smm].n_subsubmaps++;
+				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].start_idx = fsp[cur_fsp].idx; // There will be one "excess" start_idx, doesn't matter.
+				subsub_avg_x = 0;
+				subsub_avg_y = 0;
+				subsub_avg_z = 0;
+				subsub_avg_n = 0;
+			}
+
+			// Let the dx,dy, or dz overshoot a bit, instead ensure that the submap is evenly divisible into subsubmaps
+			// count limit can be compared as-is, because it's divisible by VOXFILTER_N_SCANS
+			if(((cur_fsp-start_fsp)%VOXFILTER_N_SCANS == 0 && (abso(dx) > dx_limit || abso(dy) > dy_limit || abso(dz) > dz_limit))
+			    || (cur_fsp >= start_fsp + count_limit))
 			{
 				smm_out[n_smm].end_idx = fsp[cur_fsp].idx;
 
@@ -353,7 +414,6 @@ typedef struct
 // When moving, three sensors can see the same spot per full scan.
 // It's very unlikely that 16 references would run out for 6 full scans.
 
-#define VOXFILTER_N_SCANS 6
 #define MAX_SRC_POSE_REFS 16
 #define VOXFILTER_XS 128
 #define VOXFILTER_YS 128
@@ -393,7 +453,7 @@ typedef struct
 
 #define RESOLEVELS 0b1111
 
-static void cloud_to_voxmap(tmp_cloud_t* cloud)
+static void cloud_to_voxmap(tmp_cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 {
 	for(int rl=0; rl<8; rl++)
 	{
@@ -402,7 +462,7 @@ static void cloud_to_voxmap(tmp_cloud_t* cloud)
 
 		for(int i=0; i<cloud->n_points; i++)
 		{
-			po_coords_t po = po_coords(cloud->points[i].x, cloud->points[i].y, cloud->points[i].z, rl);
+			po_coords_t po = po_coords(cloud->points[i].x+ref_x, cloud->points[i].y+ref_y, cloud->points[i].z+ref_z, rl);
 			uint8_t* p_vox = get_p_voxel(po, rl);
 			*p_vox = 0x0f;
 			mark_page_changed(po.px, po.py, po.pz);
@@ -794,7 +854,7 @@ int main()
 
 	for(int sm=0; sm<n_submaps; sm++)
 	{
-		printf("Submap %d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+		printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
 		if(sm < n_submaps-1)
 		{
 			printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
@@ -804,7 +864,17 @@ int main()
 
 		printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
 			submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+		for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
+		{
+			printf("         Subsubmap %2d: idx %8d .. %8d (len %2d), avg (%+6d %+6d %+6d)\n", 
+				ssm, submap_metas[sm].subsubmaps[ssm].start_idx, submap_metas[sm].subsubmaps[ssm].end_idx, 
+				submap_metas[sm].subsubmaps[ssm].end_idx-submap_metas[sm].subsubmaps[ssm].start_idx,
+				submap_metas[sm].subsubmaps[ssm].avg_x, submap_metas[sm].subsubmaps[ssm].avg_y, submap_metas[sm].subsubmaps[ssm].avg_z);
+		}
 	}	
+
+	return 0;
 
 	for(int sm=0; sm<n_submaps; sm+=1)
 	{
@@ -814,21 +884,31 @@ int main()
 
 		static tmp_cloud_t tmp_cloud;
 		tmp_cloud.n_points = 0;
+		static voxfilter_t tmp_voxfilter;
 
-		for(int idx=submap_metas[sm].start_idx; idx<submap_metas[sm].end_idx; idx++)
+		memset(&tmp_voxfilter, 0, sizeof(voxfilter_t));
+
+		for(int idx=submap_metas[sm].start_idx; idx<submap_metas[sm].end_idx; idx+=VOXFILTER_N_SCANS)
 		{
-			char fname[1024];
-			sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", idx);
-			tof_slam_set_t* tss;
-			if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
+			for(int vi=0; vi<VOXFILTER_N_SCANS; vi++)
 			{
-				tof_to_voxfilter_and_cloud(0, 
-					tss->sets[0].ampldist, &tss->sets[0].pose,
-					idx, tss->sidx, 0, 0, 0, NULL, &tmp_cloud, 1500);
-			}
-			else
-			{
-				printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
+				int refidx = idx+vi;
+
+				char fname[1024];
+				sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", refidx);
+				tof_slam_set_t* tss;
+				if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
+				{
+					tof_to_voxfilter_and_cloud(0, 
+						tss->sets[0].ampldist, &tss->sets[0].pose,
+						refidx, tss->sidx, 
+						submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+						&tmp_voxfilter, &tmp_cloud, 1500);
+				}
+				else
+				{
+					printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
+				}
 			}
 		}
 
@@ -838,7 +918,13 @@ int main()
 		po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
 		load_pages(RESOLEVELS, RESOLEVELS, po.px-2, po.px+2, po.py-2, po.py+2, po.pz-2, po.pz+2);
 
-		cloud_to_voxmap(&tmp_cloud);
+
+		static tmp_cloud_t tmp_cloud2;
+		tmp_cloud2.n_points = 0;
+
+		voxfilter_to_cloud(&tmp_voxfilter, &tmp_cloud2);
+
+		cloud_to_voxmap(&tmp_cloud2, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 
 
 	}
@@ -847,6 +933,15 @@ int main()
 	for(int rl = 0; rl < 4; rl++)
 	{
 		po_coords_t po = po_coords(0, 0, 10000, rl);
+		load_pages(RESOLEVELS, RESOLEVELS, po.px, po.px, po.py, po.py, po.pz, po.pz);
+		uint8_t* p_vox = get_p_voxel(po, rl);
+		*p_vox = 0x0f;
+		mark_page_changed(po.px, po.py, po.pz);
+	}
+
+	for(int rl = 0; rl < 4; rl++)
+	{
+		po_coords_t po = po_coords(2500, 4500, 10000, rl);
 		load_pages(RESOLEVELS, RESOLEVELS, po.px, po.px, po.py, po.py, po.pz, po.pz);
 		uint8_t* p_vox = get_p_voxel(po, rl);
 		*p_vox = 0x0f;
