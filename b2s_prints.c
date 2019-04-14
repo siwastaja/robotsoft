@@ -111,7 +111,7 @@ void print_hw_pose(void* m)
 {
 	hw_pose_t *mm = m;
 
-	printf("HW pose  ang=%5.1f  pitch=%5.1f  roll=%5.1f deg   x=%8d  y=%8d  z=%8d mm\n", ANG32TOFDEG(mm->ang), ANG_I32TOFDEG(mm->pitch), ANG_I32TOFDEG(mm->roll), mm->x, mm->y, mm->z);
+	printf("HW pose  ang=%5.1f  pitch=%5.1f  roll=%5.1f deg   x=%8d  y=%8d  z=%8d mm\n", ANG32TOFDEG(mm->ang), ANGI32TOFDEG(mm->pitch), ANGI32TOFDEG(mm->roll), mm->x, mm->y, mm->z);
 //	printf("         ang=%11d   pitch=%11d   roll=%11d LSB\n", (int32_t)mm->ang, (int32_t)mm->pitch, (int32_t)mm->roll);
 }
 
@@ -142,7 +142,7 @@ void print_drive_diag(void* m)
 {
 	drive_diag_t *mm = m;
 
-	printf("Drive diagnostics  ang_err=%5.2f deg lin_err=%d mm cur (%d, %d), targ (%d, %d), id=%d, remaining %d mm, stop_flags=%08x, run=%u\n", ANG_I32TOFDEG(mm->ang_err), mm->lin_err, 
+	printf("Drive diagnostics  ang_err=%5.2f deg lin_err=%d mm cur (%d, %d), targ (%d, %d), id=%d, remaining %d mm, stop_flags=%08x, run=%u\n", ANGI32TOFDEG(mm->ang_err), mm->lin_err, 
 		mm->cur_x, mm->cur_y, mm->target_x, mm->target_y, mm->id, mm->remaining, mm->micronavi_stop_flags, mm->run);
 }
 
@@ -217,7 +217,7 @@ void print_chafind_results(void* m)
 
 	printf("Charger mount diagnostics: cur_state=%d[%s] nearest_hit_x=%d, y=%d, z=%d, middle_bar_y=%d...%d,\naccum_cnt left=%d, mid=%d, right=%d --> backwall_ang=%.2f deg, midmark_x=%d, midmark_y=%d --> shift=%d, dist=%d,\n"
 	       "first_movement = %d mm, num angle adjustment passes = %d, num vexling passes = %d,\npositioning success = %d, dist before push = %d, result code = %d\n",
-		mm->cur_state, state_names[cur_state], mm->nearest_hit_x, mm->nearest_hit_y, mm->nearest_hit_z, mm->middle_bar_min_y, mm->middle_bar_max_y, mm->left_accum_cnt, mm->mid_accum_cnt, mm->right_accum_cnt, ANG_I32TOFDEG(mm->backwall_ang), mm->midmark_x, mm->midmark_y, mm->shift, mm->dist, 
+		mm->cur_state, state_names[cur_state], mm->nearest_hit_x, mm->nearest_hit_y, mm->nearest_hit_z, mm->middle_bar_min_y, mm->middle_bar_max_y, mm->left_accum_cnt, mm->mid_accum_cnt, mm->right_accum_cnt, ANGI32TOFDEG(mm->backwall_ang), mm->midmark_x, mm->midmark_y, mm->shift, mm->dist, 
 		mm->first_movement_needed, mm->turning_passes_needed, mm->vexling_passes_needed, mm->accepted_pos, mm->dist_before_push, mm->result);
 }
 

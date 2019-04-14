@@ -171,7 +171,8 @@ typedef struct __attribute__((packed))
 } tof_raw_img_t;
 void print_tof_raw_img(void* m);
 
-
+#include "datatypes.h"
+/*
 #define ANG_360_DEG_ULL 4294967296ULL
 #define ANG_360_DEG_LL  4294967296LL
 
@@ -208,7 +209,7 @@ void print_tof_raw_img(void* m);
 #define RADTODEG(x) ((x)*(360.0/(2.0*M_PI)))
 #define DEGTORAD(x) ((x)*((2.0*M_PI)/360.0))
 #define RADTOANG32(x) ( (int32_t)((((float)(x)) / (2.0*M_PI)) * 4294967296.0))
-
+*/
 
 typedef struct __attribute__((packed))
 {
