@@ -249,5 +249,5 @@ void mark_page_accessed(int px, int py, int pz);
 void mem_manage_pages(int time_threshold);
 void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_end, int py_start, int py_end, int pz_start, int pz_end);
 void free_all_pages();
-char* gen_fname(char* dir, int px, int py, int pz, int resolevel);
+char* gen_fname(char* dir, int px, int py, int pz, int resolevel, char* buf);
 
