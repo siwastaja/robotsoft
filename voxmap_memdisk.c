@@ -36,12 +36,11 @@ page_meta_t page_metas[MAX_PAGES_X][MAX_PAGES_Y][MAX_PAGES_Z];
 
 page_pointer_t page_pointers[MAX_LOADED_PAGES];
 
-char* gen_fname(char* dir, int px, int py, int pz, int resolevel)
+char* gen_fname(char* dir, int px, int py, int pz, int resolevel, char* buf)
 {
-	static char fname[2048];
-	int snprintf_ret = snprintf(fname, 2048, "%s/voxmap_x%d_y%d_z%d_r%d.pluuvox", dir, px, py, pz, resolevel);
+	int snprintf_ret = snprintf(buf, 2048, "%s/voxmap_x%d_y%d_z%d_r%d.pluuvox", dir, px, py, pz, resolevel);
 	assert(snprintf_ret < 2048);
-	return fname;
+	return buf;
 }
 
 // -1 if not found, else the slot idx
@@ -58,6 +57,8 @@ static int find_free_slot()
 	}
 	return -1;
 }
+
+static char fnamebuf[2048];
 
 static void store_page(int idx)
 {
@@ -79,7 +80,7 @@ static void store_page(int idx)
 		{
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);
 			//printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
-			write_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl));			
+			write_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf));			
 		}
 	}
 }
@@ -105,7 +106,7 @@ static int alloc_read_page_single_rl(int idx, int rl)
 		abort();
 	}
 
-	int ret = read_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl));
+	int ret = read_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf));
 
 	if(ret >= 0)
 	{

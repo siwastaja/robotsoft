@@ -78,13 +78,12 @@ typedef struct
 
 
 
-// const
 sensor_mount_t sensor_mounts[N_SENSORS] =
 {          //      mountmode    x     y       hor ang           ver ang      height    
  /*0:                */ { 0,     0,     0, DEGTOANG16(       0), DEGTOANG16( 2),         300 },
 
  /*1:                */ { 1,   130,   103, DEGTOANG16(    24.4), DEGTOANG16( 4.4),       310  }, // -1
- /*2:                */ { 2,  -235,   215, DEGTOANG16(    66.4)/*66.4*/, DEGTOANG16( 1.4),       310  }, // -1
+ /*2:                */ { 2,  -235,   215, DEGTOANG16(    66.4), DEGTOANG16( 1.4),       310  }, // -1
  /*3:                */ { 2,  -415,   215, DEGTOANG16(    93.5), DEGTOANG16( 1.9),       310  }, // -1
  /*4:                */ { 2,  -522,   103, DEGTOANG16(   157.4), DEGTOANG16( 3.9),       280  }, // -1
  /*5:                */ { 2,  -522,   -35, DEGTOANG16(   176.0), DEGTOANG16( 4.9),       290  }, // -1
@@ -245,6 +244,11 @@ typedef struct
 #define WRAP_RAD_0(x_) do{while(x_ < 0.0) x_ += 2.0*M_PI; }while(0)
 #define WRAP_RAD(x_) do{WRAP_RAD_2PI(x_); WRAP_RAD_0(x_);}while(0)
 
+#define WRAP_RAD_PI(x_) do{while(x_ >= M_PI) x_ -= 2.0*M_PI; }while(0)
+#define WRAP_RAD_NEGPI(x_) do{while(x_ < -M_PI) x_ += 2.0*M_PI; }while(0)
+#define WRAP_RAD_BIPO(x_) do{WRAP_RAD_PI(x_); WRAP_RAD_NEGPI(x_);}while(0)
+
+
 typedef struct
 {
 	int fsp_idx;
@@ -286,8 +290,10 @@ uint8_t enable_submaps[MAX_SUBMAPS] = {
 void init_corr_points()
 {
 
-	add_corr_point(1, (fpose_t){0,0,0, DEGTORAD(10), 0, 0});
+	for(int i=0; i<MAX_SUBMAPS; i++)
+		enable_submaps[i] = 1;
 
+/*
 	add_corr_point(136, (fpose_t){0,0,0, DEGTORAD(-1.5), 0, 0});
 
 	add_corr_point(197, (fpose_t){0,0,0, DEGTORAD(+1.5), 0, 0});
@@ -307,9 +313,12 @@ void init_corr_points()
 	add_corr_point(2300, (fpose_t){0,0,0, DEGTORAD(-5.0), 0, 0});
 
 	add_corr_point(2355, (fpose_t){-2300,+1000,0, DEGTORAD(0), 0, 0});
-
+*/
 
 }
+
+double pos_gyro_corr = -0.0135;
+double neg_gyro_corr = -0.0345;
 
 void gen_fposes(firstsidx_pose_t* hwposes, int n_hwposes, fpose_t* out)
 {
@@ -321,8 +330,11 @@ void gen_fposes(firstsidx_pose_t* hwposes, int n_hwposes, fpose_t* out)
 	out[0].roll  = ANG32TORAD(hwposes[0].pose.roll);
 
 	double running_yaw_corr = 0.0;
+	double running_pitch_corr = 0.0;
+	double running_roll_corr = 0.0;
 	for(int i=1; i<n_hwposes; i++)
 	{
+/*
 		if(i==1400)
 			yaw_corr = 0.00090;
 		if(i==1900)
@@ -330,9 +342,9 @@ void gen_fposes(firstsidx_pose_t* hwposes, int n_hwposes, fpose_t* out)
 
 		if(i==2300)
 			yaw_corr = 0.00020;
+*/
 
-
-		running_yaw_corr += yaw_corr;
+//		running_yaw_corr += yaw_corr;
 		double prev_x = hwposes[i-1].pose.x;
 		double prev_y = hwposes[i-1].pose.y;
 		double prev_z = hwposes[i-1].pose.z;
@@ -351,8 +363,33 @@ void gen_fposes(firstsidx_pose_t* hwposes, int n_hwposes, fpose_t* out)
 		double dy = now_y - prev_y;
 		double dz = now_z - prev_z;
 
-		// Search for relevant corrpoint:
+		double dyaw = now_ang - prev_ang;
+		double dpitch = now_pitch - prev_pitch;
+		double droll = now_roll - prev_roll;
 
+		WRAP_RAD_BIPO(dyaw);
+		WRAP_RAD_BIPO(dpitch);
+		WRAP_RAD_BIPO(droll);
+
+		double yaw_corr;
+		double pitch_corr = 0.0;
+		double roll_corr = 0.0;
+
+		if(dyaw > 0.0)
+			yaw_corr = pos_gyro_corr * dyaw;
+		else
+			yaw_corr = neg_gyro_corr * dyaw;
+
+		running_yaw_corr += yaw_corr;
+		running_pitch_corr += pitch_corr;
+		running_roll_corr += roll_corr;
+
+		WRAP_RAD(running_yaw_corr);
+		WRAP_RAD(running_pitch_corr);
+		WRAP_RAD(running_roll_corr);
+
+		// Search for relevant corrpoint:
+/*
 		for(int cpi=0; cpi<n_corr_points; cpi++)
 		{
 			if(corr_points[cpi].fsp_idx == i)
@@ -363,11 +400,20 @@ void gen_fposes(firstsidx_pose_t* hwposes, int n_hwposes, fpose_t* out)
 				dz += corr_points[cpi].corr.z;
 			}
 		}
-
+*/
 		out[i].x = out[i-1].x + dx * cos(running_yaw_corr) - dy * sin(running_yaw_corr);
 		out[i].y = out[i-1].y + dx * sin(running_yaw_corr) + dy * cos(running_yaw_corr);
 		out[i].z = out[i-1].z + dz;
 
+		out[i].ang = out[i-1].ang + dyaw + yaw_corr;
+		out[i].pitch = out[i-1].pitch + dpitch + pitch_corr;
+		out[i].roll  = out[i-1].roll + droll + roll_corr;
+
+		WRAP_RAD(out[i].ang);
+		WRAP_RAD(out[i].pitch);
+		WRAP_RAD(out[i].roll);
+
+/*
 		now_ang += running_yaw_corr; 
 
 		WRAP_RAD(now_ang);
@@ -377,6 +423,7 @@ void gen_fposes(firstsidx_pose_t* hwposes, int n_hwposes, fpose_t* out)
 		out[i].ang = now_ang;
 		out[i].pitch = now_pitch;
 		out[i].roll = now_roll;
+*/
 	}
 }
 
@@ -1350,9 +1397,17 @@ int process_file(char* fname, tof_slam_set_t** tss)
 }
 
 
-int main()
+int main(int argc, char** argv)
 {
+
+	if(argc == 3)
+	{
+		sscanf(argv[1], "%lf", &pos_gyro_corr);
+		sscanf(argv[2], "%lf", &neg_gyro_corr);
+	}
+
 	printf("Super Slammings 2.0 2000\n");
+	printf("pos_gyro_corr = %lf, neg_gyro_corr = %lf\n", pos_gyro_corr, neg_gyro_corr);
 
 	init_corr_points();
 
@@ -1366,7 +1421,62 @@ int main()
 
 	static fpose_t fposes[MAX_FIRSTSIDX_POSES];
 	gen_fposes(firstsidx_poses, n_firstsidx_poses, fposes);
+
+#if 0
+	FILE* kakkafile = fopen("kakka.kak", "rb");
+	static fpose_t cmp_fposes[MAX_FIRSTSIDX_POSES];
+	fread(cmp_fposes, sizeof(cmp_fposes), 1, kakkafile);
+	fclose(kakkafile);
+
+	double win_gpos = 0.0;
+	double win_gneg = 0.0;
+	double smallest = 9999999999999999999999999999999999999999999999999999999.9;
+	for(double gpos=-0.10; gpos<0.10; gpos += 0.0005)
+	{
+		for(double gneg=-0.10; gneg<0.10; gneg += 0.0005)
+		{
+			memset(fposes, 0, sizeof(fposes));
+
+			pos_gyro_corr = gpos;
+			neg_gyro_corr = gneg;
+
+			gen_fposes(firstsidx_poses, n_firstsidx_poses, fposes);
+
+			double score_acc = 0.0;
+			for(int i=0; i<n_firstsidx_poses; i++)
+			{
+				double dx = cmp_fposes[i].x - fposes[i].x;
+				double dy = cmp_fposes[i].y - fposes[i].y;
+				double dang = cmp_fposes[i].ang - fposes[i].ang;
+				WRAP_RAD_BIPO(dang);
+
+				// 180 degrees off (3.14 rad) is scored equally to a 31.4m error:
+				double score = sq(dx) + sq(dy) + sq(dang*10000.0);
+				score_acc += score;
+			}
+
+			if(score_acc < smallest)
+			{
+				smallest = score_acc;
+				win_gpos = gpos;
+				win_gneg = gneg;
+			}
+
+			printf("gpos=%+8.5f gneg=%+8.5f score=%15.0lf winner: %+8.5f  %+8.5f with score=%15.0lf               \r",
+				gpos, gneg, score_acc, win_gpos, win_gneg, smallest);
+			fflush(stdout);
+
+		}
+
+	}
+
+	printf("\n");
+	return 0;
+#endif
+
 	gen_pose_corrs(firstsidx_poses, pose_corrs, n_firstsidx_poses, fposes);
+
+
 
 	// Copy the last correction, will be accessed later.
 	pose_corrs[n_firstsidx_poses] = pose_corrs[n_firstsidx_poses-1];
@@ -1383,6 +1493,13 @@ int main()
 			pose_corrs[i].pose.x, pose_corrs[i].pose.y, pose_corrs[i].pose.z, ANG32TOFDEG(pose_corrs[i].pose.ang));
 	}
 
+//	FILE* kakkafile = fopen("kakka.kak", "wb");
+//	fwrite(fposes, sizeof(fposes), 1, kakkafile);
+//	fclose(kakkafile);
+//	return 0;
+
+
+	
 
 	int n_submaps;
 
@@ -1414,7 +1531,7 @@ int main()
 	int64_t total_after_filtering = 0;
 
 
-	for(int sm=0; sm<n_submaps; sm+=1)
+	for(int sm=0; sm<n_submaps; sm+=2)
 	{
 		if(!enable_submaps[sm])
 			continue;
@@ -1496,7 +1613,7 @@ int main()
 
 		static tmp_cloud_t tmp_cloud_filtered;
 
-		filter_cloud(&tmp_cloud, &tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+//		filter_cloud(&tmp_cloud, &tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 
 		printf("--> after filtering = %d\n", tmp_cloud_filtered.n_points);
 		total_after_filtering += tmp_cloud_filtered.n_points;
@@ -1507,8 +1624,8 @@ int main()
 		load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
 
 
-		cloud_to_voxmap(&tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-//		cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+//		cloud_to_voxmap(&tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+		cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 
 	}
 
