@@ -195,7 +195,7 @@ int extract_firstsidx_poses(firstsidx_pose_t* out, int* n_out)
 	for(int i=start_i; i<end_i; i++)
 	{
 		char fname[1024];
-		sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", i);
+		sprintf(fname, "/home/hrst/robodev/robotsoft/tsellari/trace%08d.rb2", i);
 		tof_slam_set_t* tss;
 //		printf("&tss = %lx\n", (uint64_t)&tss);
 		if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
@@ -317,8 +317,11 @@ void init_corr_points()
 
 }
 
-double pos_gyro_corr = -0.0135;
-double neg_gyro_corr = -0.0345;
+//double pos_gyro_corr = -0.0135;
+//double neg_gyro_corr = -0.0345;
+
+double pos_gyro_corr = -0.00650;
+double neg_gyro_corr = -0.02700;
 
 void gen_fposes(firstsidx_pose_t* hwposes, int n_hwposes, fpose_t* out)
 {
@@ -1451,7 +1454,9 @@ int main(int argc, char** argv)
 				WRAP_RAD_BIPO(dang);
 
 				// 180 degrees off (3.14 rad) is scored equally to a 31.4m error:
-				double score = sq(dx) + sq(dy) + sq(dang*10000.0);
+//				double score = sq(dx) + sq(dy) + sq(dang*10000.0);
+				// 180 degrees off (3.14 rad) is scored equally to a 6*31.4m error:
+				double score = sq(dx) + sq(dy) + sq(dang*60000.0);
 				score_acc += score;
 			}
 
@@ -1572,7 +1577,7 @@ int main(int argc, char** argv)
 				assert(cidx>=0);
 
 				char fname[1024];
-				sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", idx);
+				sprintf(fname, "/home/hrst/robodev/robotsoft/tsellari/trace%08d.rb2", idx);
 				tof_slam_set_t* tss;
 				if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
 				{
