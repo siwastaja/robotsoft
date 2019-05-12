@@ -111,10 +111,10 @@ sensor_mount_t sensor_mounts[N_SENSORS] =
 #define sq(x) ((x)*(x))
 #define abso(x) (((x)<0)?(-(x)):(x))
 
-typedef struct
+typedef struct __attribute__((packed))
 {
-	int start_idx;
-	int end_idx;
+	int32_t start_idx;
+	int32_t end_idx;
 	int32_t avg_x;
 	int32_t avg_y;
 	int32_t avg_z;
@@ -122,10 +122,10 @@ typedef struct
 
 #define MAX_SUBSUBMAPS 16
 
-typedef struct
+typedef struct  __attribute__((packed))
 {
-	int start_idx;
-	int end_idx;
+	int32_t start_idx;
+	int32_t end_idx;
 
 	int32_t min_x;
 	int32_t avg_x;
@@ -139,7 +139,7 @@ typedef struct
 	int32_t avg_z;
 	int32_t max_z;
 
-	int n_subsubmaps;
+	int32_t n_subsubmaps;
 	subsubmap_meta_t subsubmaps[MAX_SUBSUBMAPS];
 
 } submap_meta_t;
@@ -175,8 +175,8 @@ static int32_t max_rotation(hw_pose_t pose1, hw_pose_t pose2)
 	return biggest;
 }
 
-int start_i = 500;
-int end_i = 25000; //12800;
+int start_i = 0;
+int end_i = 27294; //12800;
 
 #define MAX_FIRSTSIDX_POSES 65536
 #define MAX_REFIDXS 65536
@@ -195,7 +195,7 @@ int extract_firstsidx_poses(firstsidx_pose_t* out, int* n_out)
 	for(int i=start_i; i<end_i; i++)
 	{
 		char fname[1024];
-		sprintf(fname, "/home/hrst/robodev/robotsoft/tsellari/trace%08d.rb2", i);
+		sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", i);
 		tof_slam_set_t* tss;
 //		printf("&tss = %lx\n", (uint64_t)&tss);
 		if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
@@ -452,6 +452,61 @@ void gen_pose_corrs(firstsidx_pose_t* hwposes, firstsidx_pose_t* out, int n_hwpo
 }
 
 
+// Pitch and roll are assumed to have no accumulating error (based on gravity vector always available)
+// Accumulating yaw error is eventually limited by compass, but compass will be inaccurate and subject
+// to local magnetic fields.
+
+#define XY_ACCUM_UNCERT_BY_SUBMAP 100 // mm
+#define Z_ACCUM_UNCERT_BY_SUBMAP 50   // mm
+#define YAW_ACCUM_UNCERT_BY_SUBMAP (DEGTORAD(1))
+#define YAW_ACCUM_UNCERT_SATURATION (DEGTORAD(45))
+
+#define TRY_CLOSURE_MARGIN_XY 5000
+#define TRY_CLOSURE_MARGIN_Z  1000
+
+void find_possible_closures(submap_meta_t* sms, int n_sms, int cur_sms)
+{
+	int cur_x = sms[cur_sms].avg_x;
+	int cur_y = sms[cur_sms].avg_y;
+	int cur_z = sms[cur_sms].avg_z;
+
+//	for(int i=0; i<n_sms; i++)
+	for(int i=0; i<cur_sms; i++)
+	{
+		// Distance of submap sequence numbers:
+		int sm_dist = abs(cur_sms - i);
+
+		// Never try to find closures between neighbors (which are trivial matches)
+		if(sm_dist < 3)
+		{
+			continue;
+		}
+
+		double xy_uncert = sm_dist * XY_ACCUM_UNCERT_BY_SUBMAP;
+		double z_uncert = sm_dist * Z_ACCUM_UNCERT_BY_SUBMAP;
+		double yaw_uncert = sm_dist * YAW_ACCUM_UNCERT_SATURATION;
+		if(yaw_uncert > YAW_ACCUM_UNCERT_SATURATION)
+			yaw_uncert = YAW_ACCUM_UNCERT_SATURATION;
+
+
+		int smi_x = sms[i].avg_x;
+		int smi_y = sms[i].avg_y;
+		int smi_z = sms[i].avg_z;
+
+		if(abs(smi_x - cur_x) > xy_uncert + TRY_CLOSURE_MARGIN_XY)
+			continue;
+
+		if(abs(smi_y - cur_y) > xy_uncert + TRY_CLOSURE_MARGIN_XY)
+			continue;
+
+		if(abs(smi_z - cur_z) > z_uncert + TRY_CLOSURE_MARGIN_Z)
+			continue;
+
+		printf("   LOOP    Cur submap %d (%d,%d,%d), possible loop closure with submap %d (%d,%d,%d), xy_uncert=%.0f, z_uncert=%.0f\n",
+			cur_sms, cur_x, cur_y, cur_z, i, smi_x, smi_y, smi_z, xy_uncert, z_uncert);
+	}
+}
+
 
 #define TRACK_MIN(invar_, minvar_) do{if((invar_) < (minvar_)) (minvar_) = (invar_);}while(0)
 #define TRACK_MAX(invar_, maxvar_) do{if((invar_) > (maxvar_)) (maxvar_) = (invar_);}while(0)
@@ -469,13 +524,13 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 	// Count limit of full sensor rotations:
 	int count_limit = 10*VOXFILTER_N_SCANS;
 	// When max_x-min_x exceeds the limit, new submap group is initiated (at the next FIRST_SIDX edge)
-	int dx_limit = 4000;
-	int dy_limit = 4000;
-	int dz_limit = 2000;
+	int dx_limit = 3500;
+	int dy_limit = 3500;
+	int dz_limit = 1500;
 
 	int overlap_dx_limit = 2500;
 	int overlap_dy_limit = 2500;
-	int overlap_dz_limit = 1200;
+	int overlap_dz_limit = 1000;
 
 	int start_fsp = 0;
 
@@ -568,6 +623,7 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 				next_start_fsp = cur_fsp;
 			}
 
+			// Group subsubmaps:
 			if((cur_fsp-start_fsp)%VOXFILTER_N_SCANS == 0) // Also includes the case when the count limit is reached
 			{
 				smm_out[n_smm].subsubmaps[smm_out[n_smm].n_subsubmaps].end_idx = fsp[cur_fsp].idx;
@@ -585,6 +641,7 @@ void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp
 				subsub_avg_n = 0;
 			}
 
+			// Check if we need to finish the current submap:
 			// Let the dx,dy, or dz overshoot a bit, instead ensure that the submap is evenly divisible into subsubmaps
 			// count limit can be compared as-is, because it's divisible by VOXFILTER_N_SCANS
 			if(((cur_fsp-start_fsp)%VOXFILTER_N_SCANS == 0 && (abso(dx) > dx_limit || abso(dy) > dy_limit || abso(dz) > dz_limit))
@@ -666,7 +723,7 @@ typedef struct
 	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS][MAX_SRC_POSE_REFS];
 } voxfilter_t;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	int32_t src_seq_id; // Sequence ID gives us both pose and sensor idx, for exact source x,y,z for raytracing empty space. 0 is an invalid id
 
@@ -694,12 +751,44 @@ typedef struct
 static ray_source_t ray_sources[MAX_REFIDXS];
 
 
-#define MAX_POINTS (8000*10*64)
+#define MAX_POINTS (9600*10*64)
 typedef struct
 {
 	int n_points;
 	tmp_cloud_point_t points[MAX_POINTS];
 } tmp_cloud_t;
+
+// Point cloud files contain source sequence indeces, meaning they are only valid with the exact same input data set.
+int save_tmp_cloud(tmp_cloud_t* cloud, int idx)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "submap%06u", idx);
+	FILE* f = fopen(fname, "wb");
+	assert(f);
+
+	uint32_t n_points = cloud->n_points;
+	assert(fwrite(&n_points, sizeof(uint32_t), 1, f) == 1);
+	assert(fwrite(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+
+	fclose(f);
+	return 0;
+}
+
+int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "submap%06u", idx);
+	FILE* f = fopen(fname, "rb");
+	assert(f);
+
+	uint32_t n_points = 0;
+	assert(fread(&n_points, sizeof(uint32_t), 1, f) == 1);
+	cloud->n_points = n_points;
+	assert(fread(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+
+	fclose(f);
+	return 0;
+}
 
 /*
 #define CLOUDFLT_XS 1280
@@ -722,7 +811,7 @@ static uint8_t free_cnt[CLOUDFLT_XS][CLOUDFLT_YS][CLOUDFLT_ZS];
 #define LINE_CONE_SLOPE_XY 15
 #define LINE_CONE_SLOPE_Z  20
 
-static inline void output_voxel(int x, int y, int z)
+static inline void output_voxel_cloudflt(int x, int y, int z)
 {
 	assert(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1);
 
@@ -731,14 +820,14 @@ static inline void output_voxel(int x, int y, int z)
 	free_cnt[x][y][z] = 1;
 }
 
-static inline uint8_t get_voxel(int x, int y, int z)
+static inline uint8_t get_voxel_cloudflt(int x, int y, int z)
 {
 	assert(x >= 0 && x < CLOUDFLT_XS && y >= 0 && y < CLOUDFLT_YS && z > 0 && z <= CLOUDFLT_ZS);
 
 	return free_cnt[x][y][z];
 }
 
-static void bresenham3d(int x1, int y1, int z1, int x2, int y2, int z2)
+static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 {	
 	int dx = x2 - x1;
 	int dy = y2 - y1;
@@ -775,7 +864,7 @@ static void bresenham3d(int x1, int y1, int z1, int x2, int y2, int z2)
 				int ix=0;
 				for(int iz=-rangez; iz<=rangez; iz++)
 				{
-					output_voxel(px+ix, py+iy, pz+iz);
+					output_voxel_cloudflt(px+ix, py+iy, pz+iz);
 				}
 			}
 
@@ -811,7 +900,7 @@ static void bresenham3d(int x1, int y1, int z1, int x2, int y2, int z2)
 			{
 				for(int iz=-rangez; iz<=rangez; iz++)
 				{
-					output_voxel(px+ix, py+iy, pz+iz);
+					output_voxel_cloudflt(px+ix, py+iy, pz+iz);
 				}
 			}
 
@@ -847,7 +936,7 @@ static void bresenham3d(int x1, int y1, int z1, int x2, int y2, int z2)
 				for(int ix=-rangexy; ix<=rangexy; ix++)
 				{
 					int iz=0;
-					output_voxel(px+ix, py+iy, pz+iz);
+					output_voxel_cloudflt(px+ix, py+iy, pz+iz);
 				}
 			}
 
@@ -892,7 +981,7 @@ void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, in
 			cloud->points[p].x, cloud->points[p].y, cloud->points[p].z,
 			sx,sy,sz, px,py,pz);
 */
-		bresenham3d(sx, sy, sz, px, py, pz);
+		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
 	}
 
 #if 0
@@ -928,7 +1017,7 @@ void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, in
 		int py = (cloud->points[p].y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
 		int pz = (cloud->points[p].z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
-		int val = get_voxel(px, py, pz);
+		int val = get_voxel_cloudflt(px, py, pz);
 		if(val < 1)
 		{
 			out->points[n_p] = cloud->points[p];
@@ -937,6 +1026,431 @@ void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, in
 			
 	}
 	out->n_points = n_p;
+
+}
+
+typedef struct
+{
+	uint64_t occu;
+	uint64_t free;
+} ref_matchmap_unit_t;
+
+#define MATCHMAP_XS 256
+#define MATCHMAP_YS 256
+/*
+	ZS is fixed at 64 (single bits in uint64)
+
+	256x256x64 units:
+
+	At 256mm resolution: 65.536 m x 65.536 m x 16.384 m
+	Assuming centered submap range of 45m x 45m x 10m,
+	wiggle room of +/- 12.5m, 12.5m, 3m
+*/
+
+typedef struct
+{
+	ref_matchmap_unit_t units[MATCHMAP_YS][MATCHMAP_XS];
+} ref_matchmap_t;
+
+typedef struct
+{
+	uint64_t occu;
+} cmp_matchmap_unit_t;
+
+typedef struct
+{
+	cmp_matchmap_unit_t units[MATCHMAP_YS][MATCHMAP_XS];
+} cmp_matchmap_t;
+
+
+ref_matchmap_t ref_matchmap __attribute__((aligned(64)));
+cmp_matchmap_t cmp_matchmap __attribute__((aligned(64)));
+
+static inline int count_ones_u64(uint64_t in)
+{
+	int cnt;
+#if 1
+	cnt = 0;
+	for(int i=0; i<64; i++)
+	{
+		if(in & 1)
+			cnt++;
+		in >>= 1;
+	}
+#endif
+
+#if 0
+
+	// https://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetParallel
+
+	in = in - ((in >> 1) & 0x5555555555555555ULL);
+	in = (in & 0x3333333333333333ULL) + ((in >> 2) & 0x3333333333333333ULL);
+	cnt = ((in + (in >> 4) & 0x0F0F0F0F0F0F0F0FULL) * 0x0101010101010101ULL) >> 56;
+
+#endif
+
+	return cnt;
+
+}
+
+
+/*
+	Raspi3 has 16kB of L1 data cache per core; 512 kB shared L2 cache.
+	Odroid XU4 has 32kB of L1 data cacge per core; 2MB shared L2 cache for fast cores, 512kB shared for slow cores
+
+	Cache line is 64 bytes for L1 and L2
+
+	For L1, 256 lines * 64 bytes = 16kB
+
+	x_range, y_range = +/-16, inmost loops use half of the L1 cache (32*32*8bytes), in 32 * 4 = 128 lines
+	prefetch should work fairly well with inmost loop being in x direction
+*/
+/*
+	Range example:
+	x_range = 16 (biggest allowed)
+	X shifts are looped from -16 to +15
+	Matchmaps are compared from 16 to MATCHMAP_XS-16
+*/
+
+#define ODROID_XU4
+
+// L1 cache usage = (2*xy_range)^2 * 16  (8 bytes for voxels; 8 bytes for score counters)
+// 2*XY_RANGE*8 should be multiple of 64 (cache line length)
+#ifdef RASPI3 
+#define MATCHMAP_XY_RANGE 12 // 9216 bytes out of 16384 L1 cache
+#define MATCHMAP_Z_RANGE  16
+#endif
+
+#ifdef ODROID_XU4
+#define MATCHMAP_XY_RANGE 20 // 25600 bytes out of 32768 L1 cache
+#define MATCHMAP_Z_RANGE  16
+#endif
+
+#define MATCHMAP_XYZ_N_RESULTS 32
+
+typedef struct __attribute__((packed))
+{
+	int8_t dummy;
+	int8_t x_shift;
+	int8_t y_shift;
+	int8_t z_shift;
+
+	int32_t score;
+
+} match_xyz_result_t;
+
+static void match_matchmaps_xyz(int z_start, int z_end,
+	match_xyz_result_t* p_results_occu_match, match_xyz_result_t* p_results_occu_on_free)
+{
+	assert(z_start >= -MATCHMAP_Z_RANGE && z_end <= MATCHMAP_Z_RANGE);
+
+	// Bit counts: max 256*256*64 = 4194304 voxels (this is the maximum count for each alignment)
+	// Fits int32 with massive margin
+
+	// Scoring: order:[z][y][x], L2 cache or RAM acceptable
+	// fixed-z [y][x], L1 cache preferred
+	// the two score counters are next to each other, for cache coherency and 64-bit SIMD addition
+	struct __attribute__((packed))
+	{
+		int32_t n_occu_matches;
+		int32_t n_occu_on_free;
+	} scores[2*MATCHMAP_Z_RANGE][2*MATCHMAP_XY_RANGE][2*MATCHMAP_XY_RANGE] __attribute__((aligned(64))); 
+
+	memset(scores, 0, sizeof scores);
+
+	for(int iz = z_start; iz < z_end; iz++)
+	{
+		for(int yy = MATCHMAP_XY_RANGE; yy < MATCHMAP_XS-MATCHMAP_XY_RANGE; yy++)
+		{
+			for(int xx = MATCHMAP_XY_RANGE; xx < MATCHMAP_XS-MATCHMAP_XY_RANGE; xx++)
+			{
+				uint64_t ref_occu = (iz < 0) ? 
+					(ref_matchmap.units[yy][xx].occu >> iz) :
+					(ref_matchmap.units[yy][xx].occu << iz) ;
+
+				uint64_t ref_free = (iz < 0) ? 
+					(ref_matchmap.units[yy][xx].free >> iz) :
+					(ref_matchmap.units[yy][xx].free << iz) ;
+
+				for(int iy = -MATCHMAP_XY_RANGE; iy < MATCHMAP_XY_RANGE; iy++)
+				{
+					for(int ix = -MATCHMAP_XY_RANGE; ix < MATCHMAP_XY_RANGE; ix++)
+					{
+						uint64_t cmp_occu = cmp_matchmap.units[yy+iy][xx+ix].occu;
+
+						uint64_t occu_matches = cmp_occu & ref_occu;
+						uint64_t occu_on_free = cmp_occu & ref_free;
+
+						int32_t cur_n_occu_matches = count_ones_u64(occu_matches);
+						int32_t cur_n_occu_on_free = count_ones_u64(occu_on_free);
+
+						scores[iz+MATCHMAP_Z_RANGE][iy+MATCHMAP_XY_RANGE][ix+MATCHMAP_XY_RANGE].n_occu_matches += cur_n_occu_matches;
+						scores[iz+MATCHMAP_Z_RANGE][iy+MATCHMAP_XY_RANGE][ix+MATCHMAP_XY_RANGE].n_occu_on_free += cur_n_occu_on_free;
+					}
+				}
+			}
+
+		}
+	}
+
+
+	for(int metric=0; metric<2; metric++)
+	{
+		match_xyz_result_t* p_results = (metric==0)?p_results_occu_match:p_results_occu_on_free;
+
+		memset(p_results, 0, sizeof(match_xyz_result_t)*MATCHMAP_XYZ_N_RESULTS);
+
+		// result array works as binary min heap
+
+		int heap_size = 0;
+
+		for(int iz = z_start; iz < z_end; iz++)
+		{
+			for(int iy = -MATCHMAP_XY_RANGE; iy < MATCHMAP_XY_RANGE; iy++)
+			{
+				for(int ix = -MATCHMAP_XY_RANGE; ix < MATCHMAP_XY_RANGE; ix++)
+				{
+					// occu_on_free *= -1, so that larger is better
+					int32_t cur_score = (metric==0)?
+						(scores[iz+MATCHMAP_Z_RANGE][iy+MATCHMAP_XY_RANGE][ix+MATCHMAP_XY_RANGE].n_occu_matches) :
+						(-1*scores[iz+MATCHMAP_Z_RANGE][iy+MATCHMAP_XY_RANGE][ix+MATCHMAP_XY_RANGE].n_occu_matches);
+
+					if(heap_size < MATCHMAP_XYZ_N_RESULTS || cur_score > p_results[0].score)
+					{
+						if(heap_size == MATCHMAP_XYZ_N_RESULTS) // full: remove the lowest score
+						{
+							// Pop element 0
+
+							heap_size--;
+
+							// Swap:
+							{
+								match_xyz_result_t tmp = p_results[0];
+								p_results[0] = p_results[heap_size];
+								p_results[heap_size] = tmp;
+							}
+
+							#define HEAP_PARENT(i) (((i) - 1) >> 1)
+							#define HEAP_LEFT(i)   (((i) << 1) + 1)
+							#define HEAP_RIGHT(i) (((i) << 1) + 2)
+
+							int i = 0;
+							while(1)
+							{
+								int l = HEAP_LEFT(i);
+								int r = HEAP_RIGHT(i);
+								int smallest_idx = ( (l < heap_size) && (p_results[l].score < p_results[i].score) ) ? l : i;
+								if( (r < heap_size) && (p_results[r].score < p_results[smallest].score) )
+									smallest_idx = r;
+
+								if(smallest_idx == i)
+									break;
+
+								// Swap:
+								{
+									match_xyz_result_t tmp = p_results[i];
+									p_results[i] = p_results[smallest_idx];
+									p_results[smallest_idx] = tmp;
+								}
+								i = smallest_idx;
+							}
+						}
+
+						// Push
+
+						heap_size++;
+						p_results[heap_size] = (match_xyz_result_t){0, ix, iy, iz, cur_score};
+					}
+
+				}
+			}
+
+		}
+	}
+
+}
+
+
+
+static inline void output_voxel_matchmap(int x, int y, int z)
+{
+	assert(x >= 0 && x < MATCHMAP_XS-0 && y >= 0 && y < MATCHMAP_YS-0 && z > 0 && z < MATCHMAP_ZS-0);
+
+	ref_matchmap.units[y][x].free |= 1UL<<z;
+}
+
+static inline uint8_t get_voxel_matchmap(int x, int y, int z)
+{
+	assert(x >= 0 && x < MATCHMAP_XS && y >= 0 && y < MATCHMAP_YS && z > 0 && z < MATCHMAP_ZS);
+
+	return ref_matchmap.units[y][x].free;
+}
+
+#define MATCHMAP_UNIT 256 //mm
+
+#define MATCHMAP_UNCERT_Z 1
+#define MATCHMAP_UNCERT 1
+#define MATCHMAP_LINE_CONE_SLOPE_XY 60
+#define MATCHMAP_LINE_CONE_SLOPE_Z  80
+
+static void bresenham3d_matchmap(int x1, int y1, int z1, int x2, int y2, int z2)
+{	
+	int dx = x2 - x1;
+	int dy = y2 - y1;
+	int dz = z2 - z1;
+	int x_incr = (dx < 0) ? -1 : 1;
+	int y_incr = (dy < 0) ? -1 : 1;
+	int z_incr = (dz < 0) ? -1 : 1;
+
+	int l = abs(dx);
+	int m = abs(dy);
+	int n = abs(dz);
+	int dx2 = l << 1;
+	int dy2 = m << 1;
+	int dz2 = n << 1;
+	
+	// Current output voxel:
+	int px = x1;
+	int py = y1;
+	int pz = z1;
+
+	if ((l >= m) && (l >= n)) // Move full voxels in x direction
+	{
+		int err_1 = dy2 - l;
+		int err_2 = dz2 - l;
+		for(int i = 0; i < l-MATCHMAP_UNCERT; i++)
+		{
+			if(abs(px-x2) <= MATCHMAP_UNCERT || abs(py-y2) <= MATCHMAP_UNCERT || abs(pz-z2) <= MATCHMAP_UNCERT_Z)
+				return;
+
+			int rangexy = i/MATCHMAP_LINE_CONE_SLOPE_XY;
+			int rangez = i/MATCHMAP_LINE_CONE_SLOPE_Z;
+			for(int iy=-rangexy; iy<=rangexy; iy++)
+			{
+				int ix=0;
+				for(int iz=-rangez; iz<=rangez; iz++)
+				{
+					output_voxel_matchmap(px+ix, py+iy, pz+iz);
+				}
+			}
+
+			if(err_1 > 0)
+			{
+				py += y_incr;
+				err_1 -= dx2;
+			}
+			if(err_2 > 0)
+			{
+				pz += z_incr;
+				err_2 -= dx2;
+			}
+			err_1 += dy2;
+			err_2 += dz2;
+			px += x_incr;
+		}
+	} 
+	else if ((m >= l) && (m >= n)) // Move full voxels in y direction
+	{
+		int err_1 = dx2 - m;
+		int err_2 = dz2 - m;
+		for(int i = 0; i < m-MATCHMAP_UNCERT; i++)
+		{
+			if(abs(px-x2) <= MATCHMAP_UNCERT || abs(py-y2) <= MATCHMAP_UNCERT || abs(pz-z2) <= MATCHMAP_UNCERT)
+				return;
+
+			int rangexy = i/MATCHMAP_LINE_CONE_SLOPE_XY;
+			int rangez = i/MATCHMAP_LINE_CONE_SLOPE_Z;
+
+			int iy=0;
+			for(int ix=-rangexy; ix<=rangexy; ix++)
+			{
+				for(int iz=-rangez; iz<=rangez; iz++)
+				{
+					output_voxel_matchmap(px+ix, py+iy, pz+iz);
+				}
+			}
+
+
+			if (err_1 > 0)
+			{
+				px += x_incr;
+				err_1 -= dy2;
+			}
+			if (err_2 > 0)
+			{
+				pz += z_incr;
+				err_2 -= dy2;
+			}
+			err_1 += dx2;
+			err_2 += dz2;
+			py += y_incr;
+		}
+	}
+	else // Move full voxels in z direction
+	{
+		int err_1 = dy2 - n;
+		int err_2 = dx2 - n;
+		for(int i = 0; i < n-MATCHMAP_UNCERT; i++)
+		{
+			if(abs(px-x2) <= MATCHMAP_UNCERT || abs(py-y2) <= MATCHMAP_UNCERT || abs(pz-z2) <= MATCHMAP_UNCERT)
+				return;
+
+			int rangexy = i/MATCHMAP_LINE_CONE_SLOPE_XY;
+			int rangez = i/MATCHMAP_LINE_CONE_SLOPE_Z;
+			for(int iy=-rangexy; iy<=rangexy; iy++)
+			{
+				for(int ix=-rangexy; ix<=rangexy; ix++)
+				{
+					int iz=0;
+					output_voxel_matchmap(px+ix, py+iy, pz+iz);
+				}
+			}
+
+			if (err_1 > 0)
+			{
+				py += y_incr;
+				err_1 -= dz2;
+			}
+			if (err_2 > 0)
+			{
+				px += x_incr;
+				err_2 -= dz2;
+			}
+			err_1 += dy2;
+			err_2 += dx2;
+			pz += z_incr;
+		}
+	}
+}
+
+
+static void cloud_to_matchmap(tmp_cloud_t* cloud, matchmap_t* matchmap, int ref_x, int ref_y, int ref_z)
+{
+	// Trace empty space:
+	for(int p=0; p<cloud->n_points; p++)
+	{
+		int seq_id = cloud->points[p].src_seq_id;
+
+		int sx = (ray_sources[seq_id].x)/MATCHMAP_UNIT + MATCHMAP_XS/2;
+		int sy = (ray_sources[seq_id].y)/MATCHMAP_UNIT + MATCHMAP_YS/2;
+		int sz = (ray_sources[seq_id].z)/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+
+		int px = (cloud->points[p].x)/MATCHMAP_UNIT + MATCHMAP_XS/2;
+		int py = (cloud->points[p].y)/MATCHMAP_UNIT + MATCHMAP_YS/2;
+		int pz = (cloud->points[p].z)/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+
+/*
+		printf("p=%d, seq_id=%d, src=(%d,%d,%d), point=(%d,%d,%d), (%d,%d,%d)->(%d,%d,%d)\n", p, seq_id, 
+			ray_sources[seq_id].x, ray_sources[seq_id].y, ray_sources[seq_id].z,
+			cloud->points[p].x, cloud->points[p].y, cloud->points[p].z,
+			sx,sy,sz, px,py,pz);
+*/
+		bresenham3d_matchmap(sx, sy, sz, px, py, pz);
+	}
+
+	// Remove empty space around points:
+
+
 
 }
 
@@ -1488,15 +2002,16 @@ int main(int argc, char** argv)
 	int n_pose_corrs = n_firstsidx_poses + 1;
 
 
-
-	for(int i=0; i < n_firstsidx_poses; i++)
-	{
-		printf("%6d (%8d): (%+6d %+6d %+6d  %5.1f) -> (%+6.0f %+6.0f %+6.0f  %5.1f), corr (%+6d %+6d %+6d  %5.1f)\n",
-			i, firstsidx_poses[i].idx,
-			firstsidx_poses[i].pose.x, firstsidx_poses[i].pose.y, firstsidx_poses[i].pose.z, ANG32TOFDEG(firstsidx_poses[i].pose.ang),
-			fposes[i].x, fposes[i].y, fposes[i].z, RADTODEG(fposes[i].ang),
-			pose_corrs[i].pose.x, pose_corrs[i].pose.y, pose_corrs[i].pose.z, ANG32TOFDEG(pose_corrs[i].pose.ang));
-	}
+	#if 0
+		for(int i=0; i < n_firstsidx_poses; i++)
+		{
+			printf("%6d (%8d): (%+6d %+6d %+6d  %5.1f) -> (%+6.0f %+6.0f %+6.0f  %5.1f), corr (%+6d %+6d %+6d  %5.1f)\n",
+				i, firstsidx_poses[i].idx,
+				firstsidx_poses[i].pose.x, firstsidx_poses[i].pose.y, firstsidx_poses[i].pose.z, ANG32TOFDEG(firstsidx_poses[i].pose.ang),
+				fposes[i].x, fposes[i].y, fposes[i].z, RADTODEG(fposes[i].ang),
+				pose_corrs[i].pose.x, pose_corrs[i].pose.y, pose_corrs[i].pose.z, ANG32TOFDEG(pose_corrs[i].pose.ang));
+		}
+	#endif
 
 //	FILE* kakkafile = fopen("kakka.kak", "wb");
 //	fwrite(fposes, sizeof(fposes), 1, kakkafile);
@@ -1530,135 +2045,126 @@ int main(int argc, char** argv)
 				submap_metas[sm].subsubmaps[ssm].end_idx-submap_metas[sm].subsubmaps[ssm].start_idx,
 				submap_metas[sm].subsubmaps[ssm].avg_x, submap_metas[sm].subsubmaps[ssm].avg_y, submap_metas[sm].subsubmaps[ssm].avg_z);
 		}
+
+		find_possible_closures(submap_metas, n_submaps, sm);
+
+
 	}	
 
-	int64_t total_points = 0;
-	int64_t total_after_filtering = 0;
+
+	// Create and filter pointclouds
+	#if 0
+		int64_t total_points = 0;
+		int64_t total_after_filtering = 0;
 
 
-	for(int sm=0; sm<n_submaps; sm+=2)
-	{
-		if(!enable_submaps[sm])
-			continue;
-
-		printf("Optimizing pointcloud for submap %d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
-		printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
-			submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-
-		// One point cloud is created for every submap
-		// One voxel filter is used for every subsubmap.
-		// Subsubmaps are contiguous and span the whole submap - if you loop through all subsubmap indices,
-		// you have looped through the submap as well.
-
-		// Create the cloud here:
-		static tmp_cloud_t tmp_cloud;
-		tmp_cloud.n_points = 0;
-
-		for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
+		for(int sm=0; sm<n_submaps; sm+=1)
 		{
-			// And the voxfilter here:
-			static voxfilter_t tmp_voxfilter;
-			memset(&tmp_voxfilter, 0, sizeof(voxfilter_t));
-//			for(int idx=submap_metas[sm].subsubmaps[ssm].start_idx; idx < submap_metas[sm].subsubmaps[ssm].start_idx+9; idx++)
-			for(int idx=submap_metas[sm].subsubmaps[ssm].start_idx; idx < submap_metas[sm].subsubmaps[ssm].end_idx; idx++)
+			if(!enable_submaps[sm])
+				continue;
+
+			printf("Optimizing pointcloud for submap %d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+			printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
+				submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+
+			// One point cloud is created for every submap
+			// One voxel filter is used for every subsubmap.
+			// Subsubmaps are contiguous and span the whole submap - if you loop through all subsubmap indices,
+			// you have looped through the submap as well.
+
+			// Create the cloud here:
+			static tmp_cloud_t tmp_cloud;
+			tmp_cloud.n_points = 0;
+
+			for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
 			{
-				// Brute-force (todo: more efficiently) search the matching table index for pose correction
-				int cidx = -1;
-				for(int i=0; i<n_pose_corrs-1; i++)
+				// And the voxfilter here:
+				static voxfilter_t tmp_voxfilter;
+				memset(&tmp_voxfilter, 0, sizeof(voxfilter_t));
+	//			for(int idx=submap_metas[sm].subsubmaps[ssm].start_idx; idx < submap_metas[sm].subsubmaps[ssm].start_idx+9; idx++)
+				for(int idx=submap_metas[sm].subsubmaps[ssm].start_idx; idx < submap_metas[sm].subsubmaps[ssm].end_idx; idx++)
 				{
-					if(idx >= pose_corrs[i].idx && idx <= pose_corrs[i+1].idx)
+					// Brute-force (todo: more efficiently) search the matching table index for pose correction
+					int cidx = -1;
+					for(int i=0; i<n_pose_corrs-1; i++)
 					{
-						cidx = i;
-					//	printf("idx=%d; cidx=%d: pose_corrs[%d].idx = %d\n", idx, cidx, i, pose_corrs[i].idx);
-						break;
+						if(idx >= pose_corrs[i].idx && idx <= pose_corrs[i+1].idx)
+						{
+							cidx = i;
+						//	printf("idx=%d; cidx=%d: pose_corrs[%d].idx = %d\n", idx, cidx, i, pose_corrs[i].idx);
+							break;
+						}
+					}
+					assert(cidx>=0);
+
+					char fname[1024];
+					sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", idx);
+					tof_slam_set_t* tss;
+					if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
+					{
+						hw_pose_t pose0 = add_poses(tss->sets[0].pose, pose_corrs[cidx].pose);
+						hw_pose_t pose1 = add_poses(tss->sets[1].pose, pose_corrs[cidx].pose);
+						tof_to_voxfilter_and_cloud(0, 
+							tss->sets[0].ampldist, pose0,
+							idx, tss->sidx, 
+							submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+							&tmp_voxfilter, &tmp_cloud, 1800, 300);
+
+						if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
+							tof_to_voxfilter_and_cloud(1, 
+								tss->sets[1].ampldist, pose1,
+								idx, tss->sidx, 
+								submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+								NULL, &tmp_cloud, 1800, 3000);
+
+						if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
+							tof_to_voxfilter_and_cloud(0, 
+								tss->sets[1].ampldist, pose1,
+								idx, tss->sidx, 
+								submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+								NULL, &tmp_cloud, 1800, 3000);
+					}
+					else
+					{
+						printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
 					}
 				}
-				assert(cidx>=0);
 
-				char fname[1024];
-				sprintf(fname, "/home/hrst/robodev/robotsoft/tsellari/trace%08d.rb2", idx);
-				tof_slam_set_t* tss;
-				if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
-				{
-					hw_pose_t pose0 = add_poses(tss->sets[0].pose, pose_corrs[cidx].pose);
-					hw_pose_t pose1 = add_poses(tss->sets[1].pose, pose_corrs[cidx].pose);
-					tof_to_voxfilter_and_cloud(0, 
-						tss->sets[0].ampldist, pose0,
-						idx, tss->sidx, 
-						submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
-						&tmp_voxfilter, &tmp_cloud, 1800, 300);
-
-					if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
-						tof_to_voxfilter_and_cloud(1, 
-							tss->sets[1].ampldist, pose1,
-							idx, tss->sidx, 
-							submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
-							NULL, &tmp_cloud, 1800, 3000);
-
-					if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
-						tof_to_voxfilter_and_cloud(0, 
-							tss->sets[1].ampldist, pose1,
-							idx, tss->sidx, 
-							submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
-							NULL, &tmp_cloud, 1800, 3000);
-				}
-				else
-				{
-					printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
-				}
+				// Voxfilter was used for a small subsubmap - insert it to the larger submap cloud
+				voxfilter_to_cloud(&tmp_voxfilter, &tmp_cloud);
 			}
 
-			// Voxfilter was used for a small subsubmap - insert it to the larger submap cloud
-			voxfilter_to_cloud(&tmp_voxfilter, &tmp_cloud);
+			printf("---> n_points = %d ", tmp_cloud.n_points);
+			total_points += tmp_cloud.n_points;
+
+			static tmp_cloud_t tmp_cloud_filtered;
+
+			filter_cloud(&tmp_cloud, &tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+			printf("--> after filtering = %d\n", tmp_cloud_filtered.n_points);
+			total_after_filtering += tmp_cloud_filtered.n_points;
+
+
+			save_tmp_cloud(&tmp_cloud_filtered, sm);
+
+	//		po_coords_t po;
+	//		po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
+	//		load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+	//		cloud_to_voxmap(&tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+	//		cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
 		}
+		printf("Total points: %"PRIi64", after filtering %"PRIi64"\n", total_points, total_after_filtering);
 
-		printf("---> n_points = %d ", tmp_cloud.n_points);
-		total_points += tmp_cloud.n_points;
+		/*
+		Example of voxfilter data reduction: 78836630/119061330 = 0.66215 (threshold 1500)
+				                     77905961/119061330 = 0.65433 (threshold 1800)
+		*/
 
-		static tmp_cloud_t tmp_cloud_filtered;
-
-//		filter_cloud(&tmp_cloud, &tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-		printf("--> after filtering = %d\n", tmp_cloud_filtered.n_points);
-		total_after_filtering += tmp_cloud_filtered.n_points;
-
-		po_coords_t po;
-		//printf("Load %d,%d,%d\n", submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-		po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
-		load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+	#endif
 
 
-//		cloud_to_voxmap(&tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-		cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-	}
-
-
-/*
-Example of voxfilter data reduction: 78836630/119061330 = 0.66215 (threshold 1500)
-                                     77905961/119061330 = 0.65433 (threshold 1800)
-*/
-
-	printf("Total points: %"PRIi64", after filtering %"PRIi64"\n", total_points, total_after_filtering);
-
-	for(int rl = 0; rl < 4; rl++)
-	{
-		po_coords_t po = po_coords(0, 0, 10000, rl);
-		load_pages(RESOLEVELS, RESOLEVELS, po.px, po.px, po.py, po.py, po.pz, po.pz);
-		uint8_t* p_vox = get_p_voxel(po, rl);
-		*p_vox = 0x0f;
-		mark_page_changed(po.px, po.py, po.pz);
-	}
-
-	for(int rl = 0; rl < 4; rl++)
-	{
-		po_coords_t po = po_coords(2500, 4500, 10000, rl);
-		load_pages(RESOLEVELS, RESOLEVELS, po.px, po.px, po.py, po.py, po.pz, po.pz);
-		uint8_t* p_vox = get_p_voxel(po, rl);
-		*p_vox = 0x0f;
-		mark_page_changed(po.px, po.py, po.pz);
-	}
 
 
 
