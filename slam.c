@@ -475,14 +475,32 @@ void gen_pose_corrs(firstsidx_pose_t* hwposes, firstsidx_pose_t* out, int n_hwpo
 // to local magnetic fields.
 
 #define XY_ACCUM_UNCERT_BY_SUBMAP 100 // mm
-#define Z_ACCUM_UNCERT_BY_SUBMAP 50   // mm
-#define YAW_ACCUM_UNCERT_BY_SUBMAP (DEGTORAD(1))
-#define YAW_ACCUM_UNCERT_SATURATION (DEGTORAD(45))
+#define Z_ACCUM_UNCERT_BY_SUBMAP 10   // mm
+#define YAW_ACCUM_UNCERT_BY_SUBMAP (DEGTORAD(1.5))
+#define YAW_ACCUM_UNCERT_SATURATION (DEGTORAD(30))
 
 #define TRY_CLOSURE_MARGIN_XY 5000
 #define TRY_CLOSURE_MARGIN_Z  1000
 
-void match_submaps(int i_sma, int i_smb, double xy_range, double z_range, double yaw_range, int dx, int dy, int dz);
+
+// Maximum possible number of large scale loop closure scan matching results. May return fewer.
+#define N_MATCH_RESULTS 64
+
+typedef struct
+{
+	int32_t x;
+	int32_t y;
+	int32_t z;
+	float yaw;
+
+	int32_t score;
+	int32_t abscore;
+} result_t;
+
+int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
+                   double xy_range, double z_range, double yaw_range, // Matching correction ranges (mm, rad)
+                   int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
+                   result_t* results_out);
 
 void find_possible_closures(submap_meta_t* sms, int n_sms, int cur_sms)
 {
@@ -502,8 +520,8 @@ void find_possible_closures(submap_meta_t* sms, int n_sms, int cur_sms)
 			continue;
 		}
 
-		double xy_uncert = sm_dist * XY_ACCUM_UNCERT_BY_SUBMAP + 512.0;
-		double z_uncert = sm_dist * Z_ACCUM_UNCERT_BY_SUBMAP + 512.0;
+		double xy_uncert = sm_dist * XY_ACCUM_UNCERT_BY_SUBMAP + 250.0;
+		double z_uncert = sm_dist * Z_ACCUM_UNCERT_BY_SUBMAP + 100.0;
 		double yaw_uncert = sm_dist * YAW_ACCUM_UNCERT_BY_SUBMAP + DEGTORAD(1.5);
 
 		if(yaw_uncert > YAW_ACCUM_UNCERT_SATURATION)
@@ -534,7 +552,8 @@ void find_possible_closures(submap_meta_t* sms, int n_sms, int cur_sms)
 		printf("   LOOP    Cur submap %d (%d,%d,%d), possible loop closure with submap %d (%d,%d,%d), xy_uncert=%.0f, z_uncert=%.0f, dx=%d, dy=%d, dz=%d\n",
 			cur_sms, cur_x, cur_y, cur_z, i, smi_x, smi_y, smi_z, xy_uncert, z_uncert, dx, dy, dz);
 
-		match_submaps(cur_sms, i, xy_uncert, z_uncert, yaw_uncert, dx, dy, dz);
+		result_t results[N_MATCH_RESULTS];
+		match_submaps(cur_sms, i, xy_uncert, z_uncert, yaw_uncert, dx, dy, dz, results);
 	}
 }
 
@@ -822,6 +841,70 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 	return 0;
 }
 
+
+static void transform_cloud(tmp_cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
+{
+	double cosa = cos(yaw);
+	double sina = sin(yaw);
+
+	for(int p=0; p<cloud->n_points; p++)
+	{
+		double x_in = cloud->points[p].x;
+		double y_in = cloud->points[p].y;
+		double z_in = cloud->points[p].z;
+
+		double x = x_in*cosa - y_in*sina + transl_x;
+		double y = x_in*sina + y_in*cosa + transl_y;
+		double z = z_in + transl_z;
+
+		cloud->points[p].x = x;
+		cloud->points[p].y = y;
+		cloud->points[p].z = z;
+	}
+}
+
+static void transform_cloud_copy(tmp_cloud_t* cloud_in, tmp_cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
+{
+	double cosa = cos(yaw);
+	double sina = sin(yaw);
+
+	cloud_out->n_points = cloud_in->n_points;
+	for(int p=0; p<cloud_in->n_points; p++)
+	{
+		double x_in = cloud_in->points[p].x;
+		double y_in = cloud_in->points[p].y;
+		double z_in = cloud_in->points[p].z;
+
+		double x = x_in*cosa - y_in*sina + transl_x;
+		double y = x_in*sina + y_in*cosa + transl_y;
+		double z = z_in + transl_z;
+
+		cloud_out->points[p].x = x;
+		cloud_out->points[p].y = y;
+		cloud_out->points[p].z = z;
+	}
+}
+
+
+static void rotate_cloud(tmp_cloud_t* cloud, double yaw)
+{
+	double cosa = cos(yaw);
+	double sina = sin(yaw);
+
+	for(int p=0; p<cloud->n_points; p++)
+	{
+		double x_in = cloud->points[p].x;
+		double y_in = cloud->points[p].y;
+
+		double x = x_in*cosa - y_in*sina;
+		double y = x_in*sina + y_in*cosa;
+
+		cloud->points[p].x = x;
+		cloud->points[p].y = y;
+	}
+}
+
+
 /*
 #define CLOUDFLT_XS 1280
 #define CLOUDFLT_YS 1280
@@ -1061,13 +1144,13 @@ void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, in
 
 }
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint64_t occu;
 	uint64_t free;
 } ref_matchmap_unit_t;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint64_t occu;
 	uint64_t free;
@@ -1102,12 +1185,12 @@ typedef struct
 	ref_fine_matchmap_unit_t units[FINE_MATCHMAP_YS][FINE_MATCHMAP_XS];
 } ref_fine_matchmap_t;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint64_t occu;
 } cmp_matchmap_unit_t;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint64_t occu;
 } cmp_fine_matchmap_unit_t;
@@ -1196,8 +1279,8 @@ static inline int count_ones_u64(uint64_t in)
 #define MATCHMAP_Z_RANGE  12
 #endif
 
-#define FINE_MATCHMAP_XY_RANGE 8 // 1024mm
-#define FINE_MATCHMAP_Z_RANGE  2
+#define FINE_MATCHMAP_XY_RANGE 6 // 768mm
+#define FINE_MATCHMAP_Z_RANGE  1
 
 #define MATCHMAP_XYZ_N_RESULTS 64
 
@@ -1206,7 +1289,7 @@ static inline int count_ones_u64(uint64_t in)
 #define OCCU_ON_FREE_COEFF -4
 #define REL_SCORE_MULT 10000
 
-#define FINE_REL_SCORE_MULT 10000
+#define FINE_REL_SCORE_MULT 1
 
 
 typedef struct __attribute__((packed))
@@ -1225,17 +1308,16 @@ typedef struct __attribute__((packed))
 
 static void match_matchmaps_xyz(int z_start, int z_end, match_xyz_result_t* p_results)
 {
-	printf("match_matchmaps_xyz(%d, %d)... ", z_start, z_end); fflush(stdout);
+//	printf("match_matchmaps_xyz(%d, %d)... ", z_start, z_end); fflush(stdout);
 	double start_time = subsec_timestamp();
 
 	assert(z_start >= -MATCHMAP_Z_RANGE && z_end <= MATCHMAP_Z_RANGE);
 
 	// Bit counts: max 256*256*64 = 4194304 voxels (this is the maximum count for each alignment)
-	// Fits int32 with massive margin
+	// Fits int32 with massive margin, even with largish OCCU_MATCH_COEFF
 
-	// Scoring: order:[z][y][x], L2 cache or RAM acceptable
+	// Scoring: order:[z][y][x], outer [z] L2 cache or RAM acceptable
 	// fixed-z [y][x], L1 cache preferred
-	// the two score counters are next to each other, for cache coherency and 64-bit SIMD addition
 	int32_t scores[2*MATCHMAP_Z_RANGE][2*MATCHMAP_XY_RANGE][2*MATCHMAP_XY_RANGE] __attribute__((aligned(64))); 
 
 	memset(scores, 0, sizeof scores);
@@ -1253,6 +1335,10 @@ static void match_matchmaps_xyz(int z_start, int z_end, match_xyz_result_t* p_re
 				uint64_t ref_free = (iz < 0) ? 
 					(ref_matchmap.units[yy][xx].free >> (-1*iz)) :
 					(ref_matchmap.units[yy][xx].free << iz) ;
+
+				// This optimization on typical dataset: down from 3700ms to 128ms!
+				if(ref_occu == 0 && ref_free == 0)
+					continue;
 
 				for(int iy = -MATCHMAP_XY_RANGE; iy < MATCHMAP_XY_RANGE; iy++)
 				{
@@ -1359,7 +1445,57 @@ static void match_matchmaps_xyz(int z_start, int z_end, match_xyz_result_t* p_re
 
 	double end_time = subsec_timestamp();
 
-	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
+//	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
+}
+
+
+static int quick_match_matchmaps_xyz(int z_start, int z_end)
+{
+//	printf("quick_match_matchmaps_xyz(%d, %d)... ", z_start, z_end); fflush(stdout);
+//	double start_time = subsec_timestamp();
+
+	assert(z_start >= -MATCHMAP_Z_RANGE && z_end <= MATCHMAP_Z_RANGE);
+
+	int score = 0;
+
+#define Q_VOX_SKIP_X 2
+#define Q_VOX_SKIP_Y 2
+
+	int n_iz = 0;
+	for(int iz = z_start; iz < z_end; iz+=2)
+	{
+		n_iz++;
+		for(int yy = MATCHMAP_XY_RANGE+32; yy < MATCHMAP_YS-MATCHMAP_XY_RANGE-32; yy+=Q_VOX_SKIP_Y)
+		{
+			for(int xx = MATCHMAP_XY_RANGE+32; xx < MATCHMAP_XS-MATCHMAP_XY_RANGE-32; xx+=Q_VOX_SKIP_X)
+			{
+				uint64_t ref_occu = (iz < 0) ? 
+					(ref_matchmap.units[yy][xx].occu >> (-1*iz)) :
+					(ref_matchmap.units[yy][xx].occu << iz) ;
+
+				for(int iy = -MATCHMAP_XY_RANGE; iy < MATCHMAP_XY_RANGE; iy+=2)
+				{
+					for(int ix = -MATCHMAP_XY_RANGE; ix < MATCHMAP_XY_RANGE; ix+=2)
+					{
+						uint64_t cmp_occu = cmp_matchmap.units[yy+iy][xx+ix].occu;
+
+						uint64_t occu_matches = cmp_occu & ref_occu;
+
+						int32_t cur_n_occu_matches = count_ones_u64(occu_matches);
+
+						score += cur_n_occu_matches;
+					}
+				}
+			}
+
+		}
+	}
+
+//	double end_time = subsec_timestamp();
+//	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
+
+	// normalize as "average" score over full shifting range, over all voxels
+	return ((int64_t)Q_VOX_SKIP_X*(int64_t)Q_VOX_SKIP_Y*(int64_t)score)/((int64_t)MATCHMAP_XY_RANGE*(int64_t)MATCHMAP_XY_RANGE/(int64_t)n_iz); 
 }
 
 
@@ -1367,11 +1503,10 @@ static void match_matchmaps_xyz(int z_start, int z_end, match_xyz_result_t* p_re
 
 static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 {
-	printf("match_fine_matchmaps_xyz... "); fflush(stdout);
+//	printf("match_fine_matchmaps_xyz... "); fflush(stdout);
 	double start_time = subsec_timestamp();
 
 	int32_t scores[2*FINE_MATCHMAP_Z_RANGE+1][2*FINE_MATCHMAP_XY_RANGE+1][2*FINE_MATCHMAP_XY_RANGE+1] __attribute__((aligned(64))); 
-
 	memset(scores, 0, sizeof scores);
 
 	for(int iz = -FINE_MATCHMAP_Z_RANGE; iz <= FINE_MATCHMAP_Z_RANGE; iz++)
@@ -1387,6 +1522,11 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 				uint64_t ref_free = (iz < 0) ? 
 					(ref_fine_matchmap.units[yy][xx].free >> (-1*iz)) :
 					(ref_fine_matchmap.units[yy][xx].free << iz) ;
+
+				// This optimization on typical dataset: down from xxx ms to xxx ms! todo:measure
+				if(ref_occu == 0 && ref_free == 0)
+					continue;
+
 
 				for(int iy = -FINE_MATCHMAP_XY_RANGE; iy <= FINE_MATCHMAP_XY_RANGE; iy++)
 				{
@@ -1411,8 +1551,8 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 
 	// result array works as binary min heap
 
-//	static const int32_t xy_weights[FINE_MATCHMAP_XY_RANGE*2] = {42,43,44,45,46,47,48,49,50,49,48,46,44,42,40,38,36};
-//	static const int32_t z_weights[FINE_MATCHMAP_Z_RANGE*2] = {8, 9, 10, 9, 8};
+	static const int32_t xy_weights[FINE_MATCHMAP_XY_RANGE*2+1] = {54,55,56,57,58,59,60,59,58,57,56,55,54};
+	static const int32_t z_weights[FINE_MATCHMAP_Z_RANGE*2+1] = {9, 10, 9};
 
 	int heap_size = 0;
 
@@ -1425,35 +1565,7 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 				// occu_on_free *= -1, so that larger is better
 				int32_t cur_score = scores[iz+FINE_MATCHMAP_Z_RANGE][iy+FINE_MATCHMAP_XY_RANGE][ix+FINE_MATCHMAP_XY_RANGE];
 
-				//cur_score *= xy_weights[iy+FINE_MATCHMAP_XY_RANGE] * xy_weights[ix+FINE_MATCHMAP_XY_RANGE] * z_weights[iz+FINE_MATCHMAP_Z_RANGE];
-
-				#ifdef PREFILTER_FINE_COMBINE_XYZ_RESULTS
-
-					/*
-						If any of the neighbor result is better, ignore this result.
-						This reduces number of results by priorizing local maxima.
-					*/
-					if(iz > -FINE_MATCHMAP_Z_RANGE && iz < FINE_MATCHMAP_Z_RANGE-1 && iy > -FINE_MATCHMAP_XY_RANGE && iy < FINE_MATCHMAP_XY_RANGE-1 && ix > -FINE_MATCHMAP_XY_RANGE && ix < FINE_MATCHMAP_XY_RANGE-1)
-					{
-						int max_neigh = -99999;
-						for(int iiz = -1; iiz <= 1; iiz++)
-						{
-							for(int iiy = -1; iiy <= 1; iiy++)
-							{
-								for(int iix = -1; iix <= 1; iix++)
-								{
-									int32_t neigh_score = scores[iz+iiz+FINE_MATCHMAP_Z_RANGE][iy+iiy+FINE_MATCHMAP_XY_RANGE][ix+iix+FINE_MATCHMAP_XY_RANGE];
-									if(neigh_score > max_neigh)
-										max_neigh = neigh_score;
-								}
-							}
-
-						}
-
-						if(100*max_neigh > 102*cur_score)
-							continue;
-					}
-				#endif
+				cur_score *= xy_weights[iy+FINE_MATCHMAP_XY_RANGE] * xy_weights[ix+FINE_MATCHMAP_XY_RANGE] * z_weights[iz+FINE_MATCHMAP_Z_RANGE];
 
 				if(heap_size < MATCHMAP_XYZ_N_RESULTS || cur_score > p_results[0].score)
 				{
@@ -1495,7 +1607,87 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 
 	double end_time = subsec_timestamp();
 
-	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
+//	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
+}
+
+#define FINE_SMALL_XY_RANGE 2
+#define FINE_SMALL_Z_RANGE 1
+
+// Small search area, return the best only
+static match_xyz_result_t match_fine_matchmaps_xyz_small()
+{
+//	printf("match_fine_matchmaps_xyz_small... "); fflush(stdout);
+	double start_time = subsec_timestamp();
+
+	int32_t scores[2*FINE_SMALL_Z_RANGE+1][2*FINE_SMALL_XY_RANGE+1][2*FINE_SMALL_XY_RANGE+1] __attribute__((aligned(64))); 
+	memset(scores, 0, sizeof scores);
+
+
+	for(int iz = -FINE_SMALL_Z_RANGE; iz <= FINE_SMALL_Z_RANGE; iz++)
+	{
+		for(int yy = FINE_MATCHMAP_XY_RANGE; yy < FINE_MATCHMAP_YS-FINE_MATCHMAP_XY_RANGE-1; yy++)
+		{
+			for(int xx = FINE_MATCHMAP_XY_RANGE; xx < FINE_MATCHMAP_XS-FINE_MATCHMAP_XY_RANGE-1; xx++) 
+			{
+				uint64_t ref_occu = (iz < 0) ? 
+					(ref_fine_matchmap.units[yy][xx].occu >> (-1*iz)) :
+					(ref_fine_matchmap.units[yy][xx].occu << iz) ;
+
+				uint64_t ref_free = (iz < 0) ? 
+					(ref_fine_matchmap.units[yy][xx].free >> (-1*iz)) :
+					(ref_fine_matchmap.units[yy][xx].free << iz) ;
+
+				// This optimization on typical dataset: down from xxx ms to xxx ms! todo:measure
+				if(ref_occu == 0 && ref_free == 0)
+					continue;
+
+
+				for(int iy = -FINE_SMALL_XY_RANGE; iy <= FINE_SMALL_XY_RANGE; iy++)
+				{
+					for(int ix = -FINE_SMALL_XY_RANGE; ix <= FINE_SMALL_XY_RANGE; ix++)
+					{
+						uint64_t cmp_occu = cmp_fine_matchmap.units[yy+iy][xx+ix].occu;
+
+						uint64_t occu_matches = cmp_occu & ref_occu;
+						uint64_t occu_on_free = cmp_occu & ref_free;
+
+						int32_t cur_n_occu_matches = count_ones_u64(occu_matches);
+						int32_t cur_n_occu_on_free = count_ones_u64(occu_on_free);
+						int32_t cur_score = OCCU_MATCH_COEFF*cur_n_occu_matches + OCCU_ON_FREE_COEFF*cur_n_occu_on_free;
+
+						scores[iz+FINE_SMALL_Z_RANGE][iy+FINE_SMALL_XY_RANGE][ix+FINE_SMALL_XY_RANGE] += cur_score;
+
+					}
+				}
+			}
+
+		}
+	}
+
+	int32_t best_score = -999999;
+	match_xyz_result_t result = {0};
+
+	for(int iz = -FINE_SMALL_Z_RANGE; iz <= FINE_SMALL_Z_RANGE; iz++)
+	{
+		for(int iy = -FINE_SMALL_XY_RANGE; iy <= FINE_SMALL_XY_RANGE; iy++)
+		{
+			for(int ix = -FINE_SMALL_XY_RANGE; ix <= FINE_SMALL_XY_RANGE; ix++)
+			{
+				int32_t cur_score = scores[iz+FINE_SMALL_Z_RANGE][iy+FINE_SMALL_XY_RANGE][ix+FINE_SMALL_XY_RANGE];
+				if(cur_score > best_score)
+				{
+					best_score = cur_score;
+					result = (match_xyz_result_t){0, ix, iy, iz, best_score};
+				}
+			}
+		}
+	}
+
+
+	double end_time = subsec_timestamp();
+//	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
+
+	return result;
 }
 
 
@@ -1817,7 +2009,7 @@ static void bresenham3d_ref_fine_matchmap(int x1, int y1, int z1, int x2, int y2
 // Returns number of occupied voxels, for later calculation of relative score (percentage of matches)
 static int cloud_to_cmp_matchmap(tmp_cloud_t* cloud, cmp_matchmap_t* matchmap, double x_corr, double y_corr, double z_corr, double yaw_corr)
 {
-	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->n_points);
+//	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->n_points);
 
 	double cosa = cos(yaw_corr);
 	double sina = sin(yaw_corr);
@@ -1856,7 +2048,7 @@ static int cloud_to_cmp_matchmap(tmp_cloud_t* cloud, cmp_matchmap_t* matchmap, d
 
 static int cloud_to_cmp_fine_matchmap(tmp_cloud_t* cloud, cmp_fine_matchmap_t* matchmap, double x_corr, double y_corr, double z_corr, double yaw_corr)
 {
-	printf("cloud_to_cmp_fine_matchmap, adding %d points\n", cloud->n_points);
+//	printf("cloud_to_cmp_fine_matchmap, adding %d points\n", cloud->n_points);
 
 	double cosa = cos(yaw_corr);
 	double sina = sin(yaw_corr);
@@ -1893,9 +2085,9 @@ static int cloud_to_cmp_fine_matchmap(tmp_cloud_t* cloud, cmp_fine_matchmap_t* m
 		matchmap->units[py][px].occu |= 1ULL<<pz;
 	}
 
-	if(oor > cloud->n_points/5)
+	if(oor > cloud->n_points/20)
 	{
-		printf("cloud_to_cmp_fine_matchmap: WARN: over 20%% OOR points\n");
+		printf("cloud_to_cmp_fine_matchmap: WARN: over 5%% OOR points\n");
 	}
 	return vox_cnt;
 }
@@ -1905,7 +2097,7 @@ static int cloud_to_cmp_fine_matchmap(tmp_cloud_t* cloud, cmp_fine_matchmap_t* m
 
 static void cloud_to_ref_matchmap(tmp_cloud_t* cloud, ref_matchmap_t* matchmap)
 {
-	printf("cloud_to_ref_matchmap, adding %d points\n", cloud->n_points);
+//	printf("cloud_to_ref_matchmap, adding %d points\n", cloud->n_points);
 	// Trace empty space:
 	for(int p=0; p<cloud->n_points; p++)
 	{
@@ -1962,7 +2154,7 @@ static void cloud_to_ref_matchmap(tmp_cloud_t* cloud, ref_matchmap_t* matchmap)
 
 static void cloud_to_ref_fine_matchmap(tmp_cloud_t* cloud, ref_fine_matchmap_t* matchmap)
 {
-	printf("cloud_to_ref_fine_matchmap, adding %d points\n", cloud->n_points);
+//	printf("cloud_to_ref_fine_matchmap, adding %d points\n", cloud->n_points);
 	// Trace empty space:
 	for(int p=0; p<cloud->n_points; p++)
 	{
@@ -2017,23 +2209,14 @@ static void cloud_to_ref_fine_matchmap(tmp_cloud_t* cloud, ref_fine_matchmap_t* 
 
 	}
 
-	if(oor > cloud->n_points/5)
+	if(oor > cloud->n_points/20)
 	{
-		printf("cloud_to_ref_fine_matchmap: WARN: over 20%% OOR points\n");
+		printf("cloud_to_ref_fine_matchmap: WARN: over 5%% OOR points\n");
 	}
 
 }
 
-
-typedef struct
-{
-	int32_t x;
-	int32_t y;
-	int32_t z;
-	float yaw;
-
-	int32_t score;
-} result_t;
+//#include "icp.c"
 
 static int compar_scores(const void* a, const void* b)
 {
@@ -2045,11 +2228,17 @@ static int compar_scores(const void* a, const void* b)
 	return 0;
 }
 
-void match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
+
+int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
                    double xy_range, double z_range, double yaw_range, // Matching correction ranges (mm, rad)
-                   int dx, int dy, int dz) // World coordinate midpoint differences between ref and cmp
+                   int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
+                   result_t* results_out)
 {
+	memset(results_out, 0, sizeof(result_t)*N_MATCH_RESULTS);
+
 	static tmp_cloud_t sma, smb;
+
+	double start_time = subsec_timestamp();
 
 	// TODO: try removing memsets, shouldn't matter.
 	memset(&sma, 0, sizeof(tmp_cloud_t));
@@ -2067,7 +2256,6 @@ void match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	memset(&ref_matchmap, 0, sizeof(ref_matchmap));
 	cloud_to_ref_matchmap(&sma, &ref_matchmap);
 
-
 	int xy_batches = ceil(xy_range/((double)MATCHMAP_XY_RANGE*MATCHMAP_UNIT));
 	int z_batches  = ceil(z_range/((double)MATCHMAP_Z_RANGE*MATCHMAP_UNIT));
 
@@ -2083,6 +2271,9 @@ void match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	{
 		z_start = -z_range/MATCHMAP_UNIT;
 		z_end = +z_range/MATCHMAP_UNIT;
+
+		if(z_start > -1) z_start = -1;
+		if(z_end < 2) z_end = 2;
 	}
 
 	// 1 deg step is 260mm shift at 15m distance
@@ -2135,16 +2326,29 @@ void match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 					if(fabs(cx) > 15000.0 || fabs(cy) > 15000.0 || fabs(cz) > 8000.0)
 						continue;
 
+
+					/*
 					printf("  Matching %4d vs %4d: corr (%.0f, %.0f, %.0f, %.2f) shift (%.0f, %.0f, %.0f, %.2f)\n", 
 						i_sma, i_smb,
 						cur_x_corr, cur_y_corr, cur_z_corr, RADTODEG(cur_yaw_corr),
 						cx, cy, cz, RADTODEG(cur_yaw_corr));
+					*/
 
 					memset(&cmp_matchmap, 0, sizeof(cmp_matchmap));
 
 					int n_vox = cloud_to_cmp_matchmap(&smb, &cmp_matchmap, cx, cy, cz, cur_yaw_corr);
 
-					printf("%d active voxels in cmp_matchmap\n", n_vox);
+
+					//int qscore = quick_match_matchmaps_xyz(z_start, z_end);
+
+					//float qscore_ratio = (float)qscore/(float)n_vox;
+
+					//printf("qscore = %d, n_vox = %d, ratio = %.3f\n", qscore, n_vox, qscore_ratio);
+
+//					if(qscore_ratio < 0.20)
+//						continue;
+
+					//printf("%d active voxels in cmp_matchmap\n", n_vox);
 
 					match_xyz_result_t batch_results[MATCHMAP_XYZ_N_RESULTS];
 					memset(batch_results, 0, sizeof(batch_results));
@@ -2160,6 +2364,7 @@ void match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 					for(int i=0; i<MATCHMAP_XYZ_N_RESULTS; i++)
 					{
 						int cur_rel_score = (batch_results[i].score*REL_SCORE_MULT)/n_vox;
+						results[result_idx + i].abscore = batch_results[i].score;
 						//printf("i=%2d  (%+3d,%+3d,%+3d) score=%+8d, relative=%+6d\n",
 						//	i, 
 						//	batch_results[i].x_shift, batch_results[i].y_shift, batch_results[i].z_shift, batch_results[i].score, cur_rel_score);
@@ -2178,7 +2383,7 @@ void match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 	qsort(results, total_results, sizeof(result_t), compar_scores);
 
-	//#define POSTFILTER_RESULTS
+	#define POSTFILTER_RESULTS
 
 	#ifdef POSTFILTER_RESULTS
 		for(int i=0; i<total_results-1; i++)
@@ -2208,23 +2413,112 @@ void match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 		}
 	#endif
 
-	printf("total results (from %d pcs):\n", total_results);
+	int n_results = 0;
+
+
+	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
+	cloud_to_ref_fine_matchmap(&sma, &ref_fine_matchmap);
+
+
+	//printf("total results (from %d pcs):\n", total_results);
 	for(int i=0; i<total_results; i++)
 	{
-		if(results[i].score > -99999)
+		if(results[i].score > 0 && results[i].score > results[0].score/2)
 		{
-			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d\n",
-				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score);
+			//printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%+5d ..", i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore); fflush(stdout);;
+
+			const double yaw_fine_step = DEGTORAD(0.75);
+			const double yaw_fine_start = DEGTORAD(-2.25);
+			const int n_yaw_fine_steps = 7;
+
+//			const double yaw_fine_step = DEGTORAD(0.5);
+//			const double yaw_fine_start = DEGTORAD(0);
+//			const int n_yaw_fine_steps = 1;
+
+			int best_fine_relscore = -9999;
+			result_t best_result = {0};
+			for(int yaw_step = 0; yaw_step < n_yaw_fine_steps; yaw_step++)
+			{
+				double cx = -results[i].x -(double)dx;
+				double cy = -results[i].y -(double)dy;
+				double cz = -results[i].z -(double)dz;
+				double cur_yaw_corr = results[i].yaw + yaw_fine_start + (double)yaw_step*yaw_fine_step;
+
+
+				assert(fabs(cx) < 10000.0 && fabs(cy) < 10000.0 && fabs(cz) < 2000.0);
+
+				//printf("\nFine-Matching %4d vs %4d: corr (%.0f, %.0f, %.0f, %.2f) shift (%.0f, %.0f, %.0f, %.2f)\n", 
+				//	i_sma, i_smb,
+				//	0.0,0.0,0.0, RADTODEG(cur_yaw_corr),
+				//	cx, cy, cz, RADTODEG(cur_yaw_corr));
+
+				memset(&cmp_fine_matchmap, 0, sizeof(cmp_fine_matchmap));
+
+				int n_vox = cloud_to_cmp_fine_matchmap(&smb, &cmp_fine_matchmap, cx, cy, cz, cur_yaw_corr);
+
+				match_xyz_result_t fine_res = match_fine_matchmaps_xyz_small();
+
+				int fine_relscore = (fine_res.score*REL_SCORE_MULT)/n_vox;
+
+				if(fine_relscore > best_fine_relscore)
+				{
+					best_fine_relscore = fine_relscore;
+					best_result = (result_t){
+						results[i].x + fine_res.x_shift*FINE_MATCHMAP_UNIT,
+						results[i].y + fine_res.y_shift*FINE_MATCHMAP_UNIT,
+						results[i].z + fine_res.z_shift*FINE_MATCHMAP_UNIT,
+						cur_yaw_corr,
+						fine_relscore,
+						fine_res.score};
+
+				}
+			}
+
+
+			//printf(".. fine  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%+5d\n", best_result.x-results[i].x, best_result.y-results[i].y, best_result.z-results[i].z, RADTODEG(best_result.yaw-results[i].yaw), best_result.score, best_result.abscore);
+
+			results_out[n_results] = best_result; //results[i];
+
+			n_results++;
+			if(n_results >= N_MATCH_RESULTS)
+				break;
+
 		}
 	}
 
+
+	qsort(results_out, n_results, sizeof(result_t), compar_scores);
+
+
+	printf("re-sorted results (%d pcs):\n", n_results);
+	for(int i=0; i<n_results; i++)
+	{
+		printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, results_out[i].x, results_out[i].y, results_out[i].z, RADTODEG(results_out[i].yaw), results_out[i].score, results_out[i].abscore);
+	}
+
+
+	double end_time = subsec_timestamp();
+
+	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
+
+	return n_results;
 }
 
+#define FINE_MATCH_YAW_STEP  DEGTORAD(0.75)
+#define FINE_MATCH_YAW_START DEGTORAD(-3.75)
+#define FINE_MATCH_YAW_STEPS 13
 
+#define FINE_MATCH_RESULTS (FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS)
 
 void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
-                   int dx, int dy, int dz) // World coordinate midpoint differences between ref and cmp
+                        int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
+                        result_t* results)
 {
+	assert(results);
+
+	memset(results, 0, sizeof(result_t)*FINE_MATCH_RESULTS);	
+
+
 	static tmp_cloud_t sma, smb;
 
 	// TODO: try removing memsets, shouldn't matter.
@@ -2240,27 +2534,16 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	// ref_fine_matchmap includes free space, so is slower to calculate
 	// cmp_fine_matchmap only includes occupied space, and is compared against ref_fine_matchmap quickly
 
+
+
 	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
 	cloud_to_ref_fine_matchmap(&sma, &ref_fine_matchmap);
 
-
-	// 0.5 deg step is 130mm shift at 15m distance
-	double yaw_step = DEGTORAD(0.75);
-
-	double yaw_range = DEGTORAD(2.99);
-	// Round yaw_range up so that midpoint is at zero.
-	yaw_range = ceil(yaw_range/yaw_step) * yaw_step;
-	int yaw_steps = ceil(2.0*yaw_range/yaw_step) + 1;
-
-	int total_results = yaw_steps * MATCHMAP_XYZ_N_RESULTS;
-
-	result_t* results = calloc(total_results, sizeof(result_t));	
-	assert(results);
-
 	// TODO: These batches could run in parallel, in multiple threads
-	for(int cur_yaw_step = 0; cur_yaw_step < yaw_steps; cur_yaw_step++)
+	for(int cur_yaw_step = 0; cur_yaw_step < FINE_MATCH_YAW_STEPS; cur_yaw_step++)
 	{
-		double cur_yaw_corr = -yaw_range + (double)cur_yaw_step*yaw_step;
+		double cur_yaw_corr = FINE_MATCH_YAW_START + (double)cur_yaw_step*FINE_MATCH_YAW_STEP;
+//		double cur_yaw_corr = 0.0;
 		// This part is per-thread.
 
 		double cx = -(double)dx;
@@ -2269,16 +2552,16 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 		assert(fabs(cx) < 10000.0 && fabs(cy) < 10000.0 && fabs(cz) < 2000.0);
 
-		printf("  Fine-Matching %4d vs %4d: corr (%.0f, %.0f, %.0f, %.2f) shift (%.0f, %.0f, %.0f, %.2f)\n", 
-			i_sma, i_smb,
-			0.0,0.0,0.0, RADTODEG(cur_yaw_corr),
-			cx, cy, cz, RADTODEG(cur_yaw_corr));
+//		printf("  Fine-Matching %4d vs %4d: corr (%.0f, %.0f, %.0f, %.2f) shift (%.0f, %.0f, %.0f, %.2f)\n", 
+//			i_sma, i_smb,
+//			0.0,0.0,0.0, RADTODEG(cur_yaw_corr),
+//			cx, cy, cz, RADTODEG(cur_yaw_corr));
 
 		memset(&cmp_fine_matchmap, 0, sizeof(cmp_fine_matchmap));
 
 		int n_vox = cloud_to_cmp_fine_matchmap(&smb, &cmp_fine_matchmap, cx, cy, cz, cur_yaw_corr);
 
-		printf("%d active voxels in cmp_matchmap\n", n_vox);
+		//printf("%d active voxels in cmp_matchmap\n", n_vox);
 
 		match_xyz_result_t batch_results[MATCHMAP_XYZ_N_RESULTS];
 		memset(batch_results, 0, sizeof(batch_results));
@@ -2303,14 +2586,14 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 		}
 	}
 
-	qsort(results, total_results, sizeof(result_t), compar_scores);
+	qsort(results, FINE_MATCH_RESULTS, sizeof(result_t), compar_scores);
 
 	//#define FINE_POSTFILTER_RESULTS
 
 	#ifdef FINE_POSTFILTER_RESULTS
-		for(int i=0; i<total_results-1; i++)
+		for(int i=0; i<FINE_MATCH_RESULTS-1; i++)
 		{
-			for(int o=i+1; o<total_results; o++)
+			for(int o=i+1; o<FINE_MATCH_RESULTS; o++)
 			{
 				double transl_dist = sqrt( sq(results[i].x-results[o].x) + sq(results[i].y-results[o].y) + sq(results[i].z-results[o].z) );
 				double rot_dist = fabs(results[i].yaw - results[o].yaw);
@@ -2334,9 +2617,9 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 			}
 		}
 	#endif
-
-	printf("total results (from %d pcs):\n", total_results);
-	for(int i=0; i<total_results; i++)
+/*
+	printf("total results (from %d pcs):\n", FINE_MATCH_RESULTS);
+	for(int i=0; i<FINE_MATCH_RESULTS; i++)
 	{
 		if(results[i].score > -99999)
 		{
@@ -2344,6 +2627,7 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score);
 		}
 	}
+*/
 
 }
 
@@ -2369,6 +2653,7 @@ static void cloud_to_voxmap(tmp_cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 		}
 	}
 }
+
 
 static inline void cloud_insert_point(tmp_cloud_t* cloud, int seq_id, int32_t x, int32_t y, int32_t z)
 {
@@ -3037,12 +3322,29 @@ int main(int argc, char** argv)
 	#endif
 
 
-	#if 1
+	#if 0
 		// Match adjacent submaps
 
-		for(int sm=0; sm<n_submaps; sm++)
+		int32_t running_x = 0, running_y = 0, running_z = 0;
+		double running_yaw = 0.0;
+
+		static tmp_cloud_t tmp;
+
 		{
-			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+			int sm = 0;
+			load_tmp_cloud(&tmp, sm);
+			po_coords_t po;
+			po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
+			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+			cloud_to_voxmap(&tmp, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+			store_all_pages();
+		}
+
+
+		for(int sm=0; sm<5; sm++)
+		{
+/*			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
 			if(sm < n_submaps-1)
 			{
 				printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
@@ -3050,19 +3352,62 @@ int main(int argc, char** argv)
 			else
 				printf("                              ");
 
-			printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
-				submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
+			printf("  avg (%+6d %+6d %+6d) ", submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+			printf("  next (%+6d %+6d %+6d)\n", submap_metas[sm+1].avg_x, submap_metas[sm+1].avg_y, submap_metas[sm+1].avg_z);
+*/
 
 			int dx = submap_metas[sm].avg_x - submap_metas[sm+1].avg_x;
 			int dy = submap_metas[sm].avg_y - submap_metas[sm+1].avg_y;
 			int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
 
-			fine_match_submaps(sm, sm+1, dx, dy, dz);
+			result_t results[FINE_MATCH_RESULTS];
+
+			fine_match_submaps(sm, sm+1, dx, dy, dz, results);
+
+
+			int32_t x_corr = -1*results[0].x;
+			int32_t y_corr = -1*results[0].y;
+			int32_t z_corr = -1*results[0].z;
+			double yaw_corr = 1.0*results[0].yaw;
+
+//			int32_t x_corr = 0;
+//			int32_t y_corr = 0;
+//			int32_t z_corr = 0;
+//			double yaw_corr = DEGTORAD(3.0);
+
+/*
+			running_x += x_corr;
+			running_y += y_corr;
+			running_z += z_corr;
+			running_yaw += yaw_corr;
+
+			running_x += (-1*dx) * cos(running_yaw) - (-1*dy) * sin(running_yaw)  - (-1*dx);
+			running_y += (-1*dx) * sin(running_yaw) + (-1*dy) * cos(running_yaw)  - (-1*dy);
+*/
+
+			int32_t new_avg_x = submap_metas[sm+1].avg_x + running_x;
+			int32_t new_avg_y = submap_metas[sm+1].avg_y + running_y;
+			int32_t new_avg_z = submap_metas[sm+1].avg_z + running_z;
+
+			printf("%4d vs %4d Winner (%+5d, %+5d, %+5d, %+6.2f), running (%+7d, %+7d, %+7d, %+8.2f), new_avg %d, %d, %d\n",
+				sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
+
+			load_tmp_cloud(&tmp, sm+1);
+
+			rotate_cloud(&tmp, running_yaw);
+
+			po_coords_t po;
+			po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
+			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+			cloud_to_voxmap(&tmp, new_avg_x, new_avg_y, new_avg_z);
+
+			store_all_pages();
+
+
 		}
 	#endif
 
-	#if 0
+	#if 1
 		// Loop closures
 		for(int sm=0; sm<n_submaps; sm++)
 		{

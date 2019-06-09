@@ -409,3 +409,18 @@ void free_all_pages()
 	
 }
 
+void store_all_pages()
+{
+	for(int idx=0; idx < MAX_LOADED_PAGES; idx++)
+	{
+		if(page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz].loaded)
+		{
+//			printf("free_all_pages: idx=%d, (%d,%d,%d)\n", idx, 
+//				page_pointers[idx].px, page_pointers[idx].py, page_pointers[idx].pz);
+			store_page(idx);
+		}
+	}
+
+	
+}
+
