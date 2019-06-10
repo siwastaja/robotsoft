@@ -165,7 +165,7 @@ typedef struct  __attribute__((packed))
 
 #define VOXFILTER_N_SCANS 6
 
-#define MAX_SUBMAPS 16384
+#define MAX_SUBMAPS 4096
 
 int process_file(char* fname, tof_slam_set_t** tss);
 
@@ -496,66 +496,6 @@ typedef struct
 	int32_t score;
 	int32_t abscore;
 } result_t;
-
-int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
-                   double xy_range, double z_range, double yaw_range, // Matching correction ranges (mm, rad)
-                   int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
-                   result_t* results_out);
-
-void find_possible_closures(submap_meta_t* sms, int n_sms, int cur_sms)
-{
-	int cur_x = sms[cur_sms].avg_x;
-	int cur_y = sms[cur_sms].avg_y;
-	int cur_z = sms[cur_sms].avg_z;
-
-//	for(int i=0; i<n_sms; i++)
-	for(int i=0; i<cur_sms; i++)
-	{
-		// Distance of submap sequence numbers:
-		int sm_dist = abs(cur_sms - i);
-
-		// Never try to find closures between neighbors (which are trivial matches)
-		if(sm_dist < 5)
-		{
-			continue;
-		}
-
-		double xy_uncert = sm_dist * XY_ACCUM_UNCERT_BY_SUBMAP + 250.0;
-		double z_uncert = sm_dist * Z_ACCUM_UNCERT_BY_SUBMAP + 100.0;
-		double yaw_uncert = sm_dist * YAW_ACCUM_UNCERT_BY_SUBMAP + DEGTORAD(1.5);
-
-		if(yaw_uncert > YAW_ACCUM_UNCERT_SATURATION)
-			yaw_uncert = YAW_ACCUM_UNCERT_SATURATION;
-
-
-		int smi_x = sms[i].avg_x;
-		int smi_y = sms[i].avg_y;
-		int smi_z = sms[i].avg_z;
-
-		if(abs(smi_x - cur_x) > xy_uncert + TRY_CLOSURE_MARGIN_XY)
-			continue;
-
-		if(abs(smi_y - cur_y) > xy_uncert + TRY_CLOSURE_MARGIN_XY)
-			continue;
-
-		if(abs(smi_z - cur_z) > z_uncert + TRY_CLOSURE_MARGIN_Z)
-			continue;
-
-		// Submaps themselves have data around zero - (0,0,0) corresponding world coordinates are its avg_x,avg_y,avg_z.
-		// For the matcher, submap a (ref) is given as is (around 0 coordinates),
-		// submap b (cmp) is translated during matching, and difference between the avg_ coords is added on top of any
-		// running matching correction.
-		int dx = cur_x - smi_x;
-		int dy = cur_y - smi_y;
-		int dz = cur_z - smi_z;
-
-		printf("   LOOP    Cur submap %d (%d,%d,%d), possible loop closure with submap %d (%d,%d,%d), xy_uncert=%.0f, z_uncert=%.0f, dx=%d, dy=%d, dz=%d\n",
-			cur_sms, cur_x, cur_y, cur_z, i, smi_x, smi_y, smi_z, xy_uncert, z_uncert, dx, dy, dz);
-
-		result_t results[N_MATCH_RESULTS];
-		match_submaps(cur_sms, i, xy_uncert, z_uncert, yaw_uncert, dx, dy, dz, results);
-	}
-}
 
 
 
@@ -1279,7 +1219,7 @@ static inline int count_ones_u64(uint64_t in)
 #define MATCHMAP_Z_RANGE  12
 #endif
 
-#define FINE_MATCHMAP_XY_RANGE 6 // 768mm
+#define FINE_MATCHMAP_XY_RANGE 5 // 640mm
 #define FINE_MATCHMAP_Z_RANGE  1
 
 #define MATCHMAP_XYZ_N_RESULTS 64
@@ -1289,7 +1229,8 @@ static inline int count_ones_u64(uint64_t in)
 #define OCCU_ON_FREE_COEFF -4
 #define REL_SCORE_MULT 10000
 
-#define FINE_REL_SCORE_MULT 1
+#define FINE_REL_SCORE_MULT 10000
+#define FINE_REL_SCORE_DIV (60*60*10) // to balance weighing
 
 
 typedef struct __attribute__((packed))
@@ -1551,7 +1492,7 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 
 	// result array works as binary min heap
 
-	static const int32_t xy_weights[FINE_MATCHMAP_XY_RANGE*2+1] = {54,55,56,57,58,59,60,59,58,57,56,55,54};
+	static const int32_t xy_weights[FINE_MATCHMAP_XY_RANGE*2+1] = {55,56,57,58,59,60,59,58,57,56,55};
 	static const int32_t z_weights[FINE_MATCHMAP_Z_RANGE*2+1] = {9, 10, 9};
 
 	int heap_size = 0;
@@ -2323,7 +2264,7 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 					double cy = cur_y_corr - (double)dy;
 					double cz = cur_z_corr - (double)dz;
 
-					if(fabs(cx) > 15000.0 || fabs(cy) > 15000.0 || fabs(cz) > 8000.0)
+					if(fabs(cx) > 12000.0 || fabs(cy) > 12000.0 || fabs(cz) > 4000.0)
 						continue;
 
 
@@ -2423,7 +2364,10 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	//printf("total results (from %d pcs):\n", total_results);
 	for(int i=0; i<total_results; i++)
 	{
-		if(results[i].score > 0 && results[i].score > results[0].score/2)
+		if(results[i].score > 0 && 
+		   results[i].score > results[0].score/2 &&
+		   abs(results[i].x) < xy_range+200 &&
+		   abs(results[i].y) < xy_range+200)
 		{
 			//printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%+5d ..", i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore); fflush(stdout);;
 
@@ -2445,7 +2389,7 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 				double cur_yaw_corr = results[i].yaw + yaw_fine_start + (double)yaw_step*yaw_fine_step;
 
 
-				assert(fabs(cx) < 10000.0 && fabs(cy) < 10000.0 && fabs(cz) < 2000.0);
+				assert(fabs(cx) < 15000.0 && fabs(cy) < 15000.0 && fabs(cz) < 5000.0);
 
 				//printf("\nFine-Matching %4d vs %4d: corr (%.0f, %.0f, %.0f, %.2f) shift (%.0f, %.0f, %.0f, %.2f)\n", 
 				//	i_sma, i_smb,
@@ -2490,16 +2434,16 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	qsort(results_out, n_results, sizeof(result_t), compar_scores);
 
 
-	printf("re-sorted results (%d pcs):\n", n_results);
-	for(int i=0; i<n_results; i++)
-	{
-		printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, results_out[i].x, results_out[i].y, results_out[i].z, RADTODEG(results_out[i].yaw), results_out[i].score, results_out[i].abscore);
-	}
+//	printf("re-sorted results (%d pcs):\n", n_results);
+//	for(int i=0; i<n_results; i++)
+//	{
+//		printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, results_out[i].x, results_out[i].y, results_out[i].z, RADTODEG(results_out[i].yaw), results_out[i].score, results_out[i].abscore);
+//	}
 
 
 	double end_time = subsec_timestamp();
 
-	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
+//	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
 
 	return n_results;
 }
@@ -2508,15 +2452,19 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 #define FINE_MATCH_YAW_START DEGTORAD(-3.75)
 #define FINE_MATCH_YAW_STEPS 13
 
-#define FINE_MATCH_RESULTS (FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS)
+#define N_FINE_MATCH_RESULTS 16
 
-void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
+result_t adjacent_results[MAX_SUBMAPS][N_FINE_MATCH_RESULTS];
+uint8_t n_adjacent_results[MAX_SUBMAPS];
+
+int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
                         int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
-                        result_t* results)
+                        result_t* results_out)
 {
-	assert(results);
+	assert(results_out);
 
-	memset(results, 0, sizeof(result_t)*FINE_MATCH_RESULTS);	
+	static result_t results[FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS];
+	memset(results, 0, sizeof(result_t)*FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);	
 
 
 	static tmp_cloud_t sma, smb;
@@ -2573,7 +2521,7 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 		for(int i=0; i<MATCHMAP_XYZ_N_RESULTS; i++)
 		{
-			int cur_rel_score = (batch_results[i].score*FINE_REL_SCORE_MULT)/n_vox;
+			int cur_rel_score = ((int64_t)batch_results[i].score*(int64_t)FINE_REL_SCORE_MULT)/((int64_t)n_vox*(int64_t)FINE_REL_SCORE_DIV);
 			//printf("i=%2d  (%+3d,%+3d,%+3d) score=%+8d, relative=%+6d\n",
 			//	i, 
 			//	batch_results[i].x_shift, batch_results[i].y_shift, batch_results[i].z_shift, batch_results[i].score, cur_rel_score);
@@ -2583,31 +2531,32 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 			results[result_idx + i].z = batch_results[i].z_shift * FINE_MATCHMAP_UNIT;
 			results[result_idx + i].yaw = cur_yaw_corr;
 			results[result_idx + i].score = cur_rel_score;
+			results[result_idx + i].abscore = (int64_t)batch_results[i].score/(int64_t)FINE_REL_SCORE_DIV;
 		}
 	}
 
-	qsort(results, FINE_MATCH_RESULTS, sizeof(result_t), compar_scores);
+	qsort(results, FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS, sizeof(result_t), compar_scores);
 
-	//#define FINE_POSTFILTER_RESULTS
+	#define FINE_POSTFILTER_RESULTS
 
 	#ifdef FINE_POSTFILTER_RESULTS
-		for(int i=0; i<FINE_MATCH_RESULTS-1; i++)
+		for(int i=0; i<FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS-1; i++)
 		{
-			for(int o=i+1; o<FINE_MATCH_RESULTS; o++)
+			for(int o=i+1; o<FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; o++)
 			{
 				double transl_dist = sqrt( sq(results[i].x-results[o].x) + sq(results[i].y-results[o].y) + sq(results[i].z-results[o].z) );
 				double rot_dist = fabs(results[i].yaw - results[o].yaw);
 
-				// dist_number: 1 degree is like 256 millimeters
+				// dist_number: 1 degree is like 256 millimeters (0.75deg is like 192 mm)
 				double dist_number = transl_dist + RADTODEG(rot_dist)*256.0;
 
 		//		printf("i=%d, o=%d, transl_dist=%.0f  rot_dist=%.3f,  dist_number=%.0f, score[i]=%d, score[o]=%d", i, o, transl_dist, rot_dist, dist_number, results[i].score, results[o].score);
 
 				if((dist_number < 150.0) ||
-				   (dist_number < 300.0 && 103*results[o].score < 100*results[i].score) ||
-				   (dist_number < 450.0 && 106*results[o].score < 100*results[i].score) ||
-				   (dist_number < 600.0 && 110*results[o].score < 100*results[i].score) ||
-				   (dist_number < 750.0 && 115*results[o].score < 100*results[i].score))
+				   (dist_number < 300.0 && 105*results[o].score < 100*results[i].score) ||
+				   (dist_number < 450.0 && 110*results[o].score < 100*results[i].score) ||
+				   (dist_number < 600.0 && 115*results[o].score < 100*results[i].score) ||
+				   (dist_number < 750.0 && 120*results[o].score < 100*results[i].score))
 				{
 					results[o].score = -99999;
 		//			printf("  mash it!");
@@ -2617,18 +2566,35 @@ void fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 			}
 		}
 	#endif
-/*
-	printf("total results (from %d pcs):\n", FINE_MATCH_RESULTS);
-	for(int i=0; i<FINE_MATCH_RESULTS; i++)
+
+	int n_results = 0;
+	printf("total results (from %d pcs):\n", FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);
+	for(int i=0; i<FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; i++)
 	{
-		if(results[i].score > -99999)
+		if(results[i].score > 0 && results[i].score > results[0].score/2)
 		{
-			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d\n",
-				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score);
+			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d abscore=%+5d\n",
+				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore);
+
+
+			results_out[n_results] = results[i];
+			n_results++;
+			if(n_results >= N_FINE_MATCH_RESULTS)
+				break;
 		}
 	}
-*/
 
+//	assert(n_results >= 1);
+//	if(n_results == 1)
+//	{
+//		results_out[1] = results[1]; // Restore filtered-out second-best result.
+		// TODO: .score is set at -99999. Work a way to revert this.
+//		n_results++;
+//	}
+
+	assert(n_results >= 2);
+
+	return n_results;
 }
 
 
@@ -3093,6 +3059,568 @@ int process_file(char* fname, tof_slam_set_t** tss)
 
 }
 
+#define MIN_CLOSURE_LEN 5
+#define MAX_CLOSURE_LEN 256
+
+typedef struct
+{
+	int first;
+	int last;
+
+	// adjacent_corr[0] is the chosen correction from sm#first to sm#first+1, and so on
+	result_t adjacent_corr[MAX_CLOSURE_LEN];
+
+} closure_t;
+
+static void build_closure(submap_meta_t* sms, int first, int last, result_t* closure_result)
+{
+	int len = last - first;
+	assert(len >= MIN_CLOSURE_LEN && len <= MAX_CLOSURE_LEN);
+
+	static result_t adj_copy[MAX_CLOSURE_LEN][N_FINE_MATCH_RESULTS];
+
+	memcpy(adj_copy[0], adjacent_results[first], sizeof(result_t)*N_FINE_MATCH_RESULTS*len);
+
+	// Give extra weight for results that help achieving the correct yaw
+
+	float avg_yaw = closure_result->yaw / (float)len;
+
+	printf("closure_yaw = %.2f deg, avg_yaw = %.3f deg\n", RADTODEG(closure_result->yaw), RADTODEG(avg_yaw));
+
+	float yawsum = 0.0;
+	for(int i = 0; i < len; i++)
+	{
+		yawsum += adj_copy[i][0].yaw;
+	}
+
+	printf("before weighing, yawsum using best results = %.2f deg\n", RADTODEG(yawsum));
+
+/*
+	for(int i = 0; i < len; i++)
+	{
+		int n = n_adjacent_results[first+i];
+		assert(n > 0 && n <= N_FINE_MATCH_RESULTS);
+		for(int r=0; r<n; r++)
+		{
+			printf("i=%3d r=%3d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, r, adj_copy[i][r].x, adj_copy[i][r].y, adj_copy[i][r].z, RADTODEG(adj_copy[i][r].yaw), adj_copy[i][r].score, adj_copy[i][r].abscore);
+		}
+	}
+*/
+
+	/*
+		We have our chosen loop closure correction (single correction between first and last),
+		then each submap between first,last has been matched to its neighbor. For this matching,
+		we have several options.
+
+		Finding optimum combination from these begins with weighing. The end-to-end loop closure
+		yaw correction is divided per submap, then the scores that already are close to this
+		correction value is given a tiny bit of extra weight compared to other scores. In cases
+		where scores are already close, which is most of the time, this weighing yields nearly
+		the desired loop closure yaw correction; but if there is any strong disagreement in any
+		of the adjacent matchings, the small amount of weighing doesn't ruin it.
+
+		After the weighing, the likelihood of the highest scores being correct is higher.
+	*/
+	for(int i = 0; i < len; i++)
+	{
+		int n = n_adjacent_results[first+i];
+		assert(n > 0 && n <= N_FINE_MATCH_RESULTS);
+
+		for(int r = 0; r < N_FINE_MATCH_RESULTS; r++)
+		{
+			float diff = fabs(avg_yaw - adj_copy[i][r].yaw);
+			/*
+				0 deg: 1.0
+				1 deg: 0.975
+				2 deg: 0.950
+				4 deg: 0.900
+			*/
+			float weight = 1.0 - RADTODEG(diff)*0.025;
+
+			adj_copy[i][r].score = (float)adj_copy[i][r].score * weight;
+		}
+
+		qsort(adj_copy[i], n, sizeof(result_t), compar_scores);
+	}
+/*
+	printf("AFTER QSORT\n");
+	for(int i = 0; i < len; i++)
+	{
+		int n = n_adjacent_results[first+i];
+		assert(n > 0 && n <= N_FINE_MATCH_RESULTS);
+		for(int r=0; r<n; r++)
+		{
+			printf("i=%3d r=%3d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, r, adj_copy[i][r].x, adj_copy[i][r].y, adj_copy[i][r].z, RADTODEG(adj_copy[i][r].yaw), adj_copy[i][r].score, adj_copy[i][r].abscore);
+		}
+	}
+*/
+	yawsum = 0.0;
+	double zsum = 0.0;
+	for(int i = 0; i < len; i++)
+	{
+		yawsum += adj_copy[i][0].yaw;
+		zsum += adj_copy[i][0].z;
+	}
+
+	printf("after weighing, yawsum using best results = %.2f deg, \n", RADTODEG(yawsum));
+
+	assert(len > 1);
+
+	// Optimally, we would try out all combinations of different results playing together.
+	// Even though running the coordinates through is a non-intensive task, it's of course
+	// far from possible, think about even just testing 4 best results for 50-long loop closure:
+	// 4^50 = 1.3e30 combinations!
+
+	int combination[3] = {-1, -1, -1};
+
+
+	// Overridden by later code, if enabled
+	float final_residual_avg_yaw = (closure_result->yaw - yawsum) / (float)len;
+	double final_residual_avg_z = ((double)closure_result->z - zsum) / (double)len;
+
+
+#if 1
+
+	{
+		int64_t ref_sqerr = -1; // Reference cumulated matching error when every adjacent results is chosen as [0]
+		int64_t min_sqerr = INT64_MAX;
+
+		for(int cur_n0=-3; cur_n0<len; cur_n0++)
+		{
+			for(int cur_n1=cur_n0+1; cur_n1<len; cur_n1++)
+			{
+				for(int cur_n2=cur_n1+1; cur_n2<len; cur_n2++)
+				{
+					if(cur_n2 < 0 && cur_n1 < 0 && cur_n0 < 0 && ref_sqerr >= 0) // already did this
+						continue;
+
+					// Adjacent matches MUST always have at least two solutions - not checked here, assumed (assert elsewhere)
+
+					float cur_yawsum = 0.0;
+					double cur_zsum = 0.0;
+					for(int i = 0; i < len; i++)
+					{
+						int r = (i==cur_n0||i==cur_n1||i==cur_n2)?1:0;
+						cur_yawsum += adj_copy[i][r].yaw;
+						cur_zsum += adj_copy[i][r].z;
+					}
+
+					float residual_avg_yaw = (closure_result->yaw - cur_yawsum) / (float)len;
+					float residual_avg_z = ((double)closure_result->z - cur_zsum) / (float)len;
+
+					int32_t new_avg_x, new_avg_y, new_avg_z;
+					double running_x = 0.0;
+					double running_y = 0.0;
+					double running_z = 0.0;
+					double running_yaw = 0.0;
+
+					for(int i = 0; i < len; i++)
+					{
+						int r = (i==cur_n0||i==cur_n1||i==cur_n2)?1:0;
+
+						int sm = first + i;
+
+						int dx = sms[sm+1].avg_x - sms[sm].avg_x;
+						int dy = sms[sm+1].avg_y - sms[sm].avg_y;
+						int dz = sms[sm+1].avg_z - sms[sm].avg_z;
+
+						double x_corr = -1.0*adj_copy[i][r].x;
+						double y_corr = -1.0*adj_copy[i][r].y;
+						double z_corr = -1.0*((double)adj_copy[i][r].z + (double)residual_avg_z);
+						double yaw_corr = 1.0*adj_copy[i][r].yaw + residual_avg_yaw;
+
+						running_x += x_corr;
+						running_y += y_corr;
+						running_z += z_corr;
+						running_yaw += yaw_corr;
+
+						running_x += (double)(dx) * cos(running_yaw) - (double)(dy) * sin(running_yaw)  - (double)(dx);
+						running_y += (double)(dx) * sin(running_yaw) + (double)(dy) * cos(running_yaw)  - (double)(dy);
+
+						new_avg_x = sms[sm+1].avg_x + running_x;
+						new_avg_y = sms[sm+1].avg_y + running_y;
+						new_avg_z = sms[sm+1].avg_z + running_z;
+
+						//printf("i=%d, %d vs %d, using r=%d (%+5.0f, %+5.0f, %+5.0f, %+6.2f), running (%+7.0f, %+7.0f, %+7.0f, %+8.2f), new_avg %d, %d, %d\n",
+						//	i, sm, sm+1, r, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
+					}
+
+					int32_t new_dx = new_avg_x - sms[last].avg_x;
+					int32_t new_dy = new_avg_y - sms[last].avg_y;
+					int32_t new_dz = new_avg_z - sms[last].avg_z;
+
+					int32_t cdiff_x = -1*closure_result->x - new_dx;
+					int32_t cdiff_y = -1*closure_result->y - new_dy;
+					int32_t cdiff_z = -1*closure_result->z - new_dz;
+
+					int64_t sqerr = (sq((int64_t)cdiff_x) + sq((int64_t)cdiff_y) + sq((int64_t)cdiff_z));
+
+					if(cur_n2 < 0 && cur_n1 < 0 && cur_n0 < 0)
+					{
+						assert(ref_sqerr == -1); // verify that we do this only once
+						ref_sqerr = sqerr;
+					}
+
+					if(sqerr < min_sqerr)
+					{
+						min_sqerr = sqerr;
+						combination[0] = cur_n0;
+						combination[1] = cur_n1;
+						combination[2] = cur_n2;
+						final_residual_avg_yaw = residual_avg_yaw;
+						final_residual_avg_z = residual_avg_z;
+					}
+
+					//printf("----------------> n(%3d,%3d,%3d), resi_avg_yaw=%.3f, new_d (%+6d, %+6d, %+6d), closure (%+6d, %+6d, %+6d), diff (%+5d, %+5d, %+5d), err=%.0f\n",
+					//	cur_n0, cur_n1, cur_n2,
+					//	RADTODEG(residual_avg_yaw), 
+					//	new_dx, new_dy, new_dz, 
+					//	-1*closure_result->x, -1*closure_result->y, -1*closure_result->z,
+					//	cdiff_x, cdiff_y, cdiff_z, sqrt(sqerr));
+				}
+			}
+		}
+
+		assert(ref_sqerr >= 0);
+		assert(min_sqerr < INT64_MAX);
+
+		printf("BEST-------------------> Best combination: use 2nd result from (%3d,%3d,%3d), err_ref=%.0f, err=%.0f (%.2f%%)\n",
+			combination[0], combination[1], combination[2], sqrt(ref_sqerr), sqrt(min_sqerr), 100.0*sqrt(min_sqerr)/sqrt(ref_sqerr));
+
+		double remaining_err_per_submap = sqrt(min_sqerr)/len;
+		if(remaining_err_per_submap > (double)XY_ACCUM_UNCERT_BY_SUBMAP*0.8)
+		{
+			printf("BAILED OUT after 2nd result combining, remaining err per submap = %.0f mm\n", remaining_err_per_submap);
+			return -1;
+		}
+
+	}
+
+#endif
+
+	// But, we do expect that most of the time, the best match is good, and probably there is one
+	// specifically bad actor. Let's try out selecting alternative matches for one matching at a time,
+	// to find which combination of submap and its result gives biggest reduction in accumulated error.
+
+	int min_at_bad = -1;
+	int min_at_solution = -1;
+
+#if 1
+	{
+
+		int64_t ref_sqerr = -1; // Reference cumulated matching error when every adjacent results is chosen as [0]
+		int64_t min_sqerr = INT64_MAX;
+		float final_residual_avg_yaw;
+
+		for(int cur_bad=0; cur_bad<len; cur_bad++)
+		{
+			int cur_bad_n_solutions = n_adjacent_results[first+cur_bad];
+			for(int cur_solution = 0; cur_solution<cur_bad_n_solutions; cur_solution++)
+			{
+				if(cur_bad > 0 && cur_solution == 0)
+					continue; // Do the "reference" all [0] only once.
+
+				float cur_yawsum = 0.0;
+				double cur_zsum = 0.0;
+
+				for(int i = 0; i < len; i++)
+				{
+					int r = (i==cur_bad)?cur_solution:((i==combination[0]||i==combination[1]||i==combination[2])?1:0);
+					cur_yawsum += adj_copy[i][r].yaw;
+					cur_zsum += adj_copy[i][r].z;
+				}
+
+				float residual_avg_yaw = (closure_result->yaw - cur_yawsum) / (float)len;
+				float residual_avg_z = ((double)closure_result->z - cur_zsum) / (float)len;
+
+
+				int32_t new_avg_x, new_avg_y, new_avg_z;
+				double running_x = 0.0;
+				double running_y = 0.0;
+				double running_z = 0.0;
+				double running_yaw = 0.0;
+
+				for(int i = 0; i < len; i++)
+				{
+					int r = (i==cur_bad)?cur_solution:((i==combination[0]||i==combination[1]||i==combination[2])?1:0);
+
+					int sm = first + i;
+
+					int dx = sms[sm+1].avg_x - sms[sm].avg_x;
+					int dy = sms[sm+1].avg_y - sms[sm].avg_y;
+					int dz = sms[sm+1].avg_z - sms[sm].avg_z;
+
+					double x_corr = -1.0*adj_copy[i][r].x;
+					double y_corr = -1.0*adj_copy[i][r].y;
+					double z_corr = -1.0*((double)adj_copy[i][r].z + (double)residual_avg_z);
+					double yaw_corr = 1.0*adj_copy[i][r].yaw + residual_avg_yaw;
+
+					running_x += x_corr;
+					running_y += y_corr;
+					running_z += z_corr;
+					running_yaw += yaw_corr;
+
+					running_x += (double)(dx) * cos(running_yaw) - (double)(dy) * sin(running_yaw)  - (double)(dx);
+					running_y += (double)(dx) * sin(running_yaw) + (double)(dy) * cos(running_yaw)  - (double)(dy);
+
+					new_avg_x = sms[sm+1].avg_x + running_x;
+					new_avg_y = sms[sm+1].avg_y + running_y;
+					new_avg_z = sms[sm+1].avg_z + running_z;
+
+					//printf("i=%d, %d vs %d, using r=%d (%+5.0f, %+5.0f, %+5.0f, %+6.2f), running (%+7.0f, %+7.0f, %+7.0f, %+8.2f), new_avg %d, %d, %d\n",
+					//	i, sm, sm+1, r, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
+				}
+
+				int32_t new_dx = new_avg_x - sms[last].avg_x;
+				int32_t new_dy = new_avg_y - sms[last].avg_y;
+				int32_t new_dz = new_avg_z - sms[last].avg_z;
+
+				int32_t cdiff_x = -1*closure_result->x - new_dx;
+				int32_t cdiff_y = -1*closure_result->y - new_dy;
+				int32_t cdiff_z = -1*closure_result->z - new_dz;
+
+				int64_t sqerr = (sq((int64_t)cdiff_x) + sq((int64_t)cdiff_y) + sq((int64_t)cdiff_z));
+
+				if(cur_solution == 0)
+				{
+					assert(ref_sqerr == -1);
+					ref_sqerr = sqerr;
+				}
+
+				if(sqerr < min_sqerr)
+				{
+					min_sqerr = sqerr;
+					min_at_bad = cur_bad;
+					min_at_solution = cur_solution;
+					final_residual_avg_yaw = residual_avg_yaw;
+					final_residual_avg_z = residual_avg_z;
+
+				}
+
+				//printf("----------------> bad = %d, solu=%d, resi_avg_yaw=%.3f, new_d (%+6d, %+6d, %+6d), closure (%+6d, %+6d, %+6d), diff (%+5d, %+5d, %+5d), err=%.0f\n",
+				//	cur_bad, cur_solution, 
+				//	RADTODEG(residual_avg_yaw), 
+				//	new_dx, new_dy, new_dz, 
+				//	-1*closure_result->x, -1*closure_result->y, -1*closure_result->z,
+				//	cdiff_x, cdiff_y, cdiff_z, sqrt(sqerr));
+			}
+		}
+
+		assert(ref_sqerr >= 0);
+		assert(min_at_bad > -1);
+		assert(min_at_solution > -1);
+		assert(min_sqerr < INT64_MAX);
+
+		if(min_sqerr >= ref_sqerr)
+		{
+			printf("BEST-------------------> REFERENCE (all [0]) is the best\n");
+		}
+		else
+		{
+			printf("BEST-------------------> Best: bad=%d, solu=%d, err_ref=%.0f, err=%.0f (%.2f%%)\n",
+				min_at_bad, min_at_solution, sqrt(ref_sqerr), sqrt(min_sqerr), 100.0*sqrt(min_sqerr)/sqrt(ref_sqerr));
+		}
+
+		double remaining_err_per_submap = sqrt(min_sqerr)/len;
+		if(remaining_err_per_submap > (double)XY_ACCUM_UNCERT_BY_SUBMAP*0.7)
+		{
+			printf("BAILED OUT after single nth result experiment, remaining err per submap = %.0f mm\n", remaining_err_per_submap);
+			return -1;
+		}
+
+	}
+
+#endif
+
+	/*
+		Calculate residual x,y,z correction
+		If there is a closed-form solution, it's too difficult for me to find.
+		For Z, it's easy.
+		For x,y, let's just iterate.
+	*/
+
+#if 1
+
+	{
+		int64_t ref_sqerr = -1;
+		int64_t min_sqerr = INT64_MAX;
+		int min_at_x = 0;
+		int min_at_y = 0;
+
+		int32_t ref_cdiff_x = 0;
+		int32_t ref_cdiff_y = 0;
+		int32_t ref_cdiff_z = 0;
+
+
+		int32_t best_cdiff_x = 0;
+		int32_t best_cdiff_y = 0;
+		int32_t best_cdiff_z = 0;
+
+		for(int x = -XY_ACCUM_UNCERT_BY_SUBMAP; x < XY_ACCUM_UNCERT_BY_SUBMAP; x += 2)
+		{
+			for(int y = -XY_ACCUM_UNCERT_BY_SUBMAP; y < XY_ACCUM_UNCERT_BY_SUBMAP; y += 2)
+			{
+				int32_t new_avg_x, new_avg_y, new_avg_z;
+				double running_x = 0.0;
+				double running_y = 0.0;
+				double running_z = 0.0;
+				double running_yaw = 0.0;
+
+				for(int i = 0; i < len; i++)
+				{
+					int r = (i==min_at_bad)?min_at_solution:((i==combination[0]||i==combination[1]||i==combination[2])?1:0);
+
+					int sm = first + i;
+
+					int dx = sms[sm+1].avg_x - sms[sm].avg_x;
+					int dy = sms[sm+1].avg_y - sms[sm].avg_y;
+					int dz = sms[sm+1].avg_z - sms[sm].avg_z;
+
+	//					double dlen = sqrt(sq((int64_t)dx)+sq((int64_t)dy)+sq((int64_t)dz));
+	//					double unit_dx = (double)dx/dlen;
+	//					double unit_dy = (double)dy/dlen;
+	//					double unit_dz = (double)dz/dlen;
+	//				double drift_ang = atan2(dy,dx) + M_PI/2.0;
+	//				double x_drift = cos(drift_ang) * (double)dx * w;
+	//				double y_drift = sin(drift_ang) * (double)dy * w;
+	//				double x_corr = -1.0*(adj_copy[i][r].x + x_drift);
+	//				double y_corr = -1.0*(adj_copy[i][r].y + y_drift);
+
+
+					double x_corr = -1.0*(adj_copy[i][r].x + x);
+					double y_corr = -1.0*(adj_copy[i][r].y + y);
+					double z_corr = -1.0*((double)adj_copy[i][r].z + (double)final_residual_avg_z);
+					double yaw_corr = 1.0*adj_copy[i][r].yaw + final_residual_avg_yaw;
+
+					running_x += x_corr;
+					running_y += y_corr;
+					running_z += z_corr;
+					running_yaw += yaw_corr;
+
+					running_x += (double)(dx) * cos(running_yaw) - (double)(dy) * sin(running_yaw)  - (double)(dx);
+					running_y += (double)(dx) * sin(running_yaw) + (double)(dy) * cos(running_yaw)  - (double)(dy);
+
+					new_avg_x = sms[sm+1].avg_x + running_x;
+					new_avg_y = sms[sm+1].avg_y + running_y;
+					new_avg_z = sms[sm+1].avg_z + running_z;
+
+					//printf("i=%d, %d vs %d, using r=%d (%+5.0f, %+5.0f, %+5.0f, %+6.2f), running (%+7.0f, %+7.0f, %+7.0f, %+8.2f), new_avg %d, %d, %d\n",
+					//	i, sm, sm+1, r, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
+				}
+
+				int32_t new_dx = new_avg_x - sms[last].avg_x;
+				int32_t new_dy = new_avg_y - sms[last].avg_y;
+				int32_t new_dz = new_avg_z - sms[last].avg_z;
+
+				int32_t cdiff_x = -1*closure_result->x - new_dx;
+				int32_t cdiff_y = -1*closure_result->y - new_dy;
+				int32_t cdiff_z = -1*closure_result->z - new_dz;
+
+				int64_t sqerr = (sq((int64_t)cdiff_x) + sq((int64_t)cdiff_y) + sq((int64_t)cdiff_z));
+
+				if(sqerr < min_sqerr)
+				{
+					min_sqerr = sqerr;
+					min_at_x = x;
+					min_at_y = y;
+					best_cdiff_x = cdiff_x;
+					best_cdiff_y = cdiff_y;
+					best_cdiff_z = cdiff_z;
+				}
+
+				if(x == 0 && y == 0)
+				{
+					assert(ref_sqerr == -1);
+					ref_sqerr = sqerr;
+				}
+
+				//printf("---------------------> resi_avg_yaw=%.3f, new_d (%+6d, %+6d, %+6d), closure (%+6d, %+6d, %+6d), diff (%+5d, %+5d, %+5d), err=%.0f\n",
+				//	RADTODEG(final_residual_avg_yaw), 
+				//	new_dx, new_dy, new_dz, 
+				//	-1*closure_result->x, -1*closure_result->y, -1*closure_result->z,
+				//	cdiff_x, cdiff_y, cdiff_z, sqrt(sqerr));
+			}
+		}
+
+		assert(ref_sqerr >= 0);
+		assert(min_sqerr < INT64_MAX);
+
+
+		printf("BEST-W-----------------> Best: x=%+5d y=%+5d, err_ref=%.0f, err=%.0f (%.2f%%) diff (%+5d, %+5d, %+5d)\n",
+			min_at_x, min_at_y, sqrt(ref_sqerr), sqrt(min_sqerr), 100.0*sqrt(min_sqerr)/sqrt(ref_sqerr),
+			best_cdiff_x, best_cdiff_y, best_cdiff_z);
+
+
+
+	}
+
+#endif
+
+}
+
+static void find_possible_closures(submap_meta_t* sms, int cur_sms)
+{
+	int cur_x = sms[cur_sms].avg_x;
+	int cur_y = sms[cur_sms].avg_y;
+	int cur_z = sms[cur_sms].avg_z;
+
+	for(int i=0; i<cur_sms; i++)
+	{
+		// Distance of submap sequence numbers:
+		int sm_dist = cur_sms - i;
+
+		// Never try to find closures between neighbors (which are trivial matches)
+		if(sm_dist < MIN_CLOSURE_LEN || sm_dist >= MAX_CLOSURE_LEN-1)
+		{
+			continue;
+		}
+
+		double xy_uncert = sm_dist * XY_ACCUM_UNCERT_BY_SUBMAP + 500.0;
+		double z_uncert = sm_dist * Z_ACCUM_UNCERT_BY_SUBMAP + 100.0;
+		double yaw_uncert = sm_dist * YAW_ACCUM_UNCERT_BY_SUBMAP + DEGTORAD(4.5);
+
+		if(yaw_uncert > YAW_ACCUM_UNCERT_SATURATION)
+			yaw_uncert = YAW_ACCUM_UNCERT_SATURATION;
+
+
+		int smi_x = sms[i].avg_x;
+		int smi_y = sms[i].avg_y;
+		int smi_z = sms[i].avg_z;
+
+		if(abs(smi_x - cur_x) > xy_uncert + TRY_CLOSURE_MARGIN_XY)
+			continue;
+
+		if(abs(smi_y - cur_y) > xy_uncert + TRY_CLOSURE_MARGIN_XY)
+			continue;
+
+		if(abs(smi_z - cur_z) > z_uncert + TRY_CLOSURE_MARGIN_Z)
+			continue;
+
+		// Submaps themselves have data around zero - (0,0,0) corresponding world coordinates are its avg_x,avg_y,avg_z.
+		// For the matcher, submap a (ref) is given as is (around 0 coordinates),
+		// submap b (cmp) is translated during matching, and difference between the avg_ coords is added on top of any
+		// running matching correction.
+		int dx = smi_x - cur_x;
+		int dy = smi_y - cur_y;
+		int dz = smi_z - cur_z;
+
+		printf("Test loop cur_submap %d (%d,%d,%d), earlier_submap %d (%d,%d,%d), xy_uncert=%.0f, z_uncert=%.0f, dx=%d, dy=%d, dz=%d\n  --> ",
+			cur_sms, cur_x, cur_y, cur_z, i, smi_x, smi_y, smi_z, xy_uncert, z_uncert, dx, dy, dz);
+		fflush(stdout);
+
+		result_t results[N_MATCH_RESULTS];
+		int n_results = match_submaps(i, cur_sms, xy_uncert, z_uncert, yaw_uncert, dx, dy, dz, results);
+		if(n_results < 1)
+			printf("no results\n");
+		else
+		{
+			printf("%d results, best relscore=%d, abscore=%d\n", n_results, results[0].score, results[0].abscore);
+
+			build_closure(sms, i, cur_sms, &results[0]);
+		}
+	}
+}
+
 
 int main(int argc, char** argv)
 {
@@ -3205,6 +3733,7 @@ int main(int argc, char** argv)
 
 	group_submaps(submap_metas, &n_submaps, firstsidx_poses, n_firstsidx_poses, pose_corrs);
 
+	n_submaps = 30; // !!!!
 
 
 //void output_submap(int idx)
@@ -3322,28 +3851,35 @@ int main(int argc, char** argv)
 	#endif
 
 
-	#if 0
+	#if 1
 		// Match adjacent submaps
 
 		int32_t running_x = 0, running_y = 0, running_z = 0;
 		double running_yaw = 0.0;
 
-		static tmp_cloud_t tmp;
+		#if 0
+			static tmp_cloud_t tmp;
 
+			{
+				int sm = 0;
+				load_tmp_cloud(&tmp, sm);
+				po_coords_t po;
+				po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+				store_all_pages();
+			}
+		#endif
+
+
+// idea:
+// 01 12 23 34 45 56 67
+//    02 13 24 35 46 57 
+
+		for(int sm=0; sm<n_submaps-1; sm++)
 		{
-			int sm = 0;
-			load_tmp_cloud(&tmp, sm);
-			po_coords_t po;
-			po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
-			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-			cloud_to_voxmap(&tmp, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 
-			store_all_pages();
-		}
-
-
-		for(int sm=0; sm<5; sm++)
-		{
 /*			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
 			if(sm < n_submaps-1)
 			{
@@ -3360,22 +3896,21 @@ int main(int argc, char** argv)
 			int dy = submap_metas[sm].avg_y - submap_metas[sm+1].avg_y;
 			int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
 
-			result_t results[FINE_MATCH_RESULTS];
+			result_t results[N_FINE_MATCH_RESULTS];
 
-			fine_match_submaps(sm, sm+1, dx, dy, dz, results);
+			int n = fine_match_submaps(sm, sm+1, dx, dy, dz, results);
 
+			assert(n > 0);
+			assert(n <= N_FINE_MATCH_RESULTS);
+
+			memcpy(adjacent_results[sm], results, sizeof(result_t)*n);
+			n_adjacent_results[sm] = n;
 
 			int32_t x_corr = -1*results[0].x;
 			int32_t y_corr = -1*results[0].y;
 			int32_t z_corr = -1*results[0].z;
 			double yaw_corr = 1.0*results[0].yaw;
 
-//			int32_t x_corr = 0;
-//			int32_t y_corr = 0;
-//			int32_t z_corr = 0;
-//			double yaw_corr = DEGTORAD(3.0);
-
-/*
 			running_x += x_corr;
 			running_y += y_corr;
 			running_z += z_corr;
@@ -3383,7 +3918,6 @@ int main(int argc, char** argv)
 
 			running_x += (-1*dx) * cos(running_yaw) - (-1*dy) * sin(running_yaw)  - (-1*dx);
 			running_y += (-1*dx) * sin(running_yaw) + (-1*dy) * cos(running_yaw)  - (-1*dy);
-*/
 
 			int32_t new_avg_x = submap_metas[sm+1].avg_x + running_x;
 			int32_t new_avg_y = submap_metas[sm+1].avg_y + running_y;
@@ -3392,17 +3926,16 @@ int main(int argc, char** argv)
 			printf("%4d vs %4d Winner (%+5d, %+5d, %+5d, %+6.2f), running (%+7d, %+7d, %+7d, %+8.2f), new_avg %d, %d, %d\n",
 				sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
 
-			load_tmp_cloud(&tmp, sm+1);
+			#if 0
+				load_tmp_cloud(&tmp, sm+1);
+				rotate_cloud(&tmp, running_yaw);
+				po_coords_t po;
+				po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp, new_avg_x, new_avg_y, new_avg_z);
 
-			rotate_cloud(&tmp, running_yaw);
-
-			po_coords_t po;
-			po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
-			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-			cloud_to_voxmap(&tmp, new_avg_x, new_avg_y, new_avg_z);
-
-			store_all_pages();
-
+				store_all_pages();
+			#endif
 
 		}
 	#endif
@@ -3431,7 +3964,7 @@ int main(int argc, char** argv)
 					submap_metas[sm].subsubmaps[ssm].avg_x, submap_metas[sm].subsubmaps[ssm].avg_y, submap_metas[sm].subsubmaps[ssm].avg_z);
 			}
 */
-			find_possible_closures(submap_metas, n_submaps, sm);
+			find_possible_closures(submap_metas, sm);
 		}
 	#endif
 
