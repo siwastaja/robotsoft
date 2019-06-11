@@ -128,11 +128,13 @@ static void free_page(int idx)
 		//printf("rl = %d\n", rl);
 		if(page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz].loaded & (1<<rl))
 		{
-			assert(page_pointers[idx].p_voxmap[rl] != NULL);
-			//printf("page_pointers[idx].p_voxmap[rl] = %lx\n", (uint64_t)page_pointers[idx].p_voxmap[rl]);
-			deinit_voxmap(page_pointers[idx].p_voxmap[rl]);
-			free(page_pointers[idx].p_voxmap[rl]);
-			page_pointers[idx].p_voxmap[rl] = NULL;
+			//assert(page_pointers[idx].p_voxmap[rl] != NULL);
+			if(page_pointers[idx].p_voxmap[rl] != NULL)
+			{
+				deinit_voxmap(page_pointers[idx].p_voxmap[rl]);
+				free(page_pointers[idx].p_voxmap[rl]);
+				page_pointers[idx].p_voxmap[rl] = NULL;
+			}
 		}
 	}
 

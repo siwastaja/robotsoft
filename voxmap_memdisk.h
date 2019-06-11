@@ -183,7 +183,8 @@ extern page_pointer_t page_pointers[MAX_LOADED_PAGES];
 
 #include <assert.h>
 
-static inline voxmap_t* get_p_voxmap(int px, int py, int pz, int rl)
+static inline voxmap_t* get_p_voxmap(int px, int py, int pz, int rl)  __attribute__((always_inline));
+static inline voxmap_t* get_p_voxmap(int px, int py, int pz, int rl) 
 {
 	assert(px >= PX_MIN && px <= PX_MAX && py >= PY_MIN && py <= PY_MAX && pz >= PZ_MIN && pz <= PZ_MAX);
 	assert(page_metas[px][py][pz].loaded & (1<<rl));
@@ -200,6 +201,7 @@ typedef struct
 	int oz;
 } po_coords_t;
 
+static inline po_coords_t po_coords(int x, int y, int z, int rl) __attribute__((always_inline));
 static inline po_coords_t po_coords(int x, int y, int z, int rl)
 {
 	x += VOX_UNITS[rl]*VOX_XS[rl]*(MAX_PAGES_X/2);
@@ -220,6 +222,7 @@ static inline po_coords_t po_coords(int x, int y, int z, int rl)
 	return ret;
 }
 
+static inline uint8_t* get_p_voxel(po_coords_t c, int rl) __attribute__((always_inline));
 static inline uint8_t* get_p_voxel(po_coords_t c, int rl)
 {
 	if(!(c.px >= PX_MIN && c.px <= PX_MAX && c.py >= PY_MIN && c.py <= PY_MAX && c.pz >= PZ_MIN && c.pz <= PZ_MAX) ||
@@ -238,6 +241,7 @@ static inline uint8_t* get_p_voxel(po_coords_t c, int rl)
 		voxels[c.oy*VOX_XS[rl]*VOX_ZS[rl] + c.ox*VOX_ZS[rl] + c.oz];
 }
 
+static inline void mark_page_changed(int px, int py, int pz) __attribute__((always_inline));
 static inline void mark_page_changed(int px, int py, int pz)
 {
 	assert(px >= PX_MIN && px <= PX_MAX && py >= PY_MIN && py <= PY_MAX && pz >= PZ_MIN && pz <= PZ_MAX);
