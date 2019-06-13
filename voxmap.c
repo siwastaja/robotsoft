@@ -28,6 +28,26 @@
 #include <errno.h>
 #include <assert.h>
 
+#include <zlib.h>
+
+#define ZLIB_CHUNK (256*1024)
+#define ZLIB_LEVEL 2  // from 1 to 9, 9 = slowest but best compression
+
+/*
+	Compression level effect on a typical 50-submap dataset (79 pages at 4 resolutions = 316 files).
+	On Lenovo W530 laptop with SSD.
+	(Time includes loading uncompressed submap pointclouds and transforming them, which is probably around
+	10-20 sec offset.)
+
+
+	Uncompressed	757.2MB  77 sec	
+	Level 1 	 11.2MB  51 sec
+	Level 3 	 10.2MB  55 sec
+	Level 6 	  6.5MB 122 sec
+	
+	
+*/
+
 #include "voxmap.h"
 
 int init_empty_voxmap(voxmap_t* vm, int ref_x, int ref_y, int ref_z, int xs, int ys, int zs, int xy_step, int z_step)
@@ -71,7 +91,7 @@ void deinit_voxmap(voxmap_t* vm)
 }
 
 // Suggested file extension: .pluuvox
-int write_uncompressed_voxmap(voxmap_t* vm, char* fname)
+int write_voxmap(voxmap_t* vm, char* fname, int compress)
 {
 	// Recheck to avoid ridiculous file sizes, in case someone messed up after init, or forgot to init.
 	int n_bytes = vm->header.xs*vm->header.ys*vm->header.zs;
@@ -80,6 +100,8 @@ int write_uncompressed_voxmap(voxmap_t* vm, char* fname)
 		printf("ERROR: invalid number of voxels (%d x %d x %d)\n", vm->header.xs, vm->header.ys, vm->header.zs);
 		return -1;
 	}
+
+	vm->header.compression = compress?1:0;
 
 	FILE* f = fopen(fname, "wb");
 	if(!f)
@@ -95,17 +117,59 @@ int write_uncompressed_voxmap(voxmap_t* vm, char* fname)
 		return -2;
 	}
 
-	if(fwrite(vm->voxels, n_bytes, 1, f) != 1)
+	if(compress)
 	{
-		printf("ERROR: fwrite failed\n");
-		fclose(f);
-		return -2;
+		uint8_t outbuf[ZLIB_CHUNK];
+		z_stream strm;
+		strm.zalloc = Z_NULL;
+		strm.zfree = Z_NULL;
+		strm.opaque = Z_NULL;
+		if(deflateInit(&strm, ZLIB_LEVEL) != Z_OK)
+		{
+			printf("ERROR: ZLIB initialization failed\n");
+			return -1;
+		}
+		strm.avail_in = n_bytes;
+		strm.next_in = (uint8_t*)vm->voxels;
+
+		do
+		{
+			strm.avail_out = ZLIB_CHUNK;
+			strm.next_out = outbuf;
+
+			int ret = deflate(&strm, Z_FINISH);
+			assert(ret != Z_STREAM_ERROR);
+
+			int produced = ZLIB_CHUNK - strm.avail_out;
+
+			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
+			{
+				printf("ERROR: fwrite failed\n");
+				deflateEnd(&strm);
+				fclose(f);
+				return -2;
+			}
+		} while(strm.avail_out == 0);
+
+		assert(strm.avail_in == 0);
+
+		deflateEnd(&strm);
+	}
+	else
+	{
+		if(fwrite(vm->voxels, n_bytes, 1, f) != 1)
+		{
+			printf("ERROR: fwrite failed\n");
+			fclose(f);
+			return -2;
+		}
 	}
 
 	fclose(f);
 
 	return 0;
 }
+
 
 /*
 Suggested file extension: .pluuvox
@@ -117,7 +181,7 @@ Usage:
 	deinit_voxmap(&vm); // Free memory
 	// in this example, vm was directly in stack. If it was malloc'd, free it manually.
 */
-int read_uncompressed_voxmap(voxmap_t* vm, char* fname)
+int read_voxmap(voxmap_t* vm, char* fname)
 {
 	FILE* f = fopen(fname, "rb");
 	if(!f)
@@ -176,11 +240,93 @@ int read_uncompressed_voxmap(voxmap_t* vm, char* fname)
 		abort();
 	}
 
-	if(fread(vm->voxels, n_bytes, 1, f) != 1)
+	if(vm->header.compression == 0)
 	{
-		printf("ERROR: fread failed - partial or corrupt file?\n");
-		free(vm->voxels);
-		vm->voxels = NULL;
+		if(fread(vm->voxels, n_bytes, 1, f) != 1)
+		{
+			printf("ERROR: fread failed - partial or corrupt file?\n");
+			free(vm->voxels);
+			vm->voxels = NULL;
+			fclose(f);
+			return -2;
+		}
+	}
+	else if(vm->header.compression == 1) // ZLIB
+	{
+		uint8_t inbuf[ZLIB_CHUNK];
+		z_stream strm;
+		strm.zalloc = Z_NULL;
+		strm.zfree = Z_NULL;
+		strm.opaque = Z_NULL;
+		strm.avail_in = 0;
+		strm.next_in = Z_NULL;
+
+		if(inflateInit(&strm) != Z_OK)
+		{
+			printf("ERROR: ZLIB initialization failed\n");
+			free(vm->voxels);
+			vm->voxels = NULL;
+			fclose(f);
+			return -1;
+		}
+
+		int got_bytes = 0;
+		int bytes_left = n_bytes;
+		int ret = 0;
+		do
+		{
+			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
+			if(ferror(f))
+			{
+				printf("ERROR reading voxmap input file\n");
+				inflateEnd(&strm);
+				free(vm->voxels);
+				vm->voxels = NULL;
+				fclose(f);
+				return -1;
+			}
+			if(strm.avail_in == 0)
+				break;
+
+			strm.next_in = inbuf;
+
+			do
+			{
+				strm.avail_out = bytes_left;
+				strm.next_out = (uint8_t*)vm->voxels + got_bytes;
+
+				ret = inflate(&strm, Z_FINISH);
+				assert(ret != Z_STREAM_ERROR);
+
+				switch(ret)
+				{
+					case Z_NEED_DICT:
+					case Z_DATA_ERROR:
+					case Z_MEM_ERROR:
+					{
+						printf("ERROR: voxmap input file decompression error, inflate() returned %d\n", ret);
+						inflateEnd(&strm);
+						free(vm->voxels);
+						vm->voxels = NULL;
+						fclose(f);
+						return -1;
+					}
+					default: break;
+				}
+
+				got_bytes += bytes_left - strm.avail_out;
+
+			} while(strm.avail_out == 0);
+		} while(ret != Z_STREAM_END);
+
+		inflateEnd(&strm);
+
+	}
+	else
+	{
+		printf("ERROR: illegal compression field in pluvox header, corrupted file or new, unsupported compression?\n");
+			free(vm->voxels);
+			vm->voxels = NULL;
 		fclose(f);
 		return -2;
 	}
@@ -189,9 +335,5 @@ int read_uncompressed_voxmap(voxmap_t* vm, char* fname)
 
 	return 0;
 }
-
-
-
-
 
 

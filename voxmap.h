@@ -88,6 +88,8 @@ typedef struct  __attribute__ ((packed))
 {
 	uint16_t magic; // 0xAA13
 	uint16_t api_version; // Currently 0x0420
+	uint8_t  compression; // 0 = uncompressed; 1 = data is zlib compressed (header is uncompressed)
+	uint8_t  dummy;
 
 	// Location of the first [0,0,0] voxel in the world coordinates:
 	int32_t ref_x_mm;
@@ -103,7 +105,6 @@ typedef struct  __attribute__ ((packed))
 	uint16_t xs;
 	uint16_t ys;
 	uint16_t zs;
-
 
 } voxmap_header_t;
 
@@ -136,6 +137,6 @@ typedef struct  __attribute__ ((packed))
 
 int init_empty_voxmap(voxmap_t* vm, int ref_x, int ref_y, int ref_z, int xs, int ys, int zs, int xy_step, int z_step);
 void deinit_voxmap(voxmap_t* vm);
-int write_uncompressed_voxmap(voxmap_t* vm, char* fname);
-int read_uncompressed_voxmap(voxmap_t* vm, char* fname);
+int write_voxmap(voxmap_t* vm, char* fname, int compress);
+int read_voxmap(voxmap_t* vm, char* fname);
 

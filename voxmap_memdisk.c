@@ -30,6 +30,8 @@
 #include "voxmap.h"
 #include "voxmap_memdisk.h"
 
+int mode_compression = 1;
+
 static uint64_t cur_timestamp;
 
 page_meta_t page_metas[MAX_PAGES_X][MAX_PAGES_Y][MAX_PAGES_Z];
@@ -38,7 +40,7 @@ page_pointer_t page_pointers[MAX_LOADED_PAGES];
 
 char* gen_fname(char* dir, int px, int py, int pz, int resolevel, char* buf)
 {
-	int snprintf_ret = snprintf(buf, 2048, "%s/voxmap_x%d_y%d_z%d_r%d.pluuvox", dir, px, py, pz, resolevel);
+	int snprintf_ret = snprintf(buf, 2048, "%s/voxmap_x%d_y%d_z%d_r%d.pluvox", dir, px, py, pz, resolevel);
 	assert(snprintf_ret < 2048);
 	return buf;
 }
@@ -80,7 +82,7 @@ static void store_page(int idx)
 		{
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);
 			//printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
-			write_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf));			
+			write_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf), mode_compression);
 		}
 	}
 }
@@ -106,7 +108,7 @@ static int alloc_read_page_single_rl(int idx, int rl)
 		abort();
 	}
 
-	int ret = read_uncompressed_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf));
+	int ret = read_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf));
 
 	if(ret >= 0)
 	{
