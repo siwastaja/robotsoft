@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <time.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #define DEFINE_API_VARIABLES
 #include "api_board_to_soft.h"
@@ -161,6 +162,41 @@ typedef struct  __attribute__((packed))
 	subsubmap_meta_t subsubmaps[MAX_SUBSUBMAPS];
 
 } submap_meta_t;
+
+
+int save_submap_metas(submap_meta_t* smm, uint32_t n_submaps)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "submap_metas.bin");
+	FILE* f = fopen(fname, "wb");
+	assert(f);
+
+	assert(fwrite(&n_submaps, sizeof(uint32_t), 1, f) == 1);
+	assert(fwrite(smm, sizeof(submap_meta_t), n_submaps, f) == n_submaps);
+
+	fclose(f);
+	return 0;
+}
+
+int load_submap_metas(submap_meta_t* smm, uint32_t* n_submaps)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "submap_metas.bin");
+	FILE* f = fopen(fname, "rb");
+	assert(f);
+
+	uint32_t n_submaps_file = 0;
+	assert(fread(&n_submaps_file, sizeof(uint32_t), 1, f) == 1);
+
+	assert(n_submaps_file > 0);
+
+	assert(fread(smm, sizeof(submap_meta_t), n_submaps_file, f) == n_submaps_file);
+
+	*n_submaps = n_submaps_file;
+
+	fclose(f);
+	return 0;
+}
 
 
 #define VOXFILTER_N_SCANS 6
@@ -474,10 +510,10 @@ void gen_pose_corrs(firstsidx_pose_t* hwposes, firstsidx_pose_t* out, int n_hwpo
 // Accumulating yaw error is eventually limited by compass, but compass will be inaccurate and subject
 // to local magnetic fields.
 
-#define XY_ACCUM_UNCERT_BY_SUBMAP 80 // mm
-#define Z_ACCUM_UNCERT_BY_SUBMAP 5   // mm
-#define YAW_ACCUM_UNCERT_BY_SUBMAP (DEGTORAD(1.3))
-#define YAW_ACCUM_UNCERT_SATURATION (DEGTORAD(25))
+#define XY_ACCUM_UNCERT_BY_SUBMAP 100 // mm
+#define Z_ACCUM_UNCERT_BY_SUBMAP 1   // mm
+#define YAW_ACCUM_UNCERT_BY_SUBMAP (DEGTORAD(1.8))
+#define YAW_ACCUM_UNCERT_SATURATION (DEGTORAD(45))
 
 #define TRY_CLOSURE_MARGIN_XY 5000
 #define TRY_CLOSURE_MARGIN_Z  1000
@@ -502,7 +538,7 @@ typedef struct
 #define TRACK_MIN(invar_, minvar_) do{if((invar_) < (minvar_)) (minvar_) = (invar_);}while(0)
 #define TRACK_MAX(invar_, maxvar_) do{if((invar_) > (maxvar_)) (maxvar_) = (invar_);}while(0)
 
-void group_submaps(submap_meta_t* smm_out, int* n_smm_out, firstsidx_pose_t* fsp, int n_fsp, firstsidx_pose_t* pose_corrs)
+void group_submaps(submap_meta_t* smm_out, uint32_t* n_smm_out, firstsidx_pose_t* fsp, int n_fsp, firstsidx_pose_t* pose_corrs)
 {
 	if(n_fsp < 1)
 	{
@@ -985,7 +1021,7 @@ static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 				return;
 
 			int rangexy = i/LINE_CONE_SLOPE_XY;
-			int rangez = i/LINE_CONE_SLOPE_Z;
+			//int rangez = i/LINE_CONE_SLOPE_Z;
 			for(int iy=-rangexy; iy<=rangexy; iy++)
 			{
 				for(int ix=-rangexy; ix<=rangexy; ix++)
@@ -1211,12 +1247,12 @@ static inline int count_ones_u64(uint64_t in)
 // z_range is not limited by architecture, just to avoid clipping (so should be much smaller than MATCHMAP_ZS/2, i.e. 64/2)
 #ifdef RASPI3 
 #define MATCHMAP_XY_RANGE 12 // 9216 bytes out of 16384 L1 cache
-#define MATCHMAP_Z_RANGE  12
+#define MATCHMAP_Z_RANGE  4
 #endif
 
 #ifdef ODROID_XU4
 #define MATCHMAP_XY_RANGE 20 // 25600 bytes out of 32768 L1 cache
-#define MATCHMAP_Z_RANGE  12
+#define MATCHMAP_Z_RANGE  4
 #endif
 
 #define FINE_MATCHMAP_XY_RANGE 5 // 640mm
@@ -1250,7 +1286,7 @@ typedef struct __attribute__((packed))
 static void match_matchmaps_xyz(int z_start, int z_end, match_xyz_result_t* p_results)
 {
 //	printf("match_matchmaps_xyz(%d, %d)... ", z_start, z_end); fflush(stdout);
-	double start_time = subsec_timestamp();
+//	double start_time = subsec_timestamp();
 
 	assert(z_start >= -MATCHMAP_Z_RANGE && z_end <= MATCHMAP_Z_RANGE);
 
@@ -1384,8 +1420,7 @@ static void match_matchmaps_xyz(int z_start, int z_end, match_xyz_result_t* p_re
 
 	}
 
-	double end_time = subsec_timestamp();
-
+	//double end_time = subsec_timestamp();
 //	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
 }
 
@@ -1445,7 +1480,7 @@ static int quick_match_matchmaps_xyz(int z_start, int z_end)
 static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 {
 //	printf("match_fine_matchmaps_xyz... "); fflush(stdout);
-	double start_time = subsec_timestamp();
+//	double start_time = subsec_timestamp();
 
 	int32_t scores[2*FINE_MATCHMAP_Z_RANGE+1][2*FINE_MATCHMAP_XY_RANGE+1][2*FINE_MATCHMAP_XY_RANGE+1] __attribute__((aligned(64))); 
 	memset(scores, 0, sizeof scores);
@@ -1546,7 +1581,7 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 
 	}
 
-	double end_time = subsec_timestamp();
+//	double end_time = subsec_timestamp();
 
 //	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
 }
@@ -1558,7 +1593,7 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 static match_xyz_result_t match_fine_matchmaps_xyz_small()
 {
 //	printf("match_fine_matchmaps_xyz_small... "); fflush(stdout);
-	double start_time = subsec_timestamp();
+//	double start_time = subsec_timestamp();
 
 	int32_t scores[2*FINE_SMALL_Z_RANGE+1][2*FINE_SMALL_XY_RANGE+1][2*FINE_SMALL_XY_RANGE+1] __attribute__((aligned(64))); 
 	memset(scores, 0, sizeof scores);
@@ -1625,7 +1660,7 @@ static match_xyz_result_t match_fine_matchmaps_xyz_small()
 	}
 
 
-	double end_time = subsec_timestamp();
+//	double end_time = subsec_timestamp();
 //	printf("took %.2f ms\n", (end_time-start_time)*1000.0);
 
 	return result;
@@ -1769,7 +1804,7 @@ static void bresenham3d_ref_matchmap(int x1, int y1, int z1, int x2, int y2, int
 				return;
 
 			int rangexy = i/MATCHMAP_LINE_CONE_SLOPE_XY;
-			int rangez = i/MATCHMAP_LINE_CONE_SLOPE_Z;
+			//int rangez = i/MATCHMAP_LINE_CONE_SLOPE_Z;
 			for(int iy=-rangexy; iy<=rangexy; iy++)
 			{
 				for(int ix=-rangexy; ix<=rangexy; ix++)
@@ -1901,7 +1936,7 @@ static void bresenham3d_ref_fine_matchmap(int x1, int y1, int z1, int x2, int y2
 				return;
 
 			int rangexy = i/FINE_MATCHMAP_LINE_CONE_SLOPE_XY;
-			int rangez = i/FINE_MATCHMAP_LINE_CONE_SLOPE_Z;
+			//int rangez = i/FINE_MATCHMAP_LINE_CONE_SLOPE_Z;
 			for(int iy=-rangexy; iy<=rangexy; iy++)
 			{
 				for(int ix=-rangexy; ix<=rangexy; ix++)
@@ -2232,6 +2267,8 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	result_t* results = calloc(total_results, sizeof(result_t));	
 	assert(results);
 
+	printf("xy_batches=%d, z_batches=%d (%d..%d) --> ", xy_batches, z_batches, z_start, z_end); fflush(stdout);
+
 	// TODO: These batches could run in parallel, in multiple threads
 	for(int cur_yaw_step = 0; cur_yaw_step < yaw_steps; cur_yaw_step++)
 	{
@@ -2264,7 +2301,7 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 					double cy = cur_y_corr - (double)dy;
 					double cz = cur_z_corr - (double)dz;
 
-					if(fabs(cx) > 12000.0 || fabs(cy) > 12000.0 || fabs(cz) > 4000.0)
+					if(fabs(cx) > 12000+(MATCHMAP_XY_RANGE*MATCHMAP_UNIT) || fabs(cy) > 12000+(MATCHMAP_XY_RANGE*MATCHMAP_UNIT) || fabs(cz) > 4000+(MATCHMAP_Z_RANGE*MATCHMAP_UNIT))
 						continue;
 
 
@@ -2455,8 +2492,9 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 	double end_time = subsec_timestamp();
 
-//	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
+	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
 
+	free(results);
 	return n_results;
 }
 
@@ -2466,8 +2504,59 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 #define N_FINE_MATCH_RESULTS 16
 
-result_t adjacent_results[MAX_SUBMAPS][N_FINE_MATCH_RESULTS];
-int n_adjacent_results[MAX_SUBMAPS];
+typedef struct __attribute__((packed))
+{
+	int32_t n_results;
+	result_t results[N_FINE_MATCH_RESULTS];
+} adjacent_t;
+
+
+adjacent_t adjacent_matches[MAX_SUBMAPS];
+
+int save_adjacent_matches(uint32_t n_submaps)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "adjacent_matches.bin");
+	FILE* f = fopen(fname, "wb");
+	assert(f);
+
+	assert(fwrite(&n_submaps, sizeof(uint32_t), 1, f) == 1);
+	assert(fwrite(adjacent_matches, sizeof(adjacent_t), n_submaps, f) == n_submaps);
+
+	fclose(f);
+	return 0;
+}
+
+int load_adjacent_matches(uint32_t n_submaps)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "adjacent_matches.bin");
+	FILE* f = fopen(fname, "rb");
+	assert(f);
+
+	uint32_t n_submaps_file = 0;
+	assert(fread(&n_submaps_file, sizeof(uint32_t), 1, f) == 1);
+
+	assert(n_submaps_file > 0);
+
+	if(n_submaps_file < n_submaps)
+	{
+		printf("ERROR: load_adjacent_matches: adjacent match file has too few submaps. Please rerun the adjacent matching.\n");
+		abort();
+	}
+
+	if(n_submaps_file > n_submaps)
+	{
+		printf("INFO: adjacent match file has extra submaps. Ignoring any excess.\n");
+	}
+
+	assert(fread(adjacent_matches, sizeof(adjacent_t), n_submaps, f) == n_submaps);
+
+	fclose(f);
+	return 0;
+}
+
+
 
 int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
                         int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
@@ -2812,9 +2901,9 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 
 		int32_t nearfield_avg_dist = 0;
 		int nearfield_avg_n = 0;
-		for(int py=10; py<TOF_YS-10; py++)
+		for(volatile int py=10; py<TOF_YS-10; py++)
 		{
-			for(int px=50; px<TOF_XS-50; px++)
+			for(volatile int px=50; px<TOF_XS-50; px++)
 			{
 				int32_t dist = ampldist[(py)*TOF_XS+(px)]&DIST_MASK;
 
@@ -2822,13 +2911,14 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 
 				if(dist == DIST_UNDEREXP) dist = 2000>>DIST_SHIFT;
 
-				nearfield_avg_dist += dist; // -O3 segfaults here for no apparent reason
+				nearfield_avg_dist += dist; // -O3 segfaults here for no apparent reason - defining loop variables volatile prevents buggy optimization.
 				nearfield_avg_n++;
 			}
 		}	
 
 		nearfield_avg_dist /= nearfield_avg_n;
 		nearfield_avg_dist <<= DIST_SHIFT;
+
 
 
 		// x_ignore: 0 at 1000mm, 66.6 at 0mm
@@ -2855,6 +2945,7 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 	//	printf("nearfield_avg_dist = %d, x_ignore=%d, y_ignore=%d\n", nearfield_avg_dist, x_ignore, y_ignore);
 	}
 
+	//printf("x_ignore=%d y_ignore=%d\n", x_ignore, y_ignore);
 	// end kludge
 
 	for(int py=y_ignore; py<TOF_YS-y_ignore; py++)
@@ -3074,26 +3165,66 @@ int process_file(char* fname, tof_slam_set_t** tss)
 #define MIN_CLOSURE_LEN 5
 #define MAX_CLOSURE_LEN 256
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	int32_t first;
 	int32_t last;
 
-	// adjacent_corr[0] is the chosen correction from sm#first to sm#first+1, and so on
-	result_t adjacent_corr[MAX_CLOSURE_LEN];
+	// corrs[0] is the chosen correction from sm#first to sm#first+1, and so on
+	result_t corrs[MAX_CLOSURE_LEN];
+	// Original direct match from first to last
+	result_t match;
 
 	int32_t score;
 
 } closure_t;
+
+#define MAX_CLOSURES 256
+
+int save_closures(closure_t* closures, uint32_t n_closures)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "closures.bin");
+	FILE* f = fopen(fname, "wb");
+	assert(f);
+
+	assert(fwrite(&n_closures, sizeof(uint32_t), 1, f) == 1);
+	assert(fwrite(closures, sizeof(closure_t), n_closures, f) == n_closures);
+
+	fclose(f);
+	return 0;
+}
+
+int load_closures(closure_t* closures, uint32_t* n_closures)
+{
+	char fname[1024];
+	snprintf(fname, 1024, "closures.bin");
+	FILE* f = fopen(fname, "rb");
+	if(!f)
+		return -1;
+
+	uint32_t n_closures_file = 0;
+	assert(fread(&n_closures_file, sizeof(uint32_t), 1, f) == 1);
+
+	assert(n_closures_file < MAX_CLOSURES);
+
+	assert(fread(closures, sizeof(closure_t), n_closures_file, f) == n_closures_file);
+
+	*n_closures = n_closures_file;
+
+	fclose(f);
+	return 0;
+}
+
 
 static int build_closure(submap_meta_t* sms, int first, int last, result_t* closure_result, closure_t* closure_out)
 {
 	int len = last - first;
 	assert(len >= MIN_CLOSURE_LEN && len <= MAX_CLOSURE_LEN);
 
-	static result_t adj_copy[MAX_CLOSURE_LEN][N_FINE_MATCH_RESULTS];
+	static adjacent_t adj_copy[MAX_CLOSURE_LEN];
 
-	memcpy(adj_copy[0], adjacent_results[first], sizeof(result_t)*N_FINE_MATCH_RESULTS*len);
+	memcpy(adj_copy, &adjacent_matches[first], sizeof(adjacent_t)*len);
 
 	// Give extra weight for results that help achieving the correct yaw
 
@@ -3102,21 +3233,21 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 //	printf("closure_yaw = %.2f deg, avg_yaw = %.3f deg\n", RADTODEG(closure_result->yaw), RADTODEG(avg_yaw));
 
 	float yawsum = 0.0;
-	for(int i = 0; i < len; i++)
-	{
-		yawsum += adj_copy[i][0].yaw;
-	}
+//	for(int i = 0; i < len; i++)
+//	{
+//		yawsum += adj_copy[i].results[0].yaw;
+//	}
 
 //	printf("before weighing, yawsum using best results = %.2f deg\n", RADTODEG(yawsum));
 
 /*
 	for(int i = 0; i < len; i++)
 	{
-		int n = n_adjacent_results[first+i];
+		int n = adj_copy[i].n_results;
 		assert(n > 0 && n <= N_FINE_MATCH_RESULTS);
 		for(int r=0; r<n; r++)
 		{
-			printf("i=%3d r=%3d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, r, adj_copy[i][r].x, adj_copy[i][r].y, adj_copy[i][r].z, RADTODEG(adj_copy[i][r].yaw), adj_copy[i][r].score, adj_copy[i][r].abscore);
+			printf("i=%3d r=%3d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, r, adj_copy[i].results[r].x, adj_copy[i].results[r].y, adj_copy[i].results[r].z, RADTODEG(adj_copy[i].results[r].yaw), adj_copy[i].results[r].score, adj_copy[i].results[r].abscore);
 		}
 	}
 */
@@ -3137,12 +3268,12 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 	*/
 	for(int i = 0; i < len; i++)
 	{
-		int n = n_adjacent_results[first+i];
+		int n = adj_copy[i].n_results;
 		assert(n > 0 && n <= N_FINE_MATCH_RESULTS);
 
 		for(int r = 0; r < N_FINE_MATCH_RESULTS; r++)
 		{
-			float diff = fabs(avg_yaw - adj_copy[i][r].yaw);
+			float diff = fabs(avg_yaw - adj_copy[i].results[r].yaw);
 			/*
 				0 deg: 1.0
 				1 deg: 0.975
@@ -3151,20 +3282,20 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 			*/
 			float weight = 1.0 - RADTODEG(diff)*0.025;
 
-			adj_copy[i][r].score = (float)adj_copy[i][r].score * weight;
+			adj_copy[i].results[r].score = (float)adj_copy[i].results[r].score * weight;
 		}
 
-		qsort(adj_copy[i], n, sizeof(result_t), compar_scores);
+		qsort(adj_copy[i].results, n, sizeof(result_t), compar_scores);
 	}
 /*
 	printf("AFTER QSORT\n");
 	for(int i = 0; i < len; i++)
 	{
-		int n = n_adjacent_results[first+i];
+		int n = adj_copy[i].n_results;
 		assert(n > 0 && n <= N_FINE_MATCH_RESULTS);
 		for(int r=0; r<n; r++)
 		{
-			printf("i=%3d r=%3d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, r, adj_copy[i][r].x, adj_copy[i][r].y, adj_copy[i][r].z, RADTODEG(adj_copy[i][r].yaw), adj_copy[i][r].score, adj_copy[i][r].abscore);
+			printf("i=%3d r=%3d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%5d\n", i, r, adj_copy[i].results[r].x, adj_copy[i].results[r].y, adj_copy[i].results[r].z, RADTODEG(adj_copy[i].results[r].yaw), adj_copy[i].results[r].score, adj_copy[i].results[r].abscore);
 		}
 	}
 */
@@ -3172,8 +3303,8 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 	double zsum = 0.0;
 	for(int i = 0; i < len; i++)
 	{
-		yawsum += adj_copy[i][0].yaw;
-		zsum += adj_copy[i][0].z;
+		yawsum += adj_copy[i].results[0].yaw;
+		zsum += adj_copy[i].results[0].z;
 	}
 
 //	printf("after weighing, yawsum using best results = %.2f deg, \n", RADTODEG(yawsum));
@@ -3215,8 +3346,8 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 					for(int i = 0; i < len; i++)
 					{
 						int r = (i==cur_n0||i==cur_n1||i==cur_n2)?1:0;
-						cur_yawsum += adj_copy[i][r].yaw;
-						cur_zsum += adj_copy[i][r].z;
+						cur_yawsum += adj_copy[i].results[r].yaw;
+						cur_zsum += adj_copy[i].results[r].z;
 					}
 
 					float residual_avg_yaw = (closure_result->yaw - cur_yawsum) / (float)len;
@@ -3236,12 +3367,12 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 
 						int dx = sms[sm+1].avg_x - sms[sm].avg_x;
 						int dy = sms[sm+1].avg_y - sms[sm].avg_y;
-						int dz = sms[sm+1].avg_z - sms[sm].avg_z;
+						//int dz = sms[sm+1].avg_z - sms[sm].avg_z;
 
-						double x_corr = -1.0*adj_copy[i][r].x;
-						double y_corr = -1.0*adj_copy[i][r].y;
-						double z_corr = -1.0*((double)adj_copy[i][r].z + (double)residual_avg_z);
-						double yaw_corr = 1.0*adj_copy[i][r].yaw + residual_avg_yaw;
+						double x_corr = -1.0*adj_copy[i].results[r].x;
+						double y_corr = -1.0*adj_copy[i].results[r].y;
+						double z_corr = -1.0*((double)adj_copy[i].results[r].z + (double)residual_avg_z);
+						double yaw_corr = 1.0*adj_copy[i].results[r].yaw + residual_avg_yaw;
 
 						running_x += x_corr;
 						running_y += y_corr;
@@ -3324,11 +3455,10 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 
 		int64_t ref_sqerr = -1; // Reference cumulated matching error when every adjacent results is chosen as [0]
 		int64_t min_sqerr = INT64_MAX;
-		float final_residual_avg_yaw;
 
 		for(int cur_bad=0; cur_bad<len; cur_bad++)
 		{
-			int cur_bad_n_solutions = n_adjacent_results[first+cur_bad];
+			int cur_bad_n_solutions = adj_copy[cur_bad].n_results;
 			for(int cur_solution = 0; cur_solution<cur_bad_n_solutions; cur_solution++)
 			{
 				if(cur_bad > 0 && cur_solution == 0)
@@ -3340,8 +3470,8 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 				for(int i = 0; i < len; i++)
 				{
 					int r = (i==cur_bad)?cur_solution:((i==combination[0]||i==combination[1]||i==combination[2])?1:0);
-					cur_yawsum += adj_copy[i][r].yaw;
-					cur_zsum += adj_copy[i][r].z;
+					cur_yawsum += adj_copy[i].results[r].yaw;
+					cur_zsum += adj_copy[i].results[r].z;
 				}
 
 				float residual_avg_yaw = (closure_result->yaw - cur_yawsum) / (float)len;
@@ -3362,12 +3492,12 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 
 					int dx = sms[sm+1].avg_x - sms[sm].avg_x;
 					int dy = sms[sm+1].avg_y - sms[sm].avg_y;
-					int dz = sms[sm+1].avg_z - sms[sm].avg_z;
+					//int dz = sms[sm+1].avg_z - sms[sm].avg_z;
 
-					double x_corr = -1.0*adj_copy[i][r].x;
-					double y_corr = -1.0*adj_copy[i][r].y;
-					double z_corr = -1.0*((double)adj_copy[i][r].z + (double)residual_avg_z);
-					double yaw_corr = 1.0*adj_copy[i][r].yaw + residual_avg_yaw;
+					double x_corr = -1.0*adj_copy[i].results[r].x;
+					double y_corr = -1.0*adj_copy[i].results[r].y;
+					double z_corr = -1.0*((double)adj_copy[i].results[r].z + (double)residual_avg_z);
+					double yaw_corr = 1.0*adj_copy[i].results[r].yaw + residual_avg_yaw;
 
 					running_x += x_corr;
 					running_y += y_corr;
@@ -3462,14 +3592,10 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 		int64_t ref_sqerr = -1;
 		int64_t min_sqerr = INT64_MAX;
 
-		int32_t ref_cdiff_x = 0;
-		int32_t ref_cdiff_y = 0;
-		int32_t ref_cdiff_z = 0;
 
-
-		int32_t best_cdiff_x = 0;
-		int32_t best_cdiff_y = 0;
-		int32_t best_cdiff_z = 0;
+		//int32_t best_cdiff_x = 0;
+		//int32_t best_cdiff_y = 0;
+		//int32_t best_cdiff_z = 0;
 
 		for(int x = -XY_ACCUM_UNCERT_BY_SUBMAP; x < XY_ACCUM_UNCERT_BY_SUBMAP; x += 2)
 		{
@@ -3489,7 +3615,7 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 
 					int dx = sms[sm+1].avg_x - sms[sm].avg_x;
 					int dy = sms[sm+1].avg_y - sms[sm].avg_y;
-					int dz = sms[sm+1].avg_z - sms[sm].avg_z;
+					//int dz = sms[sm+1].avg_z - sms[sm].avg_z;
 
 	//					double dlen = sqrt(sq((int64_t)dx)+sq((int64_t)dy)+sq((int64_t)dz));
 	//					double unit_dx = (double)dx/dlen;
@@ -3498,14 +3624,14 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 	//				double drift_ang = atan2(dy,dx) + M_PI/2.0;
 	//				double x_drift = cos(drift_ang) * (double)dx * w;
 	//				double y_drift = sin(drift_ang) * (double)dy * w;
-	//				double x_corr = -1.0*(adj_copy[i][r].x + x_drift);
-	//				double y_corr = -1.0*(adj_copy[i][r].y + y_drift);
+	//				double x_corr = -1.0*(adj_copy[i].results[r].x + x_drift);
+	//				double y_corr = -1.0*(adj_copy[i].results[r].y + y_drift);
 
 
-					double x_corr = -1.0*(adj_copy[i][r].x + x);
-					double y_corr = -1.0*(adj_copy[i][r].y + y);
-					double z_corr = -1.0*((double)adj_copy[i][r].z + (double)final_residual_avg_z);
-					double yaw_corr = 1.0*adj_copy[i][r].yaw + final_residual_avg_yaw;
+					double x_corr = -1.0*(adj_copy[i].results[r].x + x);
+					double y_corr = -1.0*(adj_copy[i].results[r].y + y);
+					double z_corr = -1.0*((double)adj_copy[i].results[r].z + (double)final_residual_avg_z);
+					double yaw_corr = 1.0*adj_copy[i].results[r].yaw + final_residual_avg_yaw;
 
 					running_x += x_corr;
 					running_y += y_corr;
@@ -3538,9 +3664,9 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 					min_sqerr = sqerr;
 					min_at_x = x;
 					min_at_y = y;
-					best_cdiff_x = cdiff_x;
-					best_cdiff_y = cdiff_y;
-					best_cdiff_z = cdiff_z;
+					//best_cdiff_x = cdiff_x;
+					//best_cdiff_y = cdiff_y;
+					//best_cdiff_z = cdiff_z;
 				}
 
 				if(x == 0 && y == 0)
@@ -3588,14 +3714,12 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 		{
 			int r = (i==min_at_bad)?min_at_solution:((i==combination[0]||i==combination[1]||i==combination[2])?1:0);
 
-			int sm = first + i;
+			closure_out->corrs[i].x = adj_copy[i].results[r].x + min_at_x;
+			closure_out->corrs[i].y = adj_copy[i].results[r].y + min_at_y;
+			closure_out->corrs[i].z = adj_copy[i].results[r].z + final_residual_avg_z;
+			closure_out->corrs[i].yaw = adj_copy[i].results[r].yaw + final_residual_avg_yaw;
 
-			closure_out->adjacent_corr[i].x = adj_copy[i][r].x + min_at_x;
-			closure_out->adjacent_corr[i].y = adj_copy[i][r].y + min_at_y;
-			closure_out->adjacent_corr[i].z = adj_copy[i][r].z + final_residual_avg_z;
-			closure_out->adjacent_corr[i].yaw = adj_copy[i][r].yaw + final_residual_avg_yaw;
-
-			int64_t cur_score = SCORE_COEFF*adj_copy[i][r].score + ABSCORE_COEFF*adj_copy[i][r].abscore;
+			int64_t cur_score = SCORE_COEFF*adj_copy[i].results[r].score + ABSCORE_COEFF*adj_copy[i].results[r].abscore;
 			//printf("        cur_score = %ld\n", cur_score);
 			score_acc += cur_score;
 
@@ -3604,10 +3728,10 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 			int dy = sms[sm+1].avg_y - sms[sm].avg_y;
 			int dz = sms[sm+1].avg_z - sms[sm].avg_z;
 
-			double x_corr = -1.0*(closure_out->adjacent_corr[i].x);
-			double y_corr = -1.0*(closure_out->adjacent_corr[i].y);
-			double z_corr = -1.0*(closure_out->adjacent_corr[i].z);
-			double yaw_corr = 1.0*closure_out->adjacent_corr[i].yaw;
+			double x_corr = -1.0*(closure_out->corrs[i].x);
+			double y_corr = -1.0*(closure_out->corrs[i].y);
+			double z_corr = -1.0*(closure_out->corrs[i].z);
+			double yaw_corr = 1.0*closure_out->corrs[i].yaw;
 
 			running_x += x_corr;
 			running_y += y_corr;
@@ -3752,6 +3876,7 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 		}
 	}
 
+	/*
 	for(int sm=0; sm<n_submaps; sm++)
 	{
 		for(int c=0; c<n_results[sm]; c++)
@@ -3761,6 +3886,7 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 				results[sm][c].x,results[sm][c].y,results[sm][c].z,RADTODEG(results[sm][c].yaw));
 		}
 	}
+	*/
 
 	if(n_submaps > 1)
 	{
@@ -3788,34 +3914,38 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 
 					double minerr = 999999999999.9;
 
+					/*
 					int32_t match_ddx = 0;
 					int32_t match_ddy = 0;
 					int32_t match_ddz = 0;
 					float   match_ddyaw = 0.0;
-
 					int best_adjres = -1;
+					*/
+
 					// Assume the most successful adjacent match:
-					int n_adjres = n_adjacent_results[sma];
+					int n_adjres = adjacent_matches[sma].n_results;
 					if(n_adjres > 8) n_adjres = 8;
 					for(int adjres=0; adjres < n_adjres; adjres++)
 					{
 						// TODO: verify the direction of subtraction (works too well even with the wrong metric)
-						int64_t ddx = -1*(match_dx - adjacent_results[sma][adjres].x);
-						int64_t ddy = -1*(match_dy - adjacent_results[sma][adjres].y);
-						int64_t ddz = -1*(match_dz - adjacent_results[sma][adjres].z);
-						float ddyaw = -1.0*(match_dyaw - adjacent_results[sma][adjres].yaw);
+						int64_t ddx = -1*(match_dx - adjacent_matches[sma].results[adjres].x);
+						int64_t ddy = -1*(match_dy - adjacent_matches[sma].results[adjres].y);
+						int64_t ddz = -1*(match_dz - adjacent_matches[sma].results[adjres].z);
+						float ddyaw = -1.0*(match_dyaw - adjacent_matches[sma].results[adjres].yaw);
 
 						// 1 deg corresponds to 100 mm.
 						double err = sqrt(sq(ddx) + sq(ddy) + sq(ddz)) + fabs(RADTODEG(ddyaw)*100.0);
 
 						if(err < minerr)
 						{
-							best_adjres = adjres;
 							minerr = err;
+							/*
+							best_adjres = adjres;
 							match_ddx = ddx;
 							match_ddy = ddy;
 							match_ddz = ddz;
 							match_ddyaw = ddyaw;
+							*/
 						}
 					}
 
@@ -3832,7 +3962,7 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 						match_dx, match_dy, match_dz, RADTODEG(match_dyaw),
 						best_adjres, minerr,
 						match_ddx, match_ddy, match_ddz, RADTODEG(match_ddyaw),
-						adjacent_results[sma][best_adjres].x, adjacent_results[sma][best_adjres].y, adjacent_results[sma][best_adjres].z, RADTODEG(adjacent_results[sma][best_adjres].yaw),
+						adjacent_matches[sma].results[best_adjres].x, adjacent_matches[sma].results[best_adjres].y, adjacent_matches[sma].results[best_adjres].z, RADTODEG(adjacent_matches[sma].results[best_adjres].yaw),
 						score);
 */
 					if(score > best_grouping_score)
@@ -3875,33 +4005,33 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 				float avg_yaw;
 
 				printf("  (%+5d,%+5d,%+5d,%+6.2f)  ",
-					closures[best_sm][best_ca].adjacent_corr[i].x,
-					closures[best_sm][best_ca].adjacent_corr[i].y,
-					closures[best_sm][best_ca].adjacent_corr[i].z,
-					RADTODEG(closures[best_sm][best_ca].adjacent_corr[i].yaw));
+					closures[best_sm][best_ca].corrs[i].x,
+					closures[best_sm][best_ca].corrs[i].y,
+					closures[best_sm][best_ca].corrs[i].z,
+					RADTODEG(closures[best_sm][best_ca].corrs[i].yaw));
 
 				if(i == 0)
 				{
 					printf("  (     ,     ,     ,      )  ");
 
-					avg_x = closures[best_sm][best_ca].adjacent_corr[i].x;
-					avg_y = closures[best_sm][best_ca].adjacent_corr[i].y;
-					avg_z = closures[best_sm][best_ca].adjacent_corr[i].z;
-					avg_yaw = closures[best_sm][best_ca].adjacent_corr[i].yaw;
+					avg_x = closures[best_sm][best_ca].corrs[i].x;
+					avg_y = closures[best_sm][best_ca].corrs[i].y;
+					avg_z = closures[best_sm][best_ca].corrs[i].z;
+					avg_yaw = closures[best_sm][best_ca].corrs[i].yaw;
 
 				}
 				else
 				{
 					printf("  (%+5d,%+5d,%+5d,%+6.2f)  ",
-						closures[best_sm+1][best_cb].adjacent_corr[i-1].x,
-						closures[best_sm+1][best_cb].adjacent_corr[i-1].y,
-						closures[best_sm+1][best_cb].adjacent_corr[i-1].z,
-						RADTODEG(closures[best_sm+1][best_cb].adjacent_corr[i-1].yaw));
+						closures[best_sm+1][best_cb].corrs[i-1].x,
+						closures[best_sm+1][best_cb].corrs[i-1].y,
+						closures[best_sm+1][best_cb].corrs[i-1].z,
+						RADTODEG(closures[best_sm+1][best_cb].corrs[i-1].yaw));
 
-					avg_x = (closures[best_sm][best_ca].adjacent_corr[i].x + closures[best_sm+1][best_cb].adjacent_corr[i-1].x)/2;
-					avg_y = (closures[best_sm][best_ca].adjacent_corr[i].y + closures[best_sm+1][best_cb].adjacent_corr[i-1].y)/2;
-					avg_z = (closures[best_sm][best_ca].adjacent_corr[i].z + closures[best_sm+1][best_cb].adjacent_corr[i-1].z)/2;
-					avg_yaw = (closures[best_sm][best_ca].adjacent_corr[i].yaw + closures[best_sm+1][best_cb].adjacent_corr[i-1].yaw)/2.0;
+					avg_x = (closures[best_sm][best_ca].corrs[i].x + closures[best_sm+1][best_cb].corrs[i-1].x)/2;
+					avg_y = (closures[best_sm][best_ca].corrs[i].y + closures[best_sm+1][best_cb].corrs[i-1].y)/2;
+					avg_z = (closures[best_sm][best_ca].corrs[i].z + closures[best_sm+1][best_cb].corrs[i-1].z)/2;
+					avg_yaw = (closures[best_sm][best_ca].corrs[i].yaw + closures[best_sm+1][best_cb].corrs[i-1].yaw)/2.0;
 
 				}
 
@@ -3911,7 +4041,8 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 					avg_z,
 					RADTODEG(avg_yaw));
 
-				out->adjacent_corr[i] = (result_t){avg_x, avg_y, avg_z, avg_yaw, 0, 0};
+				out->corrs[i] = (result_t){avg_x, avg_y, avg_z, avg_yaw, 0, 0};
+				out->match = results[best_sm][best_ca];
 
 				printf("\n");
 			}
@@ -3928,127 +4059,120 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 int main(int argc, char** argv)
 {
 
-	if(argc == 3)
+	if(argc < 2)
 	{
-		sscanf(argv[1], "%lf", &pos_gyro_corr);
-		sscanf(argv[2], "%lf", &neg_gyro_corr);
+		printf("Usage: slam 1234 [submap_end_idx]\n");
+		printf("Params required:\n");
+		printf("1 = create submap_metas & pointclouds\n");
+		printf("2 = create adjacent matches\n");
+		printf("3 = create loop closures\n");
+		printf("4 = create output\n");
+		printf("5 = visualize closures\n");
+
+	}
+
+	int limit_submaps = -1;
+
+	int create_pointclouds = 0;
+	int adjacent_match = 0;
+	int do_closures = 0;
+	int create_output = 0;
+	int visualize_closures = 0;
+
+	{
+		char c;
+		int i = 0;
+		while( (c = argv[1][i++]) != 0)
+		{
+			if(c == '1')
+				create_pointclouds = 1;
+
+			if(c == '2')
+				adjacent_match = 1;
+
+			if(c == '3')
+				do_closures = 1;
+
+			if(c == '4')
+				create_output = 1;
+
+			if(c == '5')
+				visualize_closures = 1;
+
+		}
+	}
+
+	if(argc >= 3)
+	{
+		sscanf(argv[2], "%d", &limit_submaps);
+		if(limit_submaps < 1 || limit_submaps > MAX_SUBMAPS)
+		{
+			printf("ERROR: invalid [submap_end_idx] parameter\n");
+			abort();
+		}
 	}
 
 	printf("Super Slammings 2.0 2000\n");
 	printf("pos_gyro_corr = %lf, neg_gyro_corr = %lf\n", pos_gyro_corr, neg_gyro_corr);
 
-	init_corr_points();
-
-	static firstsidx_pose_t firstsidx_poses[MAX_FIRSTSIDX_POSES];
-	static firstsidx_pose_t pose_corrs[MAX_FIRSTSIDX_POSES];
+	uint32_t n_submaps;
 	static submap_meta_t submap_metas[MAX_SUBMAPS];
 
-	int n_firstsidx_poses;
+	static tmp_cloud_t tmp_cloud;
 
-	extract_firstsidx_poses(firstsidx_poses, &n_firstsidx_poses);
-
-	static fpose_t fposes[MAX_FIRSTSIDX_POSES];
-	gen_fposes(firstsidx_poses, n_firstsidx_poses, fposes);
-
-#if 0
-	FILE* kakkafile = fopen("kakka.kak", "rb");
-	static fpose_t cmp_fposes[MAX_FIRSTSIDX_POSES];
-	fread(cmp_fposes, sizeof(cmp_fposes), 1, kakkafile);
-	fclose(kakkafile);
-
-	double win_gpos = 0.0;
-	double win_gneg = 0.0;
-	double smallest = 9999999999999999999999999999999999999999999999999999999.9;
-	for(double gpos=-0.10; gpos<0.10; gpos += 0.0005)
+	if(create_pointclouds)
 	{
-		for(double gneg=-0.10; gneg<0.10; gneg += 0.0005)
+		init_corr_points();
+
+		static firstsidx_pose_t firstsidx_poses[MAX_FIRSTSIDX_POSES];
+		static firstsidx_pose_t pose_corrs[MAX_FIRSTSIDX_POSES];
+
+		int n_firstsidx_poses;
+
+		extract_firstsidx_poses(firstsidx_poses, &n_firstsidx_poses);
+
+		static fpose_t fposes[MAX_FIRSTSIDX_POSES];
+		gen_fposes(firstsidx_poses, n_firstsidx_poses, fposes);
+
+
+		gen_pose_corrs(firstsidx_poses, pose_corrs, n_firstsidx_poses, fposes);
+
+
+
+		// Copy the last correction, will be accessed later.
+		pose_corrs[n_firstsidx_poses] = pose_corrs[n_firstsidx_poses-1];
+		int n_pose_corrs = n_firstsidx_poses + 1;
+
+
+		#if 0
+			for(int i=0; i < n_firstsidx_poses; i++)
+			{
+				printf("%6d (%8d): (%+6d %+6d %+6d  %5.1f) -> (%+6.0f %+6.0f %+6.0f  %5.1f), corr (%+6d %+6d %+6d  %5.1f)\n",
+					i, firstsidx_poses[i].idx,
+					firstsidx_poses[i].pose.x, firstsidx_poses[i].pose.y, firstsidx_poses[i].pose.z, ANG32TOFDEG(firstsidx_poses[i].pose.ang),
+					fposes[i].x, fposes[i].y, fposes[i].z, RADTODEG(fposes[i].ang),
+					pose_corrs[i].pose.x, pose_corrs[i].pose.y, pose_corrs[i].pose.z, ANG32TOFDEG(pose_corrs[i].pose.ang));
+			}
+		#endif
+
+		
+		group_submaps(submap_metas, &n_submaps, firstsidx_poses, n_firstsidx_poses, pose_corrs);
+
+		printf("\n\n      GROUPED DATA IN %d SUBMAPS\n\n", n_submaps);
+
+		if(limit_submaps > 0 && limit_submaps < n_submaps)
 		{
-			memset(fposes, 0, sizeof(fposes));
-
-			pos_gyro_corr = gpos;
-			neg_gyro_corr = gneg;
-
-			gen_fposes(firstsidx_poses, n_firstsidx_poses, fposes);
-
-			double score_acc = 0.0;
-			for(int i=0; i<n_firstsidx_poses; i++)
-			{
-				double dx = cmp_fposes[i].x - fposes[i].x;
-				double dy = cmp_fposes[i].y - fposes[i].y;
-				double dang = cmp_fposes[i].ang - fposes[i].ang;
-				WRAP_RAD_BIPO(dang);
-
-				// 180 degrees off (3.14 rad) is scored equally to a 31.4m error:
-//				double score = sq(dx) + sq(dy) + sq(dang*10000.0);
-				// 180 degrees off (3.14 rad) is scored equally to a 6*31.4m error:
-				double score = sq(dx) + sq(dy) + sq(dang*60000.0);
-				score_acc += score;
-			}
-
-			if(score_acc < smallest)
-			{
-				smallest = score_acc;
-				win_gpos = gpos;
-				win_gneg = gneg;
-			}
-
-			printf("gpos=%+8.5f gneg=%+8.5f score=%15.0lf winner: %+8.5f  %+8.5f with score=%15.0lf               \r",
-				gpos, gneg, score_acc, win_gpos, win_gneg, smallest);
-			fflush(stdout);
-
+			printf("NOTE: limiting number of submaps from %d to %d, requested by user\n", n_submaps, limit_submaps);
+			n_submaps = limit_submaps;
 		}
 
-	}
+		save_submap_metas(submap_metas, n_submaps);
 
-	printf("\n");
-	return 0;
-#endif
-
-	gen_pose_corrs(firstsidx_poses, pose_corrs, n_firstsidx_poses, fposes);
-
-
-
-	// Copy the last correction, will be accessed later.
-	pose_corrs[n_firstsidx_poses] = pose_corrs[n_firstsidx_poses-1];
-	int n_pose_corrs = n_firstsidx_poses + 1;
-
-
-	#if 0
-		for(int i=0; i < n_firstsidx_poses; i++)
-		{
-			printf("%6d (%8d): (%+6d %+6d %+6d  %5.1f) -> (%+6.0f %+6.0f %+6.0f  %5.1f), corr (%+6d %+6d %+6d  %5.1f)\n",
-				i, firstsidx_poses[i].idx,
-				firstsidx_poses[i].pose.x, firstsidx_poses[i].pose.y, firstsidx_poses[i].pose.z, ANG32TOFDEG(firstsidx_poses[i].pose.ang),
-				fposes[i].x, fposes[i].y, fposes[i].z, RADTODEG(fposes[i].ang),
-				pose_corrs[i].pose.x, pose_corrs[i].pose.y, pose_corrs[i].pose.z, ANG32TOFDEG(pose_corrs[i].pose.ang));
-		}
-	#endif
-
-//	FILE* kakkafile = fopen("kakka.kak", "wb");
-//	fwrite(fposes, sizeof(fposes), 1, kakkafile);
-//	fclose(kakkafile);
-//	return 0;
-
-
-	
-
-	int n_submaps;
-
-	group_submaps(submap_metas, &n_submaps, firstsidx_poses, n_firstsidx_poses, pose_corrs);
-
-	n_submaps = 40; // !!!!
-
-
-//void output_submap(int idx)
-//{
-//}
-
-	// Create and filter pointclouds
-	#if 0
+		// Create and filter pointclouds
 		int64_t total_points = 0;
 		int64_t total_after_filtering = 0;
 
-		for(int sm=0; sm<n_submaps; sm+=1)
+		for(int sm=0; sm<n_submaps; sm++)
 		{
 			if(!enable_submaps[sm])
 				continue;
@@ -4064,7 +4188,6 @@ int main(int argc, char** argv)
 			// you have looped through the submap as well.
 
 			// Create the cloud here:
-			static tmp_cloud_t tmp_cloud;
 			tmp_cloud.n_points = 0;
 
 			for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
@@ -4118,6 +4241,7 @@ int main(int argc, char** argv)
 					{
 						printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
 					}
+
 				}
 
 				// Voxfilter was used for a small subsubmap - insert it to the larger submap cloud
@@ -4151,34 +4275,51 @@ int main(int argc, char** argv)
 				                     77905961/119061330 = 0.65433 (threshold 1800)
 		*/
 
-	#endif
-
-
-	#if 1
-		// Match adjacent submaps
+	}
+	else
 	{
-		int32_t running_x = 0, running_y = 0, running_z = 0;
-		double running_yaw = 0.0;
+		load_submap_metas(submap_metas, &n_submaps);
 
-		#if 1
-			static tmp_cloud_t tmp;
+		printf("\n\n      LOADED SUBMAP GROUPING OF %d SUBMAPS\n\n", n_submaps);
 
-			{
-				int sm = 0;
-				load_tmp_cloud(&tmp, sm);
-				po_coords_t po;
-				po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 
-				store_all_pages();
-			}
-		#endif
+		if(limit_submaps > 0 && limit_submaps < n_submaps)
+		{
+			printf("NOTE: limiting number of submaps from %d to %d, requested by user\n", n_submaps, limit_submaps);
+			n_submaps = limit_submaps;
+		}
+
+
+	}
 
 
 // idea:
 // 01 12 23 34 45 56 67
 //    02 13 24 35 46 57 
+
+	// Match adjacent submaps
+	if(adjacent_match)
+	{
+		int32_t running_x = 0, running_y = 0, running_z = 0;
+		double running_yaw = 0.0;
+
+		#if 0
+		//if(create_output)
+		{
+
+			{
+				int sm = 0;
+				load_tmp_cloud(&tmp_cloud, sm);
+				po_coords_t po;
+				po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+				store_all_pages();
+			}
+		}
+		#endif
+
 
 		for(int sm=0; sm<n_submaps-1; sm++)
 		{
@@ -4206,8 +4347,8 @@ int main(int argc, char** argv)
 			assert(n > 0);
 			assert(n <= N_FINE_MATCH_RESULTS);
 
-			memcpy(adjacent_results[sm], results, sizeof(result_t)*n);
-			n_adjacent_results[sm] = n;
+			memcpy(adjacent_matches[sm].results, results, sizeof(result_t)*n);
+			adjacent_matches[sm].n_results = n;
 
 			int32_t x_corr = -1*results[0].x;
 			int32_t y_corr = -1*results[0].y;
@@ -4229,29 +4370,41 @@ int main(int argc, char** argv)
 			printf("%4d vs %4d Winner (%+5d, %+5d, %+5d, %+6.2f), running (%+7d, %+7d, %+7d, %+8.2f), new_avg %d, %d, %d\n",
 				sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
 
-			#if 1
-				load_tmp_cloud(&tmp, sm+1);
-				rotate_cloud(&tmp, running_yaw);
+			//if(create_output)
+			#if 0
+			{
+				load_tmp_cloud(&tmp_cloud, sm+1);
+				rotate_cloud(&tmp_cloud, running_yaw);
 				po_coords_t po;
 				po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
 				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp, new_avg_x, new_avg_y, new_avg_z);
+				cloud_to_voxmap(&tmp_cloud, new_avg_x, new_avg_y, new_avg_z);
 
 				store_all_pages();
+			}
 			#endif
 
 		}
+
+		save_adjacent_matches(n_submaps);
 	}
-	#endif
+	else if(do_closures || create_output)
+	{
+		load_adjacent_matches(n_submaps);
+
+		printf("\n\n        LOADED ADJACENT MATCHES\n\n");
+	}
 
 //	free_all_pages();
 
 
-	#if 1
-		int closures_collected = 0;
-		closure_t closures[100];
+	uint32_t n_closures = 0;
+	static closure_t closures[MAX_CLOSURES];
+
+	if(do_closures)
+	{
 		// Loop closures
-		for(int sm=0; sm<n_submaps; sm++)
+		for(int sm=100; sm<101; sm++) //n_submaps; sm++)
 		{
 			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
 			if(sm < n_submaps-1)
@@ -4275,32 +4428,46 @@ int main(int argc, char** argv)
 */
 
 
-			if(find_possible_closures(submap_metas, sm, &closures[closures_collected]) == 0)
+			if(find_possible_closures(submap_metas, sm, &closures[n_closures]) == 0)
 			{
-				closures_collected++;
+				n_closures++;
+
+				if(n_closures >= MAX_CLOSURES)
+				{
+					printf("WARNING: Too many loop closures, stopping loop closure generation\n");
+					break;
+				}
 			}
 		}
 
-		printf("\n\n\nCollected %d closures\n\n", closures_collected);
-	#endif
+		printf("\n\n        FOUND %d LOOP CLOSURES\n\n", n_closures);
+
+		save_closures(closures, n_closures);
+	}
+	else if(create_output || visualize_closures)
+	{
+		if(load_closures(closures, &n_closures) == 0)
+			printf("\n\n        LOADED %d LOOP CLOSURES\n\n", n_closures);
+		else
+			printf("\n\n        LOOP CLOSURE FILE NOT FOUND\n\n");
+
+	}
 
 
-	#if 1
+	if(create_output)
 	{
 		// Generate output
 
-		int32_t running_x = 70000, running_y = 0, running_z = 0;
+		int32_t running_x = 0, running_y = 0, running_z = 0;
 		double running_yaw = 0.0;
-
-		static tmp_cloud_t tmp;
 
 		{
 			int sm = 0;
-			load_tmp_cloud(&tmp, sm);
+			load_tmp_cloud(&tmp_cloud, sm);
 			po_coords_t po;
 			po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
 			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-			cloud_to_voxmap(&tmp, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+			cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 
 			store_all_pages();
 		}
@@ -4321,18 +4488,18 @@ int main(int argc, char** argv)
 
 			int dx = submap_metas[sm].avg_x - submap_metas[sm+1].avg_x;
 			int dy = submap_metas[sm].avg_y - submap_metas[sm+1].avg_y;
-			int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
+			//int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
 
 			// Use the best adjacent match by default:
-			result_t result = adjacent_results[sm][0];
+			result_t result = adjacent_matches[sm].results[0];
 
-			for(int c=0; c<closures_collected; c++)
+			for(int c=0; c<n_closures; c++)
 			{
 				if(sm >= closures[c].first && sm <= closures[c].last)
 				{
 					int seq = sm - closures[c].first;
 					printf("submap #%3d in loop closure #%3d as %dth element, overriding adjacent default correction\n", sm, c, seq);
-					result = closures[c].adjacent_corr[seq];
+					result = closures[c].corrs[seq];
 					break;
 				}
 			}
@@ -4358,20 +4525,142 @@ int main(int argc, char** argv)
 				sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
 
 			#if 1
-				load_tmp_cloud(&tmp, sm+1);
-				rotate_cloud(&tmp, running_yaw);
+				load_tmp_cloud(&tmp_cloud, sm+1);
+				rotate_cloud(&tmp_cloud, running_yaw);
 				po_coords_t po;
 				po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
 				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp, new_avg_x, new_avg_y, new_avg_z);
+				cloud_to_voxmap(&tmp_cloud, new_avg_x, new_avg_y, new_avg_z);
 
 				store_all_pages();
 			#endif
 
 		}
 	}
-	#endif
 
+	if(visualize_closures)
+	{
+		#define STEPX 15000
+		#define STEPY 20000
+		int32_t running_x = 0, running_y = 0;
+
+		printf("VISUALIZING CLOSURES\n\n");
+
+		int col = 0;
+		//int c = 0;
+		for(int c=0; c<n_closures; c++)
+		{
+
+			int sma = closures[c].first;
+			int smb = closures[c].last;
+			int smc = closures[c].first + 1;
+
+			printf("  %3d    %3d    %3d&%3d    %3d&%3d&%3d \n", sma, smb, sma,smb,  sma,smc,smb);
+
+
+			int ax = submap_metas[sma].avg_x;
+			int ay = submap_metas[sma].avg_y;
+			int az = submap_metas[sma].avg_z;
+
+			int bx = submap_metas[smb].avg_x;
+			int by = submap_metas[smb].avg_y;
+			int bz = submap_metas[smb].avg_z;
+
+			int cx = submap_metas[smc].avg_x;
+			int cy = submap_metas[smc].avg_y;
+			int cz = submap_metas[smc].avg_z;
+
+			result_t result = closures[c].match;
+
+			int32_t x_corr = -1*result.x;
+			int32_t y_corr = -1*result.y;
+			int32_t z_corr = -1*result.z;
+			double yaw_corr = 1.0*result.yaw;
+
+			result_t resultc = closures[c].corrs[0];
+
+			int32_t cx_corr = -1*resultc.x;
+			int32_t cy_corr = -1*resultc.y;
+			int32_t cz_corr = -1*resultc.z;
+			double cyaw_corr = 1.0*resultc.yaw;
+
+
+			// SMA alone
+			{
+				load_tmp_cloud(&tmp_cloud, sma);
+				//rotate_cloud(&tmp_cloud, 0.0);
+				po_coords_t po;
+				po = po_coords(0+running_x,0+running_y,0, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 0+running_x,0+running_y,0);
+			}
+
+			// SMB alone
+			{
+				load_tmp_cloud(&tmp_cloud, smb);
+				rotate_cloud(&tmp_cloud, yaw_corr);
+				po_coords_t po;
+				po = po_coords(STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
+			}
+
+			// SMA, SMB matched together
+			{
+				load_tmp_cloud(&tmp_cloud, sma);
+				//rotate_cloud(&tmp_cloud, 0.0);
+				po_coords_t po;
+				po = po_coords(2*STEPX+0+running_x,0+running_y,0, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 2*STEPX+0+running_x,0+running_y,0);
+			}
+
+
+			{
+				load_tmp_cloud(&tmp_cloud, smb);
+				rotate_cloud(&tmp_cloud, yaw_corr);
+				po_coords_t po;
+				po = po_coords(2*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 2*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
+			}
+
+
+			// SMA, SMC, SMB matched together
+			{
+				load_tmp_cloud(&tmp_cloud, sma);
+				//rotate_cloud(&tmp_cloud, 0.0);
+				po_coords_t po;
+				po = po_coords(3*STEPX+0+running_x,0+running_y,0, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 3*STEPX+0+running_x,0+running_y,0);
+			}
+
+			{
+				load_tmp_cloud(&tmp_cloud, smc);
+				rotate_cloud(&tmp_cloud, cyaw_corr);
+				po_coords_t po;
+				po = po_coords(3*STEPX+cx_corr+cx-ax+running_x,cy_corr+cy-ay+running_y,cz_corr+cz-az, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 3*STEPX+cx_corr+cx-ax+running_x,cy_corr+cy-ay+running_y,+cz_corr+cz-az);
+			}
+
+			{
+				load_tmp_cloud(&tmp_cloud, smb);
+				rotate_cloud(&tmp_cloud, yaw_corr);
+				po_coords_t po;
+				po = po_coords(3*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 3*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
+			}
+
+			store_all_pages();
+
+			running_y -= STEPY;
+
+		}
+		printf("\n");
+	}
 
 
 	free_all_pages();
