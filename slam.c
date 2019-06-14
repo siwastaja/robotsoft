@@ -781,6 +781,22 @@ typedef struct
 	tmp_cloud_point_t points[MAX_POINTS];
 } tmp_cloud_t;
 
+/*
+	50 typical submaps = 
+	400MB, uncompressed
+	147MB, compressed at level 2
+	
+*/
+
+#define COMPRESS_TMP_CLOUDS
+
+#ifdef COMPRESS_TMP_CLOUDS
+	#include <zlib.h>
+
+	#define ZLIB_CHUNK (256*1024)
+	#define ZLIB_LEVEL 2  // from 1 to 9, 9 = slowest but best compression
+#endif
+
 // Point cloud files contain source sequence indeces, meaning they are only valid with the exact same input data set.
 int save_tmp_cloud(tmp_cloud_t* cloud, int idx)
 {
@@ -791,7 +807,45 @@ int save_tmp_cloud(tmp_cloud_t* cloud, int idx)
 
 	uint32_t n_points = cloud->n_points;
 	assert(fwrite(&n_points, sizeof(uint32_t), 1, f) == 1);
-	assert(fwrite(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+
+	#ifdef COMPRESS_TMP_CLOUDS
+		uint8_t outbuf[ZLIB_CHUNK];
+		z_stream strm;
+		strm.zalloc = Z_NULL;
+		strm.zfree = Z_NULL;
+		strm.opaque = Z_NULL;
+		if(deflateInit(&strm, ZLIB_LEVEL) != Z_OK)
+		{
+			printf("ERROR: ZLIB initialization failed\n");
+			abort();
+		}
+		strm.avail_in = n_points*sizeof(tmp_cloud_point_t);
+		strm.next_in = (uint8_t*)cloud->points;
+
+		do
+		{
+			strm.avail_out = ZLIB_CHUNK;
+			strm.next_out = outbuf;
+
+			int ret = deflate(&strm, Z_FINISH);
+			assert(ret != Z_STREAM_ERROR);
+
+			int produced = ZLIB_CHUNK - strm.avail_out;
+
+			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
+			{
+				printf("ERROR: fwrite failed\n");
+				abort();
+			}
+		} while(strm.avail_out == 0);
+
+		assert(strm.avail_in == 0);
+
+		deflateEnd(&strm);
+
+	#else
+		assert(fwrite(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+	#endif
 
 	fclose(f);
 	return 0;
@@ -807,7 +861,66 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 	uint32_t n_points = 0;
 	assert(fread(&n_points, sizeof(uint32_t), 1, f) == 1);
 	cloud->n_points = n_points;
-	assert(fread(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+
+	#ifdef COMPRESS_TMP_CLOUDS
+		uint8_t inbuf[ZLIB_CHUNK];
+		z_stream strm;
+		strm.zalloc = Z_NULL;
+		strm.zfree = Z_NULL;
+		strm.opaque = Z_NULL;
+		strm.avail_in = 0;
+		strm.next_in = Z_NULL;
+
+		if(inflateInit(&strm) != Z_OK)
+		{
+			printf("ERROR: ZLIB initialization failed\n");
+			abort();
+		}
+
+		int got_bytes = 0;
+		int bytes_left = n_points*sizeof(tmp_cloud_point_t);
+		int ret = 0;
+		do
+		{
+			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
+			if(ferror(f))
+			{
+				printf("ERROR reading submap input file\n");
+				abort();
+			}
+			if(strm.avail_in == 0)
+				break;
+
+			strm.next_in = inbuf;
+			do
+			{
+				strm.avail_out = bytes_left;
+				strm.next_out = (uint8_t*)cloud->points + got_bytes;
+
+				ret = inflate(&strm, Z_FINISH);
+				assert(ret != Z_STREAM_ERROR);
+
+				switch(ret)
+				{
+					case Z_NEED_DICT:
+					case Z_DATA_ERROR:
+					case Z_MEM_ERROR:
+					{
+						printf("ERROR: submap file decompression error, inflate() returned %d\n", ret);
+						abort();
+					}
+					default: break;
+				}
+
+				got_bytes += bytes_left - strm.avail_out;
+
+			} while(strm.avail_out == 0);
+		} while(ret != Z_STREAM_END);
+
+		inflateEnd(&strm);
+	#else
+		assert(fread(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+	#endif
 
 	fclose(f);
 	return 0;
