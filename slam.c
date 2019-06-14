@@ -550,7 +550,7 @@ void group_submaps(submap_meta_t* smm_out, uint32_t* n_smm_out, firstsidx_pose_t
 	printf(" n_fsp=%d\n", n_fsp);
 
 	// Count limit of full sensor rotations:
-	int count_limit = 10*VOXFILTER_N_SCANS;
+	int count_limit = N_SENSORS*VOXFILTER_N_SCANS;
 	// When max_x-min_x exceeds the limit, new submap group is initiated (at the next FIRST_SIDX edge)
 	int dx_limit = 3500;
 	int dy_limit = 3500;
@@ -725,7 +725,7 @@ void group_submaps(submap_meta_t* smm_out, uint32_t* n_smm_out, firstsidx_pose_t
 
 typedef struct
 {
-	int32_t src_seq_id; // Sequence ID gives us both pose and sensor idx, for exact source x,y,z for raytracing empty space. 0 is an invalid id
+	int32_t src_seq_id; // Sequence ID references us to ray_sources table, for exact source x,y,z for raytracing empty space. 0 is an invalid id
 
 	int32_t cnt;
 	int32_t x;
@@ -745,39 +745,34 @@ typedef struct
 #define VOXFILTER_ZS 64
 #define VOXFILTER_STEP 32
 
-// Remember to zero this struct out first.
-typedef struct
-{
-	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS][MAX_SRC_POSE_REFS];
-} voxfilter_t;
-
-typedef struct __attribute__((packed))
-{
-	int32_t src_seq_id; // Sequence ID gives us both pose and sensor idx, for exact source x,y,z for raytracing empty space. 0 is an invalid id
-
-	int32_t x;
-	int32_t y;
-	int32_t z;
-} tmp_cloud_point_t;
-
-/*
-#define MAX_POINTS_PER_INDEX_LIST
-#define INDEX_LIST_XS 160
-#define INDEX_LIST_YS 160
-#define INDEX_LIST_ZS 64
-#define INDEX_LIST_STEP 256
-tmp_cloud_list_indeces[
-*/
-
 typedef struct
 {
 	int x;
 	int y;
 	int z;
-} ray_source_t;
+} voxfilter_ray_source_t;
 
-static ray_source_t ray_sources[MAX_REFIDXS];
+// Remember to zero this struct out first.
+typedef struct
+{
+	voxfilter_ray_source_t ray_sources[VOXFILTER_N_SCANS*N_SENSORS];
+	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS][MAX_SRC_POSE_REFS]; // pose reffs refer to ray_sources
+} voxfilter_t;
 
+// Ray sources are always near the middle of the submap. Consider typical submap robot moving range of 5000mm (+/- 2500mm), so
+// 16-bit range of +/-32787mm is plentiful.
+// For Z, 16-bit range is more than enough as well -> struct is 16 bytes nicely.
+
+typedef struct __attribute__((packed))
+{
+	int16_t sx;
+	int16_t sy;
+	int16_t sz;
+
+	int32_t px;
+	int32_t py;
+	int16_t pz;
+} tmp_cloud_point_t;
 
 #define MAX_POINTS (9600*10*64)
 typedef struct
@@ -818,7 +813,8 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 	return 0;
 }
 
-
+#if 0
+// These DO NOT transform the ray sources
 static void transform_cloud(tmp_cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
 {
 	double cosa = cos(yaw);
@@ -861,7 +857,7 @@ static void transform_cloud_copy(tmp_cloud_t* cloud_in, tmp_cloud_t* cloud_out, 
 		cloud_out->points[p].z = z;
 	}
 }
-
+#endif
 
 static void rotate_cloud(tmp_cloud_t* cloud, double yaw)
 {
@@ -870,14 +866,24 @@ static void rotate_cloud(tmp_cloud_t* cloud, double yaw)
 
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		double x_in = cloud->points[p].x;
-		double y_in = cloud->points[p].y;
+		double px_in = cloud->points[p].px;
+		double py_in = cloud->points[p].py;
 
-		double x = x_in*cosa - y_in*sina;
-		double y = x_in*sina + y_in*cosa;
+		double px = px_in*cosa - py_in*sina;
+		double py = px_in*sina + py_in*cosa;
 
-		cloud->points[p].x = x;
-		cloud->points[p].y = y;
+		cloud->points[p].px = px;
+		cloud->points[p].py = py;
+
+		double sx_in = cloud->points[p].sx;
+		double sy_in = cloud->points[p].sy;
+
+		double sx = sx_in*cosa - sy_in*sina;
+		double sy = sx_in*sina + sy_in*cosa;
+
+		cloud->points[p].sx = sx;
+		cloud->points[p].sy = sy;
+
 	}
 }
 
@@ -1057,57 +1063,26 @@ void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, in
 	// Trace empty space:
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int seq_id = cloud->points[p].src_seq_id;
+		int sx = (cloud->points[p].sx)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int sy = (cloud->points[p].sy)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int sz = (cloud->points[p].sz)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
-		int sx = (ray_sources[seq_id].x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int sy = (ray_sources[seq_id].y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int sz = (ray_sources[seq_id].z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+		int px = (cloud->points[p].px)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = (cloud->points[p].py)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = (cloud->points[p].pz)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
-		int px = (cloud->points[p].x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
-
-/*
-		printf("p=%d, seq_id=%d, src=(%d,%d,%d), point=(%d,%d,%d), (%d,%d,%d)->(%d,%d,%d)\n", p, seq_id, 
-			ray_sources[seq_id].x, ray_sources[seq_id].y, ray_sources[seq_id].z,
-			cloud->points[p].x, cloud->points[p].y, cloud->points[p].z,
-			sx,sy,sz, px,py,pz);
-*/
+		//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
 		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
 	}
-
-#if 0
-	{
-		int sz = (ray_sources[507].z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
-
-		printf("SLICE AT Z=%d:\n", sz);
-		for(int yy=400+80; yy>=400-80; yy-=1)
-		{
-			for(int xx=400-160; xx<=400+160; xx+=1)
-			{
-				//printf("%3d ", free_cnt[xx][yy][sz]);
-				if(free_cnt[xx][yy][sz] > 2)
-					putchar('#');
-				else if(free_cnt[xx][yy][sz] > 1)
-					putchar('-');
-				else
-					putchar(' ');
-			}
-			printf("\n");
-		}
-		printf("\n");
-	//	abort();
-	}
-#endif	
 
 	out->n_points = 0;
 	int n_p = 0;
 	// Remove points at empty space
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int px = (cloud->points[p].x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+		int px = (cloud->points[p].px)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = (cloud->points[p].py)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = (cloud->points[p].pz)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
 		int val = get_voxel_cloudflt(px, py, pz);
 		if(val < 1)
@@ -1948,14 +1923,14 @@ static int cloud_to_cmp_matchmap_even(tmp_cloud_t* cloud, cmp_matchmap_t* matchm
 	int vox_cnt = 0;
 	for(int p=0; p<cloud->n_points; p+=2) // using a variable in p+=x instead of literal 1 slows down by about 15%
 	{
-		float x_in = cloud->points[p].x;
-		float y_in = cloud->points[p].y;
+		float x_in = cloud->points[p].px;
+		float y_in = cloud->points[p].py;
 
 		float x = x_in*cosa - y_in*sina + x_corr;
 		float y = x_in*sina + y_in*cosa + y_corr;
 
 		// Using integer math for z instead of float: 3.4ms --> 2.9ms
-		int z = cloud->points[p].z + z_corr;
+		int z = cloud->points[p].pz + z_corr;
 
 		int px = x/MATCHMAP_UNIT + MATCHMAP_XS/2;
 		int py = y/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -1988,14 +1963,14 @@ static int cloud_to_cmp_matchmap_odd(tmp_cloud_t* cloud, cmp_matchmap_t* matchma
 	int vox_cnt = 0;
 	for(int p=1; p<cloud->n_points; p+=2) // using a variable in p+=x instead of literal 1 slows down by about 15%
 	{
-		float x_in = cloud->points[p].x;
-		float y_in = cloud->points[p].y;
+		float x_in = cloud->points[p].px;
+		float y_in = cloud->points[p].py;
 
 		float x = x_in*cosa - y_in*sina + x_corr;
 		float y = x_in*sina + y_in*cosa + y_corr;
 
 		// Using integer math for z instead of float: 3.4ms --> 2.9ms
-		int z = cloud->points[p].z + z_corr;
+		int z = cloud->points[p].pz + z_corr;
 
 		int px = x/MATCHMAP_UNIT + MATCHMAP_XS/2;
 		int py = y/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -2030,12 +2005,12 @@ static int cloud_to_cmp_fine_matchmap(tmp_cloud_t* cloud, cmp_fine_matchmap_t* m
 	int oor = 0;
 	for(int p=0; p<cloud->n_points; p+=1)
 	{
-		float x_in = cloud->points[p].x;
-		float y_in = cloud->points[p].y;
+		float x_in = cloud->points[p].px;
+		float y_in = cloud->points[p].py;
 
 		float x = x_in*cosa - y_in*sina + x_corr;
 		float y = x_in*sina + y_in*cosa + y_corr;
-		int z = cloud->points[p].z + z_corr;
+		int z = cloud->points[p].pz + z_corr;
 
 		int px = x/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
 		int py = y/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
@@ -2064,35 +2039,70 @@ static int cloud_to_cmp_fine_matchmap(tmp_cloud_t* cloud, cmp_fine_matchmap_t* m
 	return vox_cnt;
 }
 
+/*
+	The next two functions are both called to build the ref_matchmap.
+	They are separate, because if multiple clouds are used, you need to
+	first call the _free() version for each, then _occu() for each
+	(because the _occu() also removes free space around the points)
 
-#define REF_MATCHMAP_OCCUPY_3X3X3
+	corr params transform the clouds, allowing you to add multiple submaps
+	to the same ref_matchmap, positioned correctly.
+*/
 
-static void cloud_to_ref_matchmap(tmp_cloud_t* cloud, ref_matchmap_t* matchmap)
+static void cloud_to_ref_matchmap_free(tmp_cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
-//	printf("cloud_to_ref_matchmap, adding %d points\n", cloud->n_points);
+	float cosa = cosf(yaw_corr);
+	float sina = sinf(yaw_corr);
+
 	// Trace empty space:
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int seq_id = cloud->points[p].src_seq_id;
+		float sx_in = cloud->points[p].sx;
+		float sy_in = cloud->points[p].sy;
 
-		int sx = (ray_sources[seq_id].x)/MATCHMAP_UNIT + MATCHMAP_XS/2;
-		int sy = (ray_sources[seq_id].y)/MATCHMAP_UNIT + MATCHMAP_YS/2;
-		int sz = (ray_sources[seq_id].z)/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
+		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
+		int   mmsz = cloud->points[p].sz + z_corr;
 
-		int px = (cloud->points[p].x)/MATCHMAP_UNIT + MATCHMAP_XS/2;
-		int py = (cloud->points[p].y)/MATCHMAP_UNIT + MATCHMAP_YS/2;
-		int pz = (cloud->points[p].z)/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+		float px_in = cloud->points[p].px;
+		float py_in = cloud->points[p].py;
+
+		float mmpx = px_in*cosa - py_in*sina + x_corr;
+		float mmpy = px_in*sina + py_in*cosa + y_corr;
+		int   mmpz = cloud->points[p].pz + z_corr;
+
+		int sx = mmsx/MATCHMAP_UNIT + MATCHMAP_XS/2;
+		int sy = mmsy/MATCHMAP_UNIT + MATCHMAP_YS/2;
+		int sz = mmsz/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+
+		int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
+		int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
+		int pz = mmpz/MATCHMAP_UNIT + MATCHMAP_ZS/2;
 
 		bresenham3d_ref_matchmap(sx, sy, sz, px, py, pz);
 	}
+}
 
-	// Add points, and remove empty space around them.
+
+static void cloud_to_ref_matchmap_occu(tmp_cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+{
+	float cosa = cosf(yaw_corr);
+	float sina = sinf(yaw_corr);
+
+	// Add points (to neighbor cells as well), and remove empty space around them.
 
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int px = (cloud->points[p].x)/MATCHMAP_UNIT + MATCHMAP_XS/2;
-		int py = (cloud->points[p].y)/MATCHMAP_UNIT + MATCHMAP_YS/2;
-		int pz = (cloud->points[p].z)/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+		float px_in = cloud->points[p].px;
+		float py_in = cloud->points[p].py;
+
+		float mmpx = px_in*cosa - py_in*sina + x_corr;
+		float mmpy = px_in*sina + py_in*cosa + y_corr;
+		int   mmpz = cloud->points[p].pz + z_corr;
+
+		int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
+		int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
+		int pz = mmpz/MATCHMAP_UNIT + MATCHMAP_ZS/2;
 
 		if(px < 1 || px > MATCHMAP_XS-2 || py < 1 || py > MATCHMAP_YS-2 || pz < 1 || pz > MATCHMAP_ZS-2)
 		{
@@ -2100,95 +2110,95 @@ static void cloud_to_ref_matchmap(tmp_cloud_t* cloud, ref_matchmap_t* matchmap)
 			continue;
 		}
 
-		#ifdef REF_MATCHMAP_OCCUPY_3X3X3
-			for(int ix=-1; ix<=1; ix++)
-			{
-				for(int iy=-1; iy<=1; iy++)
-				{
-					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-				}
-			}
-		#else
-			matchmap->units[py][px].occu |= (1ULL << pz);
-		#endif
-
-		// Remove empty space:
 		for(int ix=-1; ix<=1; ix++)
 		{
 			for(int iy=-1; iy<=1; iy++)
 			{
+				matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
 				matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
 			}
 		}
-
 	}
 }
 
-static void cloud_to_ref_fine_matchmap(tmp_cloud_t* cloud, ref_fine_matchmap_t* matchmap)
+static void cloud_to_ref_fine_matchmap_free(tmp_cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
-//	printf("cloud_to_ref_fine_matchmap, adding %d points\n", cloud->n_points);
+	float cosa = cosf(yaw_corr);
+	float sina = sinf(yaw_corr);
+
 	// Trace empty space:
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int seq_id = cloud->points[p].src_seq_id;
+		float sx_in = cloud->points[p].sx;
+		float sy_in = cloud->points[p].sy;
 
-		int sx = (ray_sources[seq_id].x)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
-		int sy = (ray_sources[seq_id].y)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
-		int sz = (ray_sources[seq_id].z)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
+		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
+		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
+		int   mmsz = cloud->points[p].sz + z_corr;
 
-		int px = (cloud->points[p].x)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
-		int py = (cloud->points[p].y)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
-		int pz = (cloud->points[p].z)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
+		float px_in = cloud->points[p].px;
+		float py_in = cloud->points[p].py;
+
+		float mmpx = px_in*cosa - py_in*sina + x_corr;
+		float mmpy = px_in*sina + py_in*cosa + y_corr;
+		int   mmpz = cloud->points[p].pz + z_corr;
+
+		int sx = mmsx/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
+		int sy = mmsy/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
+		int sz = mmsz/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
+
+		int px = mmpx/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
+		int py = mmpy/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
+		int pz = mmpz/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
 
 		bresenham3d_ref_fine_matchmap(sx, sy, sz, px, py, pz);
 	}
+}
 
-	// Add points, and remove empty space around them.
+
+static void cloud_to_ref_fine_matchmap_occu(tmp_cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+{
+	float cosa = cosf(yaw_corr);
+	float sina = sinf(yaw_corr);
+
+	// Add points (to neighbor cells as well), and remove empty space around them.
+
 	int oor = 0;
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int px = (cloud->points[p].x)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
-		int py = (cloud->points[p].y)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
-		int pz = (cloud->points[p].z)/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
+		float px_in = cloud->points[p].px;
+		float py_in = cloud->points[p].py;
+
+		float mmpx = px_in*cosa - py_in*sina + x_corr;
+		float mmpy = px_in*sina + py_in*cosa + y_corr;
+		int   mmpz = cloud->points[p].pz + z_corr;
+
+		int px = mmpx/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
+		int py = mmpy/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
+		int pz = mmpz/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
 
 		if(px < 1 || px > FINE_MATCHMAP_XS-2 || py < 1 || py > FINE_MATCHMAP_YS-2 || pz < 1 || pz > FINE_MATCHMAP_ZS-2)
 		{
-			//printf("cloud_to_ref_fine_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
 			oor++;
 			continue;
 		}
 
-		#ifdef REF_MATCHMAP_OCCUPY_3X3X3
-			for(int ix=-1; ix<=1; ix++)
-			{
-				for(int iy=-1; iy<=1; iy++)
-				{
-					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-				}
-			}
-		#else
-			matchmap->units[py][px].occu |= (1ULL << pz);
-		#endif
-
-		// Remove empty space:
 		for(int ix=-1; ix<=1; ix++)
 		{
 			for(int iy=-1; iy<=1; iy++)
 			{
+				matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
 				matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
 			}
 		}
-
 	}
 
 	if(oor > cloud->n_points/20)
 	{
-		printf("cloud_to_ref_fine_matchmap: WARN: over 5%% OOR points\n");
+		printf("WARN: cloud_to_ref_fine_matchmap_occu: more than 5%% out-of-range voxels\n");
 	}
-
 }
 
-//#include "icp.c"
 
 static int compar_scores(const void* a, const void* b)
 {
@@ -2202,32 +2212,63 @@ static int compar_scores(const void* a, const void* b)
 
 #define MATCHER_MAX_THREADS 4
 
-int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
+/*
+	Parameters explained a bit by an example:
+	Consider matching submap 10 to submap 50. sm10 is the ref, sm50 is the cmp.
+	Assumed coordinate difference between them is given in dx, dy, dz parameters. If the submaps, cmp translated by (dx,dy,dz),
+	match perfectly, the best result would then be 0,0,0.
+
+	Now consider using several submaps as the reference. This makes a lot of sense, because in a large loop closure,
+	you are very unlikely to hit the exact area where the earlier submap was taken. So if we combine multiple, we have
+	more area to be matched against (with a small risk that these adjacent submaps produce some alignment error, but it
+	should be small compared to large scale matching expected from large loop closures).
+
+	So, you want to match the combined sm9,sm10,sm11 as the ref, and sm50 as cmp, but you want to build the actual loop closure
+	correction numbers between sm10 and sm50. Therefore,
+	n_sma = 3
+	i_sma = {9, 10, 11}
+	sma_corrs = { {-(world coord differences between sm9,sm10) - (any adjacent matching corrections between sm9,sm10)},
+	              {0},
+	              {+(world coord differences between sm10,sm11) + (any adjacent matching corrections between sm10,sm11)} }
+
+	dx, dy, dz = world coordinate differences between sm10 and sm50
+*/
+
+int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref submaps, ref submap indeces, and relative corrections compared to the ref midpoint (which is again related to dx,dy,dz)
+                   int i_smb,  // cmp submap index
                    double xy_range, double z_range, double yaw_range, // Matching correction ranges (mm, rad)
                    int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
                    result_t* results_out)
 {
 	memset(results_out, 0, sizeof(result_t)*N_MATCH_RESULTS);
 
-	static tmp_cloud_t sma, smb;
-
 	double start_time = subsec_timestamp();
 
-	// TODO: try removing memsets, shouldn't matter.
-	memset(&sma, 0, sizeof(tmp_cloud_t));
-	memset(&smb, 0, sizeof(tmp_cloud_t));
+	assert(n_sma >= 1 && n_sma <= 4);
+	tmp_cloud_t* smas[4];
 
-	load_tmp_cloud(&sma, i_sma);
-	load_tmp_cloud(&smb, i_smb);
+	// Glue the ref submaps together to ref_matchmap:
+	memset(&ref_matchmap, 0, sizeof(ref_matchmap));
+	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
+	for(int i=0; i<n_sma; i++)
+	{
+		smas[i] = malloc(sizeof(tmp_cloud_t));
+		load_tmp_cloud(smas[i], i_sma[i]);
+		cloud_to_ref_matchmap_free(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
+		cloud_to_ref_fine_matchmap_free(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
+	}
 
-	// SMA is ref_matchmap
-	// SMB is cmp_matchmap
+	for(int i=0; i<n_sma; i++)
+	{
+		cloud_to_ref_matchmap_occu(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
+		cloud_to_ref_fine_matchmap_occu(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
+		free(smas[i]);
+	}
+
+
 
 	// ref_matchmap includes free space, so is slower to calculate
 	// cmp_matchmap only includes occupied space, and is compared against ref_matchmap quickly
-
-	memset(&ref_matchmap, 0, sizeof(ref_matchmap));
-	cloud_to_ref_matchmap(&sma, &ref_matchmap);
 
 	int xy_batches = ceil(xy_range/((double)MATCHMAP_XY_RANGE*MATCHMAP_UNIT));
 	int z_steps_per_dir  = ceil(z_range/((double)MATCHMAP_UNIT));
@@ -2288,6 +2329,9 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 	printf("xy_batches=%d, total_z_steps=%d (%d batches, threads %d(+%d)) --> ", xy_batches, total_z_steps, z_batches, threads_at_least, remaining_threads); fflush(stdout);
 
+	tmp_cloud_t* smb = malloc(sizeof(tmp_cloud_t));
+	load_tmp_cloud(smb, i_smb);
+
 	for(int cur_yaw_step = 0; cur_yaw_step < yaw_steps; cur_yaw_step++)
 	{
 		int not_skipped = 0;
@@ -2333,7 +2377,7 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 					memset(&cmp_matchmap, 0, sizeof(cmp_matchmap));
 
 
-					int n_vox = cloud_to_cmp_matchmap_even(&smb, &cmp_matchmap, cx, cy, cz, cur_yaw_corr);
+					int n_vox = cloud_to_cmp_matchmap_even(smb, &cmp_matchmap, cx, cy, cz, cur_yaw_corr);
 
 
 					// Quick matching finds "average" score over the matching range; in z direction, only one spot is used. Use the midpoint:
@@ -2354,7 +2398,7 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 					not_skipped = 1;
 
-					n_vox += cloud_to_cmp_matchmap_odd(&smb, &cmp_matchmap, cx, cy, cz, cur_yaw_corr);
+					n_vox += cloud_to_cmp_matchmap_odd(smb, &cmp_matchmap, cx, cy, cz, cur_yaw_corr);
 
 
 
@@ -2466,10 +2510,6 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 
 
-	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
-	cloud_to_ref_fine_matchmap(&sma, &ref_fine_matchmap);
-
-
 	//printf("total results (from %d pcs):\n", total_results);
 	for(int i=0; i<total_results; i++)
 	{
@@ -2511,7 +2551,7 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 				//double t2 = subsec_timestamp();
 
-				int n_vox = cloud_to_cmp_fine_matchmap(&smb, &cmp_fine_matchmap, cx, cy, cz, cur_yaw_corr);
+				int n_vox = cloud_to_cmp_fine_matchmap(smb, &cmp_fine_matchmap, cx, cy, cz, cur_yaw_corr);
 
 				//double t3 = subsec_timestamp();
 
@@ -2574,9 +2614,10 @@ int match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 	double end_time = subsec_timestamp();
 
-	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
+//	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
 
 	free(results);
+	free(smb);
 	return n_results;
 }
 
@@ -2668,7 +2709,8 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 
 	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
-	cloud_to_ref_fine_matchmap(&sma, &ref_fine_matchmap);
+	cloud_to_ref_fine_matchmap_free(&sma, &ref_fine_matchmap, 0,0,0,0);
+	cloud_to_ref_fine_matchmap_occu(&sma, &ref_fine_matchmap, 0,0,0,0);
 
 	// TODO: These batches could run in parallel, in multiple threads
 	for(int cur_yaw_step = 0; cur_yaw_step < FINE_MATCH_YAW_STEPS; cur_yaw_step++)
@@ -2794,7 +2836,7 @@ static void cloud_to_voxmap(tmp_cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 
 		for(int i=0; i<cloud->n_points; i++)
 		{
-			po_coords_t po = po_coords(cloud->points[i].x+ref_x, cloud->points[i].y+ref_y, cloud->points[i].z+ref_z, rl);
+			po_coords_t po = po_coords(cloud->points[i].px+ref_x, cloud->points[i].py+ref_y, cloud->points[i].pz+ref_z, rl);
 			uint8_t* p_vox = get_p_voxel(po, rl);
 			if(((*p_vox) & 0x0f) < 15)
 				(*p_vox)++;
@@ -2804,26 +2846,31 @@ static void cloud_to_voxmap(tmp_cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 }
 
 
-static inline void cloud_insert_point(tmp_cloud_t* cloud, int seq_id, int32_t x, int32_t y, int32_t z)
+static inline void cloud_insert_point(tmp_cloud_t* cloud, int16_t sx, int16_t sy, int16_t sz, int32_t px, int32_t py, int32_t pz)
 {
 	if(cloud->n_points >= MAX_POINTS)
 	{
-		printf("WARNING: Ignoring point seq=%d, (%d,%d,%d), cloud full.\n", seq_id, x, y, z);
+		printf("WARNING: Ignoring point, cloud full.\n");
 		return;
 	}
 	assert(cloud->n_points >= 0);
 
-	cloud->points[cloud->n_points].src_seq_id = seq_id;
-	cloud->points[cloud->n_points].x = x;
-	cloud->points[cloud->n_points].y = y;
-	cloud->points[cloud->n_points].z = z;
+	assert(sx != 0 || sy != 0 || sz != 0); // Would be an alarming coincidence. Remove this assert later as it's a real possibility given enough data.
+
+	cloud->points[cloud->n_points].sx = sx;
+	cloud->points[cloud->n_points].sy = sy;
+	cloud->points[cloud->n_points].sz = sz;
+
+	cloud->points[cloud->n_points].px = px;
+	cloud->points[cloud->n_points].py = py;
+	cloud->points[cloud->n_points].pz = pz;
 
 	cloud->n_points++;
 }
 
 static void voxfilter_to_cloud(voxfilter_t* voxfilter, tmp_cloud_t* cloud)
 {
-	int insert_cnt = 0;
+//	int insert_cnt = 0;
 	for(int yy=0; yy<VOXFILTER_YS; yy++)
 	{
 		for(int xx=0; xx<VOXFILTER_XS; xx++)
@@ -2833,19 +2880,23 @@ static void voxfilter_to_cloud(voxfilter_t* voxfilter, tmp_cloud_t* cloud)
 				for(int i=0; i<MAX_SRC_POSE_REFS; i++)
 				{
 					voxfilter_point_t* p = &(voxfilter->points[xx][yy][zz][i]);
-					if(p->src_seq_id == 0)
+					if(p->cnt == 0)
 					{
 						break;
 					}
 
-					assert(p->cnt > 0); // if seq_id is valid, there must be at least one point.
+					assert(p->src_seq_id > 0 && p->src_seq_id < VOXFILTER_N_SCANS*N_SENSORS);
 
 					int32_t x = p->x / p->cnt;
 					int32_t y = p->y / p->cnt;
 					int32_t z = p->z / p->cnt;
 
-					cloud_insert_point(cloud, p->src_seq_id, x, y, z);
-					insert_cnt++;
+					cloud_insert_point(cloud, 
+						voxfilter->ray_sources[p->src_seq_id].x, 
+						voxfilter->ray_sources[p->src_seq_id].y,
+						voxfilter->ray_sources[p->src_seq_id].z, 
+						x, y, z);
+					//insert_cnt++;
 				}
 			}
 		}
@@ -2854,24 +2905,25 @@ static void voxfilter_to_cloud(voxfilter_t* voxfilter, tmp_cloud_t* cloud)
 	//printf("INFO: voxfilter_to_cloud inserted %d points\n", insert_cnt);
 }
 
-static inline void voxfilter_insert_point(tmp_cloud_t* cloud, voxfilter_t* voxfilter, int seq_id, int32_t x, int32_t y, int32_t z)
+static inline void voxfilter_insert_point(tmp_cloud_t* cloud, voxfilter_t* voxfilter, int subsubmap_seq_id, int32_t x, int32_t y, int32_t z)
 {
 	int vox_x = x/VOXFILTER_STEP + VOXFILTER_XS/2;
 	int vox_y = y/VOXFILTER_STEP + VOXFILTER_YS/2;
 	int vox_z = z/VOXFILTER_STEP + VOXFILTER_ZS/2;
 
+	assert(subsubmap_seq_id > 0 && subsubmap_seq_id < VOXFILTER_N_SCANS*N_SENSORS);
+
 	if(vox_x < 0 || vox_x > VOXFILTER_XS-1 || vox_y < 0 || vox_y > VOXFILTER_YS-1 || vox_z < 0 || vox_z > VOXFILTER_ZS-1)
 	{
 //		printf("INFO: voxfilter: skipping OOR point %d, %d, %d\n", vox_x, vox_y, vox_z);
-		cloud_insert_point(cloud, seq_id, x, y, z);
+		cloud_insert_point(cloud, voxfilter->ray_sources[subsubmap_seq_id].x,voxfilter->ray_sources[subsubmap_seq_id].y,voxfilter->ray_sources[subsubmap_seq_id].z, x, y, z);
 		return;
 	}
-
 	
 	int found = 0;
 	for(int i=0; i < MAX_SRC_POSE_REFS; i++)
 	{
-		if(voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id == seq_id)
+		if(voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id == subsubmap_seq_id)
 		{
 			// Existing point with the same seq_id - average on the top of this.
 			voxfilter->points[vox_x][vox_y][vox_z][i].cnt++;
@@ -2891,7 +2943,7 @@ static inline void voxfilter_insert_point(tmp_cloud_t* cloud, voxfilter_t* voxfi
 			if(voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id == 0)
 			{
 				// Take this new, empty spot
-				voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id = seq_id;
+				voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id = subsubmap_seq_id;
 				voxfilter->points[vox_x][vox_y][vox_z][i].cnt = 1;
 				voxfilter->points[vox_x][vox_y][vox_z][i].x = x;
 				voxfilter->points[vox_x][vox_y][vox_z][i].y = y;
@@ -2912,8 +2964,8 @@ static inline void voxfilter_insert_point(tmp_cloud_t* cloud, voxfilter_t* voxfi
 
 
 
-
-void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int seq_id, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
+// ssm_seq_id is sequence id for voxfilter. 0 is invalid value, must start from 1, and be unique for each unique TOF image
+void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int ssm_seq_id, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
 	 voxfilter_t* voxfilter, tmp_cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold)
 {
 	if(sidx < 0 || sidx >= N_SENSORS)
@@ -2969,10 +3021,17 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 	int32_t  local_sensor_z = sensor_mounts[sidx].z_rel_ground;
 
 
-	ray_sources[seq_id].x = global_sensor_x;
-	ray_sources[seq_id].y = global_sensor_y;
-	ray_sources[seq_id].z = global_sensor_z;
+	int sx = global_sensor_x;
+	int sy = global_sensor_y;
+	int sz = global_sensor_z;
 
+	if(voxfilter)
+	{
+		assert(ssm_seq_id > 0 && ssm_seq_id < VOXFILTER_N_SCANS*N_SENSORS);
+		voxfilter->ray_sources[ssm_seq_id].x = sx;
+		voxfilter->ray_sources[ssm_seq_id].y = sy;
+		voxfilter->ray_sources[ssm_seq_id].z = sz;
+	}
 
 	int y_ignore=1;
 	int x_ignore=1;
@@ -3154,14 +3213,13 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 //					continue;
 
 				if(voxfilter && d < voxfilter_threshold)
-					voxfilter_insert_point(cloud, voxfilter, seq_id, x, y, z);
+					voxfilter_insert_point(cloud, voxfilter, ssm_seq_id, x, y, z);
 				else
-					cloud_insert_point(cloud, seq_id, x, y, z);
+					cloud_insert_point(cloud, sx, sy, sz, x, y, z);
 
 			}
 		}
 	}
-
 }
 
 // Not thread safe, supplies pointer to internal static buf
@@ -3919,7 +3977,13 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, closure_t* ou
 			cur_sms, cur_x, cur_y, cur_z, i, smi_x, smi_y, smi_z, xy_uncert, z_uncert, dx, dy, dz);
 		fflush(stdout);
 
-		int now_n_results = match_submaps(i, cur_sms, xy_uncert, z_uncert, yaw_uncert, dx, dy, dz, results[n_submaps]);
+		int n_sma = 1;
+		int i_sma[4] = {i, 0,0,0};
+		result_t sma_corrs[4];
+		memset(sma_corrs, 0, sizeof(sma_corrs));
+
+		int now_n_results = match_submaps(n_sma, i_sma, sma_corrs,
+			cur_sms, xy_uncert, z_uncert, yaw_uncert, dx, dy, dz, results[n_submaps]);
 
 		printf("%d results\n", now_n_results);
 
@@ -4292,6 +4356,9 @@ int main(int argc, char** argv)
 					}
 					assert(cidx>=0);
 
+					// Voxfilter requires a source index running starting from 1.
+					int voxflt_src_idx = idx - submap_metas[sm].subsubmaps[ssm].start_idx + 1;
+
 					char fname[1024];
 					sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", idx);
 					tof_slam_set_t* tss;
@@ -4301,21 +4368,21 @@ int main(int argc, char** argv)
 						hw_pose_t pose1 = add_poses(tss->sets[1].pose, pose_corrs[cidx].pose);
 						tof_to_voxfilter_and_cloud(0, 
 							tss->sets[0].ampldist, pose0,
-							idx, tss->sidx, 
+							voxflt_src_idx, tss->sidx, 
 							submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
 							&tmp_voxfilter, &tmp_cloud, 1800, 300);
 
 						if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
 							tof_to_voxfilter_and_cloud(1, 
 								tss->sets[1].ampldist, pose1,
-								idx, tss->sidx, 
+								voxflt_src_idx, tss->sidx, 
 								submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
 								NULL, &tmp_cloud, 1800, 3000);
 
 						if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
 							tof_to_voxfilter_and_cloud(0, 
 								tss->sets[1].ampldist, pose1,
-								idx, tss->sidx, 
+								voxflt_src_idx, tss->sidx, 
 								submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
 								NULL, &tmp_cloud, 1800, 3000);
 					}
@@ -4486,8 +4553,8 @@ int main(int argc, char** argv)
 	if(do_closures)
 	{
 		// Loop closures
-		for(int sm=150; sm<151; sm++)
-//		for(int sm=0; sm<n_submaps; sm++)
+//		for(int sm=150; sm<151; sm++)
+		for(int sm=0; sm<n_submaps; sm++)
 		{
 			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
 			if(sm < n_submaps-1)
