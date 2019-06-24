@@ -133,7 +133,7 @@ sensor_mount_t sensor_mounts[N_SENSORS] =
 #define sq(x) ((x)*(x))
 #define abso(x) (((x)<0)?(-(x)):(x))
 
-typedef struct __attribute__((packed))
+/*typedef struct __attribute__((packed))
 {
 	int32_t start_idx;
 	int32_t end_idx;
@@ -141,11 +141,12 @@ typedef struct __attribute__((packed))
 	int32_t avg_y;
 	int32_t avg_z;
 } subsubmap_meta_t;
-
-#define MAX_SUBSUBMAPS 16
+*/
+//#define MAX_SUBSUBMAPS 16
 
 typedef struct  __attribute__((packed))
 {
+	// Sensor data sequence IDs. start_idx is the first, end_idx is the last, both inclusive.
 	int32_t start_idx;
 	int32_t end_idx;
 
@@ -161,8 +162,10 @@ typedef struct  __attribute__((packed))
 	int32_t avg_z;
 	int32_t max_z;
 
-	int32_t n_subsubmaps;
-	subsubmap_meta_t subsubmaps[MAX_SUBSUBMAPS];
+	hw_pose_t trajectory[SUBMAP_MAX_SCANS];
+
+//	int32_t n_subsubmaps;
+//	subsubmap_meta_t subsubmaps[MAX_SUBSUBMAPS];
 
 } submap_meta_t;
 
@@ -552,12 +555,192 @@ typedef struct
 	the submaps, starting a new one and terminating the current one whenever necessary.
 */
 
+// Maximum number of subsubmaps in a submap. After exceeded, a new submap is force-started
+// Number of maximum scans is SUBSUBMAP_LIMIT * VOXFILTER_N_SCANS
+#define SUBSUBMAP_LIMIT 10
+#define SUBMAP_MAX_SCANS (SUBSUBMAP_LIMIT * VOXFILTER_N_SCANS)
+
+// Maximum difference in robot coordinates during a submap, basically the length of the robot pose range before terminating the submap. In mm
+#define DX_LIMIT 4000
+#define DY_LIMIT 4000
+#define DZ_LIMIT 2000
+
+// Cumulative linear travel limit; after exceeded, a new submap is started. In mm.
+// Difference to the D*_LIMITs is that this limit can force a new submap even when the robot is just moving inside a small area.
+#define CUMUL_TRAVEL_LIMIT 6000
+// Similar, but for cumulative angular (yaw) motion
+#define CUMUL_YAW_LIMIT DEGTORAD(200)
+
+static int n_sms;
+static submap_meta_t submap_metas[MAX_SUBMAPS];
+
+#define VECTSQ_I64(xa_, ya_, za_, xb_, yb_, zb_) (sq((int64_t)(xa_)-(int64_t)(xb_)) + sq((int64_t)(ya_)-(int64_t)(yb_)) sq((int64_t)(za_)-(int64_t)(zb_)))
+
 //void group_submaps(submap_meta_t* smm_out, uint32_t* n_smm_out, firstsidx_pose_t* fsp, int n_fsp, firstsidx_pose_t* pose_corrs)
 void input_tof_slam_set(tof_slam_set_t* tss)
 {
-	if(tss->sidx == FIRST_SIDX)
+	// Accumulation variables for each submap
+	static int32_t min_x = INT32_MAX, min_y = INT32_MAX, min_z = INT32_MAX;
+	static int32_t max_x = INT32_MIN, max_y = INT32_MIN, max_z = INT32_MIN;
+	static int64_t avg_x = 0, avg_y = 0, avg_z = 0;
+	static double cumul_travel = 0;
+	static double cumul_yaw = 0.0;
+	static int n_scans = 0; // Number of accumulated sensor scan rounds
 
-	
+	static int32_t prev_x = INT32_MIN, prev_y = INT32_MIN, prev_z = INT32_MIN; // INT32_MIN signifies invalid value
+	static double prev_yaw = 0.0;
+
+	// Accumulation variables for each subsubmap
+	static int64_t ss_avg_x = 0, ss_avg_y = 0, ss_avg_z = 0;
+	static int ss_n_scans = 0;
+
+	// Subsubmap (voxfilter accumulation) needs to have a reference point -
+	// middle of the subsubmap would be optimal, but can't know that beforehand.
+	// Use the robot pose at the start of collecting data to the voxfilter
+	// When ref_x is set as INT32_MIN, a new initialization is made.
+
+	static int32_t sm_ref_x = INT32_MIN, sm_ref_y, sm_ref_z;
+
+	// Subsubmap reference position compared to the submap.
+	// First subsubmap in the submap has 0,0,0.
+	// When ref_x is set as INT32_MIN, a new initialization is made.
+	static int32_t ssm_ref_x = INT32_MIN, ssm_ref_y, ssm_ref_z;
+
+	if(sm_ref_x == INT32_MIN)
+	{
+		sm_ref_x = tss->set[0].pose.x;
+		sm_ref_y = tss->set[0].pose.y;
+		sm_ref_z = tss->set[0].pose.z;
+	}
+
+	if(ssm_ref_x == INT32_MIN)
+	{
+		assert(voxfilter->n_ray_sources == 0); // voxfilter is cleared, either this is the first thing ever, or we just cleared it.
+		ssm_ref_x = tss->set[0].pose.x;
+		ssm_ref_y = tss->set[0].pose.y;
+		ssm_ref_z = tss->set[0].pose.z;
+	}
+
+	tof_to_voxfilter_and_cloud(0, 
+		tss->sets[0].ampldist, tss->sets[0].pose,
+		tss->sidx, 
+		submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+		&tmp_voxfilter, &tmp_cloud, 1800, 300);
+
+	if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
+	{
+		tof_to_voxfilter_and_cloud(1, 
+			tss->sets[1].ampldist, tss->sets[1].pose,
+			tss->sidx, 
+			submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+			NULL, &tmp_cloud, 1800, 3000);
+	}
+	else if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
+	{
+		tof_to_voxfilter_and_cloud(0, 
+			tss->sets[1].ampldist, tss->sets[1].pose,
+			tss->sidx, 
+			submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+			NULL, &tmp_cloud, 1800, 3000);
+	}
+
+
+	if(tss->sidx == LAST_SIDX)
+	{
+		hw_pose_t cur_pose = tss->sets[0].pose;
+
+		if(prev_x != INT32_MIN) // prev_x,y,z valid
+		{
+			cumul_travel += sqrt(VECTSQ_I64(cur_pose.x, cur_pose.y, cur_pose.z, prev_x, prev_y, prev_z));
+			double dyaw = ANG32TORAD(cur_pose) - prev_yaw;
+			WRAP_RAD_BIPO(dyaw); // dyaw will be -pi .. pi. Small actual rotation never gives a large value after this.
+			cumul_yaw += fabs(dyaw);
+			
+		}
+
+		prev_x = cur_pose.x;
+		prev_y = cur_pose.y;
+		prev_z = cur_pose.z;
+		prev_yaw = ANG32TORAD(cur_pose.ang);
+
+		TRACK_MIN(cur_pose.x, min_x);
+		TRACK_MIN(cur_pose.y, min_y);
+		TRACK_MIN(cur_pose.z, min_z);
+
+		TRACK_MAX(cur_pose.x, max_x);
+		TRACK_MAX(cur_pose.y, max_y);
+		TRACK_MAX(cur_pose.z, max_z);
+
+		avg_x += cur_pose.x;
+		avg_y += cur_pose.y;
+		avg_z += cur_pose.z;
+		n_scans++;
+
+		ss_avg_x += cur_pose.x;
+		ss_avg_y += cur_pose.y;
+		ss_avg_z += cur_pose.z;
+		ss_n_scans++;
+
+		int dx = max_x - min_x;
+		int dy = max_y - min_y;
+		int dz = max_z - min_z;
+
+
+		if(ss_n_scans >= VOXFILTER_N_SCANS)
+		{
+			assert(ss_n_scans == VOXFILTER_N_SCANS);
+
+			// Current subsubmap ended.
+			// Well, now subsubmaps are nothing else than resets of voxfilters.
+
+			voxfilter_to_cloud(&voxfilter, p_current_submap);
+			memset(&voxfilter, 0, sizeof(voxfilter_t));
+			ssm_ref_x = INT32_MIN; // This forces a new coordinate fetch before anything is applied to now empty voxfilter.
+			ss_n_scans = 0;
+			n_subsubmaps++;
+
+			// Check if we need to finish the current submap:
+			// Let the dx,dy, or dz overshoot a bit, instead ensure that the submap is evenly divisible into subsubmaps
+			// count limit can be compared as-is, because it's divisible by VOXFILTER_N_SCANS
+			if(	n_subsubmaps >= SUBSUBMAP_LIMIT ||
+				abso(dx) > dx_limit || abso(dy) > dy_limit || abso(dz) > dz_limit ||
+				cumul_travel > CUMUL_TRAVEL_LIMIT || cumul_yaw > CUMUL_YAW_LIMIT)
+			{
+				n_subsubmaps = 0;
+
+				submap_metas[n_sms].min_x = min_x;
+				submap_metas[n_sms].min_y = min_y;
+				submap_metas[n_sms].min_z = min_z;
+				submap_metas[n_sms].max_x = max_x;
+				submap_metas[n_sms].max_y = max_y;
+				submap_metas[n_sms].max_z = max_z;
+				submap_metas[n_sms].avg_x = avg_x/avg_n;
+				submap_metas[n_sms].avg_y = avg_y/avg_n;
+				submap_metas[n_sms].avg_z = avg_z/avg_n;
+
+				// We only know the midpoint of the submap now that it's finished.
+				// Our original reference is still stored at sm_ref_*.
+				// Translate the finished cloud to get the origin at avg_*.
+				int32_t transl_x = submap_metas[sm].avg_x - sm_ref_x;
+				int32_t transl_y = submap_metas[sm].avg_y - sm_ref_y;
+				int32_t transl_z = submap_metas[sm].avg_z - sm_ref_z;
+
+				sm_ref_x = INT32_MIN; // Force reload of sm_ref_* at the very next sensor dataset.
+
+				// filter_cloud makes a new cloud.
+
+				filter_cloud(&tmp_cloud, &tmp_cloud_filtered, transl_x, transl_y, transl_z);
+
+				n_sms++;
+
+			}
+
+		}
+
+
+	}
+
+
 }
 
 void input_from_file(int file_idx)
@@ -572,26 +755,6 @@ void input_from_file(int file_idx)
 }
 
 {
-	if(n_fsp < 1)
-	{
-		printf("Error: n_fsp < 1\n");
-
-	}
-	printf(__func__);
-	printf(" n_fsp=%d\n", n_fsp);
-
-	// Count limit of full sensor rotations:
-	int count_limit = N_SENSORS*VOXFILTER_N_SCANS;
-	// When max_x-min_x exceeds the limit, new submap group is initiated (at the next FIRST_SIDX edge)
-	int dx_limit = 3500;
-	int dy_limit = 3500;
-	int dz_limit = 1500;
-
-	int overlap_dx_limit = 2500;
-	int overlap_dy_limit = 2500;
-	int overlap_dz_limit = 1000;
-
-	int start_fsp = 0;
 
 	int n_smm = 0;
 	while(1)
@@ -754,27 +917,46 @@ void input_from_file(int file_idx)
 }
 
 
-typedef struct
-{
-	int32_t src_seq_id; // Sequence ID references us to ray_sources table, for exact source x,y,z for raytracing empty space. 0 is an invalid id
-
-	int32_t cnt;
-	int32_t x;
-	int32_t y;
-	int32_t z;
-} voxfilter_point_t;
-
-// 20MB of memory with these, coverage 4.1x4.1x2.0 m
+// 24MB of memory with these, coverage 4.1x4.1x2.0 m
 // Outside of the filter, all points go through as they are.
 // When robot is fully stationary, max two sensors can see the same spot per full scan.
 // When moving, three sensors can see the same spot per full scan.
-// It's very unlikely that 16 references would run out for 6 full scans.
+// It's quite unlikely that 10 references would run out for 6 full scans. If it happens, no big harm done, data goes through without filtration
 
-#define MAX_SRC_POSE_REFS 16
+#define VOXFILTER_MAX_RAY_SOURCES 10 // 10 -> voxfilter_point_t = 24 bytes (alignable by 4 and 8)
 #define VOXFILTER_XS 128
 #define VOXFILTER_YS 128
 #define VOXFILTER_ZS 64
 #define VOXFILTER_STEP 32
+
+
+/*
+When the voxfilter accumulates (averages) close points from different sources, we must store the information of all
+sources involved, so that the free space can be traced from all correct sources. 
+
+In order to filter better, we allow another source point to be used instead, if it's close enough to
+the correct source. This happens, for example, if the robot is stationary or near stationary. Or, in some cases, when
+the robot happens to run forward at a certain lucky speed, so that another sensor gets an image close to the point
+where the another sensor picked an image earlier.
+
+Upside in increasing this: point clouds gets smaller, because each different source needs to generate a new point even if
+the target point is combined by the voxfilter. 
+
+The only downside to increasing this: free space very close to the robot may not be traced perfectly - some
+small stripes and spots *might* remain unknown (not free) even when they are actually free. Note that if you have
+a lot of moving people around the robot while mapping, this might prevent the later free space filter from removing
+some artefacts.
+*/
+#define VOXFILTER_SOURCE_COMBINE_THRESHOLD 32 // mm
+
+typedef struct __attribute__((packed))
+{
+	uint8_t src_idxs[VOXFILTER_MAX_RAY_SOURCES]; // Zero-terminated list of indeces to voxfilter.ray_sources[]  (zero termination not required, if max length used)
+	uint16_t cnt;
+	int32_t x;
+	int32_t y;
+	int32_t z;
+} voxfilter_point_t;
 
 typedef struct
 {
@@ -786,9 +968,13 @@ typedef struct
 // Remember to zero this struct out first.
 typedef struct
 {
-	voxfilter_ray_source_t ray_sources[VOXFILTER_N_SCANS*N_SENSORS];
-	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS][MAX_SRC_POSE_REFS]; // pose reffs refer to ray_sources
+	int n_ray_sources;
+	voxfilter_ray_source_t ray_sources[VOXFILTER_N_SCANS*N_SENSORS+1]; // Start collecting at index 1
+	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS];
 } voxfilter_t;
+
+
+static voxfilter_t voxfilter;
 
 // Ray sources are always near the middle of the submap. Consider typical submap robot moving range of 5000mm (+/- 2500mm), so
 // 16-bit range of +/-32787mm is plentiful.
@@ -803,14 +989,16 @@ typedef struct __attribute__((packed))
 	int32_t px;
 	int32_t py;
 	int16_t pz;
-} tmp_cloud_point_t;
+} cloud_point_t;
+
+#define TRANSLATE_CLOUD_POINT(c_, x_, y_, z_) (cloud_point_t){c_.sx + (x_) , c_.sy + (y_) , c_.sz + (z_) , c_.px + (x_) , c_.py + (y_) , c_.pz + (z_)}
 
 #define MAX_POINTS (9600*10*64)
 typedef struct
 {
 	int n_points;
-	tmp_cloud_point_t points[MAX_POINTS];
-} tmp_cloud_t;
+	cloud_point_t points[MAX_POINTS];
+} cloud_t;
 
 /*
 	50 typical submaps = 
@@ -827,7 +1015,7 @@ typedef struct
 	#define ZLIB_LEVEL 2  // from 1 to 9, 9 = slowest but best compression
 #endif
 
-int save_tmp_cloud(tmp_cloud_t* cloud, int idx)
+int save_tmp_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
 	snprintf(fname, 1024, "submap%06u", idx);
@@ -848,7 +1036,7 @@ int save_tmp_cloud(tmp_cloud_t* cloud, int idx)
 			printf("ERROR: ZLIB initialization failed\n");
 			abort();
 		}
-		strm.avail_in = n_points*sizeof(tmp_cloud_point_t);
+		strm.avail_in = n_points*sizeof(cloud_point_t);
 		strm.next_in = (uint8_t*)cloud->points;
 
 		do
@@ -873,14 +1061,14 @@ int save_tmp_cloud(tmp_cloud_t* cloud, int idx)
 		deflateEnd(&strm);
 
 	#else
-		assert(fwrite(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+		assert(fwrite(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
 	#endif
 
 	fclose(f);
 	return 0;
 }
 
-int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
+int load_tmp_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
 	snprintf(fname, 1024, "submap%06u", idx);
@@ -907,7 +1095,7 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 		}
 
 		int got_bytes = 0;
-		int bytes_left = n_points*sizeof(tmp_cloud_point_t);
+		int bytes_left = n_points*sizeof(cloud_point_t);
 		int ret = 0;
 		do
 		{
@@ -948,7 +1136,7 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 
 		inflateEnd(&strm);
 	#else
-		assert(fread(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+		assert(fread(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
 	#endif
 
 	fclose(f);
@@ -957,7 +1145,7 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 
 #if 0
 // These DO NOT transform the ray sources
-static void transform_cloud(tmp_cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
+static void transform_cloud(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
 {
 	double cosa = cos(yaw);
 	double sina = sin(yaw);
@@ -978,7 +1166,7 @@ static void transform_cloud(tmp_cloud_t* cloud, int32_t transl_x, int32_t transl
 	}
 }
 
-static void transform_cloud_copy(tmp_cloud_t* cloud_in, tmp_cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
+static void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
 {
 	double cosa = cos(yaw);
 	double sina = sin(yaw);
@@ -1001,7 +1189,7 @@ static void transform_cloud_copy(tmp_cloud_t* cloud_in, tmp_cloud_t* cloud_out, 
 }
 #endif
 
-static void rotate_cloud(tmp_cloud_t* cloud, double yaw)
+static void rotate_cloud(cloud_t* cloud, double yaw)
 {
 	double cosa = cos(yaw);
 	double sina = sin(yaw);
@@ -1197,7 +1385,7 @@ static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 	}
 }
 
-void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, int ref_z)
+void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl_y, int32_t transl_z)
 {
 //	printf("filter_cloud ref (%d, %d, %d)\n", ref_x, ref_y, ref_z);
 	memset(free_cnt, 0, sizeof(free_cnt));
@@ -1205,13 +1393,13 @@ void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, in
 	// Trace empty space:
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int sx = (cloud->points[p].sx)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int sy = (cloud->points[p].sy)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int sz = (cloud->points[p].sz)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+		int sx = (cloud->points[p].sx + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int sy = (cloud->points[p].sy + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int sz = (cloud->points[p].sz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
-		int px = (cloud->points[p].px)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].py)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].pz)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
 		//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
 		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
@@ -1219,17 +1407,17 @@ void filter_cloud(tmp_cloud_t* cloud, tmp_cloud_t* out, int ref_x, int ref_y, in
 
 	out->n_points = 0;
 	int n_p = 0;
-	// Remove points at empty space
+	// Remove points at empty space by only outputting points where there is no free voxel.
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		int px = (cloud->points[p].px)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].py)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].pz)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
 		int val = get_voxel_cloudflt(px, py, pz);
 		if(val < 1)
 		{
-			out->points[n_p] = cloud->points[p];
+			out->points[n_p] = TRANSLATE_CLOUD_POINT(cloud->points[p], transl_x, transl_y, transl_z);
 			n_p++;
 		}
 			
@@ -2123,7 +2311,7 @@ static void bresenham3d_ref_fine_matchmap(int x1, int y1, int z1, int x2, int y2
 	Calling only the first one gives a very good initial guess.
 */
 // Returns number of occupied voxels, for later calculation of relative score (percentage of matches)
-static int cloud_to_cmp_matchmap_even(tmp_cloud_t* cloud, cmp_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static int cloud_to_cmp_matchmap_even(cloud_t* cloud, cmp_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 //	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->n_points);
 
@@ -2163,7 +2351,7 @@ static int cloud_to_cmp_matchmap_even(tmp_cloud_t* cloud, cmp_matchmap_t* matchm
 	return vox_cnt;
 }
 
-static int cloud_to_cmp_matchmap_odd(tmp_cloud_t* cloud, cmp_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static int cloud_to_cmp_matchmap_odd(cloud_t* cloud, cmp_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 //	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->n_points);
 
@@ -2204,7 +2392,7 @@ static int cloud_to_cmp_matchmap_odd(tmp_cloud_t* cloud, cmp_matchmap_t* matchma
 }
 
 
-static int cloud_to_cmp_fine_matchmap(tmp_cloud_t* cloud, cmp_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static int cloud_to_cmp_fine_matchmap(cloud_t* cloud, cmp_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 //	printf("cloud_to_cmp_fine_matchmap, adding %d points\n", cloud->n_points);
 
@@ -2283,7 +2471,7 @@ static int cloud_to_cmp_fine_matchmap(tmp_cloud_t* cloud, cmp_fine_matchmap_t* m
 */
 #define ASSUME_FREE_ABOVE_FLOOR
 
-static void cloud_to_ref_matchmap_free(tmp_cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static void cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
@@ -2327,7 +2515,7 @@ static void cloud_to_ref_matchmap_free(tmp_cloud_t* cloud, ref_matchmap_t* match
 	}
 }
 
-static void cloud_to_ref_matchmap_occu(tmp_cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
@@ -2373,7 +2561,7 @@ static void cloud_to_ref_matchmap_occu(tmp_cloud_t* cloud, ref_matchmap_t* match
 */
 
 
-static void decim_cloud_to_ref_matchmap_free(tmp_cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static void decim_cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
@@ -2417,7 +2605,7 @@ static void decim_cloud_to_ref_matchmap_free(tmp_cloud_t* cloud, ref_matchmap_t*
 	}
 }
 
-static void decim_cloud_to_ref_matchmap_occu(tmp_cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static void decim_cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
@@ -2466,7 +2654,7 @@ static inline int uint32_log2(uint32_t in)
 }
 
 
-static void cloud_to_ref_fine_matchmap_free(tmp_cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static void cloud_to_ref_fine_matchmap_free(cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
@@ -2512,7 +2700,7 @@ static void cloud_to_ref_fine_matchmap_free(tmp_cloud_t* cloud, ref_fine_matchma
 }
 
 
-static void cloud_to_ref_fine_matchmap_occu(tmp_cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
+static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
@@ -2723,7 +2911,7 @@ ref_quality_t calc_ref_matchmap_quality(ref_matchmap_t* matchmap)
 	corrcb = transform from cb to cc, similarly
 
 */
-int gen_save_ref_matchmap_set(tmp_cloud_t* ca, tmp_cloud_t* cb, tmp_cloud_t* cc, result_t corrab, result_t corrbc)
+int gen_save_ref_matchmap_set(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc)
 {
 
 /*
@@ -2871,14 +3059,14 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
                    int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
                    result_t* results_out)
 {
-	tmp_cloud_t* smas[4];
+	cloud_t* smas[4];
 
 	// Glue the ref submaps together to ref_matchmap:
 	memset(&ref_matchmap, 0, sizeof(ref_matchmap));
 	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
 	for(int i=0; i<n_sma; i++)
 	{
-		smas[i] = malloc(sizeof(tmp_cloud_t));
+		smas[i] = malloc(sizeof(cloud_t));
 		load_tmp_cloud(smas[i], i_sma[i]);
 
 		cloud_to_ref_matchmap_free(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
@@ -2917,7 +3105,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 			printf("ERROR: ZLIB initialization failed\n");
 			abort();
 		}
-		strm.avail_in = n_points*sizeof(tmp_cloud_point_t);
+		strm.avail_in = n_points*sizeof(cloud_point_t);
 		strm.next_in = (uint8_t*)cloud->points;
 
 		do
@@ -2942,7 +3130,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 		deflateEnd(&strm);
 
 	#else
-		assert(fwrite(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+		assert(fwrite(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
 	#endif
 
 	fclose(f);
@@ -2951,7 +3139,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 */
 }
 /*
-int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
+int load_tmp_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
 	snprintf(fname, 1024, "submap%06u", idx);
@@ -2978,7 +3166,7 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 		}
 
 		int got_bytes = 0;
-		int bytes_left = n_points*sizeof(tmp_cloud_point_t);
+		int bytes_left = n_points*sizeof(cloud_point_t);
 		int ret = 0;
 		do
 		{
@@ -3019,7 +3207,7 @@ int load_tmp_cloud(tmp_cloud_t* cloud, int idx)
 
 		inflateEnd(&strm);
 	#else
-		assert(fread(cloud->points, sizeof(tmp_cloud_point_t), n_points, f) == n_points);
+		assert(fread(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
 	#endif
 
 	fclose(f);
@@ -3041,7 +3229,7 @@ void test_q(int smi)
 
 	float smallest = 999.9;
 	float smallest_a = 0.0;
-	static tmp_cloud_t cloud;
+	static cloud_t cloud;
 	load_tmp_cloud(&cloud, smi);
 	for(float a=DEGTORAD(-40.0); a<DEGTORAD(40.1); a+=DEGTORAD(10.0))
 	{
@@ -3130,14 +3318,14 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 	double start_time = subsec_timestamp();
 
 	assert(n_sma >= 1 && n_sma <= 4);
-	tmp_cloud_t* smas[4];
+	cloud_t* smas[4];
 
 	// Glue the ref submaps together to ref_matchmap:
 	memset(&ref_matchmap, 0, sizeof(ref_matchmap));
 	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
 	for(int i=0; i<n_sma; i++)
 	{
-		smas[i] = malloc(sizeof(tmp_cloud_t));
+		smas[i] = malloc(sizeof(cloud_t));
 		load_tmp_cloud(smas[i], i_sma[i]);
 
 		cloud_to_ref_matchmap_free(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
@@ -3214,7 +3402,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 
 	printf("xy_batch=%d, tot_z_step=%d (%d batch, thread %d(+%d)) --> ", xy_batches, total_z_steps, z_batches, threads_at_least, remaining_threads); fflush(stdout);
 
-	tmp_cloud_t* smb = malloc(sizeof(tmp_cloud_t));
+	cloud_t* smb = malloc(sizeof(cloud_t));
 	load_tmp_cloud(smb, i_smb);
 
 	for(int cur_yaw_step = 0; cur_yaw_step < yaw_steps; cur_yaw_step++)
@@ -3614,11 +3802,11 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	memset(results, 0, sizeof(result_t)*FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);	
 
 
-	static tmp_cloud_t sma, smb;
+	static cloud_t sma, smb;
 
 	// TODO: try removing memsets, shouldn't matter.
-	memset(&sma, 0, sizeof(tmp_cloud_t));
-	memset(&smb, 0, sizeof(tmp_cloud_t));
+	memset(&sma, 0, sizeof(cloud_t));
+	memset(&smb, 0, sizeof(cloud_t));
 
 	load_tmp_cloud(&sma, i_sma);
 	load_tmp_cloud(&smb, i_smb);
@@ -3750,7 +3938,7 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 #define RESOLEVELS 0b1111
 
-static void cloud_to_voxmap(tmp_cloud_t* cloud, int ref_x, int ref_y, int ref_z)
+static void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 {
 	for(int rl=0; rl<8; rl++)
 	{
@@ -3769,7 +3957,7 @@ static void cloud_to_voxmap(tmp_cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 }
 
 
-static inline void cloud_insert_point(tmp_cloud_t* cloud, int16_t sx, int16_t sy, int16_t sz, int32_t px, int32_t py, int32_t pz)
+static inline void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, int16_t sz, int32_t px, int32_t py, int32_t pz)
 {
 	if(cloud->n_points >= MAX_POINTS)
 	{
@@ -3791,105 +3979,110 @@ static inline void cloud_insert_point(tmp_cloud_t* cloud, int16_t sx, int16_t sy
 	cloud->n_points++;
 }
 
-static void voxfilter_to_cloud(voxfilter_t* voxfilter, tmp_cloud_t* cloud)
+static void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud)
 {
-//	int insert_cnt = 0;
+	int insert_cnt = 0, uniq_insert_cnt = 0;
 	for(int yy=0; yy<VOXFILTER_YS; yy++)
 	{
 		for(int xx=0; xx<VOXFILTER_XS; xx++)
 		{
 			for(int zz=0; zz<VOXFILTER_ZS; zz++)
 			{
-				for(int i=0; i<MAX_SRC_POSE_REFS; i++)
+				voxfilter_point_t* p = &(voxfilter->points[xx][yy][zz]);
+				if(p->cnt == 0)
 				{
-					voxfilter_point_t* p = &(voxfilter->points[xx][yy][zz][i]);
-					if(p->cnt == 0)
-					{
+					break;
+				}
+
+				assert(p->src_seq_id > 0 && p->src_seq_id < VOXFILTER_N_SCANS*N_SENSORS);
+
+				int32_t x = p->x / p->cnt;
+				int32_t y = p->y / p->cnt;
+				int32_t z = p->z / p->cnt;
+
+				// Insert the same point for each source
+				// (Point cloud datatype doesn't have another mean to express
+				// that multiple sources see the same point)
+
+				for(int i=0; i<VOXFILTER_MAX_SOURCE_IDS; i++)
+				{
+					if(p->src_idxs[i] == 0)
 						break;
-					}
 
-					assert(p->src_seq_id > 0 && p->src_seq_id < VOXFILTER_N_SCANS*N_SENSORS);
-
-					int32_t x = p->x / p->cnt;
-					int32_t y = p->y / p->cnt;
-					int32_t z = p->z / p->cnt;
+					assert(p->src_idxs[i] > 0 && p->src_idxs[i] <= voxfilter->n_ray_sources);
 
 					cloud_insert_point(cloud, 
-						voxfilter->ray_sources[p->src_seq_id].x, 
-						voxfilter->ray_sources[p->src_seq_id].y,
-						voxfilter->ray_sources[p->src_seq_id].z, 
+						voxfilter->ray_sources[p->src_idxs[i]].x, 
+						voxfilter->ray_sources[p->src_idxs[i]].y,
+						voxfilter->ray_sources[p->src_idxs[i]].z, 
 						x, y, z);
-					//insert_cnt++;
+					insert_cnt++;
 				}
+				uniq_insert_cnt++;
 			}
 		}
 	}
 
-	//printf("INFO: voxfilter_to_cloud inserted %d points\n", insert_cnt);
+	printf("INFO: voxfilter_to_cloud inserted %d points, %d of which are duplicates due to multiple sources\n", insert_cnt, insert_cnt-uniq_insert_cnt);
 }
 
-static inline void voxfilter_insert_point(tmp_cloud_t* cloud, voxfilter_t* voxfilter, int subsubmap_seq_id, int32_t x, int32_t y, int32_t z)
-{
-	int vox_x = x/VOXFILTER_STEP + VOXFILTER_XS/2;
-	int vox_y = y/VOXFILTER_STEP + VOXFILTER_YS/2;
-	int vox_z = z/VOXFILTER_STEP + VOXFILTER_ZS/2;
 
-	assert(subsubmap_seq_id > 0 && subsubmap_seq_id < VOXFILTER_N_SCANS*N_SENSORS);
+static inline void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter, int srcid, 
+	int32_t sx, int32_t sy, int32_t sz, // source coordinates are only used when the point cannot go to voxfilter; otherwise, srcid is stored
+	int32_t x, int32_t y, int32_t z, // the point
+	int32_t ref_x, int32_t ref_y, int32_t ref_z) // Extra translation, so that the voxfilter can live in its own limited space instead of the larger submap span.
+	// Because only voxel selection is translated, not the actual stored coordinates (they fit int32_t accumulation variables just fine),
+	// there is no need to translate points back later, basically we just store at a certain offset to maximize the span.
+{
+	int vox_x = (x-ref_x)/VOXFILTER_STEP + VOXFILTER_XS/2;
+	int vox_y = (y-ref_x)/VOXFILTER_STEP + VOXFILTER_YS/2;
+	int vox_z = (z-ref_x)/VOXFILTER_STEP + VOXFILTER_ZS/2;
+
+	assert(srcid > 0 && srcid <= voxfilter->n_ray_sources);
 
 	if(vox_x < 0 || vox_x > VOXFILTER_XS-1 || vox_y < 0 || vox_y > VOXFILTER_YS-1 || vox_z < 0 || vox_z > VOXFILTER_ZS-1)
 	{
 //		printf("INFO: voxfilter: skipping OOR point %d, %d, %d\n", vox_x, vox_y, vox_z);
-		cloud_insert_point(cloud, voxfilter->ray_sources[subsubmap_seq_id].x,voxfilter->ray_sources[subsubmap_seq_id].y,voxfilter->ray_sources[subsubmap_seq_id].z, x, y, z);
+		cloud_insert_point(cloud, sx, sy, sz, x, y, z);
 		return;
 	}
-	
-	int found = 0;
-	for(int i=0; i < MAX_SRC_POSE_REFS; i++)
+
+
+	// Accumulate the point
+	voxfilter->points[vox_x][vox_y][vox_z].cnt++;
+	voxfilter->points[vox_x][vox_y][vox_z].x += x;
+	voxfilter->points[vox_x][vox_y][vox_z].y += y;
+	voxfilter->points[vox_x][vox_y][vox_z].z += z;
+
+	// If the source index doesn't exist on this voxel, add it.
+
+	for(int i = 0; i < VOXFILTER_MAX_SOURCE_IDS; i++)
 	{
-		if(voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id == subsubmap_seq_id)
+		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == srcid)
+			goto SOURCE_EXISTS;
+
+		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == 0)
 		{
-			// Existing point with the same seq_id - average on the top of this.
-			voxfilter->points[vox_x][vox_y][vox_z][i].cnt++;
-			voxfilter->points[vox_x][vox_y][vox_z][i].x += x;
-			voxfilter->points[vox_x][vox_y][vox_z][i].y += y;
-			voxfilter->points[vox_x][vox_y][vox_z][i].z += z;
-			found = 1;
-			break;
+			// Zero terminator found: did not find the srcid, and this is a suitable place for adding it.
+			voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] = srcid;
+			goto SOURCE_EXISTS; // now it's there
 		}
 	}
 
-	if(!found)
-	{
-		int empty_spot_found = 0;
-		for(int i=0; i < MAX_SRC_POSE_REFS; i++)
-		{
-			if(voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id == 0)
-			{
-				// Take this new, empty spot
-				voxfilter->points[vox_x][vox_y][vox_z][i].src_seq_id = subsubmap_seq_id;
-				voxfilter->points[vox_x][vox_y][vox_z][i].cnt = 1;
-				voxfilter->points[vox_x][vox_y][vox_z][i].x = x;
-				voxfilter->points[vox_x][vox_y][vox_z][i].y = y;
-				voxfilter->points[vox_x][vox_y][vox_z][i].z = z;
-				empty_spot_found = 1;
-				break;
-			}
-		}
+	// Did not find the source, nor had space to add it. Just insert the point to the cloud, bypassing the filter.	
+	cloud_insert_point(cloud, sx, sy, sz, x, y, z);
 
-		if(!empty_spot_found)
-		{
-			printf("INFO: voxfilter_insert_point had to ignore a point due to reference indeces running out.\n");
-		}
-	}
-	
+	SOURCE_EXISTS:;	
 }
 
 
-
-
-// ssm_seq_id is sequence id for voxfilter. 0 is invalid value, must start from 1, and be unique for each unique TOF image
-void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int ssm_seq_id, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
-	 voxfilter_t* voxfilter, tmp_cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold)
+// voxfilter_ref_*: difference between the submap origin, and the subsubmap (voxfilter) origin, to maximize the span of the limited voxmap.
+// E.g., submap is started at ref_* = 10000,0,0. First voxfilter is at voxfilter_ref_* = 0,0,0, so at the same location.
+// Now the first voxfilter ends, and the robot is at, say 11000,0,0, and we would have already lost half of our voxfilter span available. But
+// luckily, we can now set voxfilter_ref_* = 1000,0,0, and the new data is again translated near the middle of the voxfilter, internally.
+// Actual coordinates in the voxfilter accumulation variables are not translated, only voxel selection code uses this information.
+void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
+	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold)
 {
 	if(sidx < 0 || sidx >= N_SENSORS)
 	{
@@ -3948,12 +4141,41 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 	int sy = global_sensor_y;
 	int sz = global_sensor_z;
 
+	int voxfilter_ray_src_id;
+
 	if(voxfilter)
 	{
-		assert(ssm_seq_id > 0 && ssm_seq_id < VOXFILTER_N_SCANS*N_SENSORS);
-		voxfilter->ray_sources[ssm_seq_id].x = sx;
-		voxfilter->ray_sources[ssm_seq_id].y = sy;
-		voxfilter->ray_sources[ssm_seq_id].z = sz;
+		for(int i=1; i < voxfilter->n_ray_sources+1; i++)
+		{
+			int64_t sqdist = 
+				sq((int64_t)voxfilter->ray_sources[i].x - (int64_t)sx)	+
+				sq((int64_t)voxfilter->ray_sources[i].y - (int64_t)sy)	+
+				sq((int64_t)voxfilter->ray_sources[i].z - (int64_t)sz);
+
+			if(sqdist < sq(VOXFILTER_SOURCE_COMBINE_THRESHOLD))
+			{
+				// We already have a close enough source, let's use it instead:
+				printf("Hooray, could optimize source (%d,%d,%d) to earlier source #%d (%d,%d,%d)\n",
+					sx, sy, sz, i, voxfilter->ray_sources[i].x, voxfilter->ray_sources[i].y, voxfilter->ray_sources[i].z);
+				voxfilter_ray_src_id = i;
+				// But do not replace sx,sy,sz, we are OK with the more exact actual coordinates
+				// when working outside the voxfilter.
+				goto USE_OLD;
+			}
+		}
+
+		// No appropriate source was found; add a new one.
+
+ 		voxfilter->n_ray_sources++; // Increment first, we want the first one to be at [1], and so on.
+
+		assert(voxfilter->n_ray_sources < VOXFILTER_N_SCANS*N_SENSORS+1);
+
+		voxfilter->ray_sources[voxfilter->n_ray_sources].x = sx;
+		voxfilter->ray_sources[voxfilter->n_ray_sources].y = sy;
+		voxfilter->ray_sources[voxfilter->n_ray_sources].z = sz;
+		voxfilter_ray_src_id = voxfilter->n_ray_sources;
+
+		USE_OLD:;
 	}
 
 	int y_ignore=1;
@@ -4136,7 +4358,7 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 //					continue;
 
 				if(voxfilter && d < voxfilter_threshold)
-					voxfilter_insert_point(cloud, voxfilter, ssm_seq_id, x, y, z);
+					voxfilter_insert_point(cloud, voxfilter, voxfilter_ray_src_id, sx, sy, sz, x, y, z, voxfilter_ref_x, voxfilter_ref_y, voxfilter_ref_z);
 				else
 					cloud_insert_point(cloud, sx, sy, sz, x, y, z);
 
@@ -4847,7 +5069,7 @@ static closure_t closures[MAX_CLOSURES];
 static int find_possible_closures(submap_meta_t* sms, int cur_sms) //, closure_t* out)
 {
 /*
-			static tmp_cloud_t kak;
+			static cloud_t kak;
 			load_tmp_cloud(&kak, cur_sms);
 
 			float ref_variance = calc_cloud_ref_quality(&kak);
@@ -5179,7 +5401,7 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms) //, closure_t
 
 }
 
-void tmp_cloud_to_xyz_file(tmp_cloud_t* cloud, char* fname)
+void cloud_to_xyz_file(cloud_t* cloud, char* fname)
 {
 	FILE* f = fopen(fname, "w");
 	assert(f);
@@ -5259,7 +5481,7 @@ int main(int argc, char** argv)
 	uint32_t n_submaps;
 	static submap_meta_t submap_metas[MAX_SUBMAPS];
 
-	static tmp_cloud_t tmp_cloud;
+	static cloud_t tmp_cloud;
 
 	if(create_pointclouds)
 	{
@@ -5395,7 +5617,7 @@ int main(int argc, char** argv)
 			printf("---> n_points = %d ", tmp_cloud.n_points);
 			total_points += tmp_cloud.n_points;
 
-			static tmp_cloud_t tmp_cloud_filtered;
+			static cloud_t tmp_cloud_filtered;
 
 			filter_cloud(&tmp_cloud, &tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
 
@@ -5439,11 +5661,11 @@ int main(int argc, char** argv)
 	#if 0
 		for(int i=0; i<10; i++)
 		{
-			static tmp_cloud_t cloud;
+			static cloud_t cloud;
 			load_tmp_cloud(&cloud, i);
 			char name[1000];
 			sprintf(name, "submap%05d_x%d_y%d_z%d.xyz", i, submap_metas[i].avg_x, submap_metas[i].avg_y, submap_metas[i].avg_z);
-			tmp_cloud_to_xyz_file(&cloud, name);
+			cloud_to_xyz_file(&cloud, name);
 		}
 		return;
 	#endif
@@ -5557,7 +5779,7 @@ int main(int argc, char** argv)
 	{
 		printf("Line %d, sm%d:  ", idx, idx);
 
-		static tmp_cloud_t ca, cb, cc;
+		static cloud_t ca, cb, cc;
 		load_tmp_cloud(&ca, idx-1);
 		load_tmp_cloud(&ca, idx);
 		load_tmp_cloud(&ca, idx+1);
@@ -5595,7 +5817,7 @@ int main(int argc, char** argv)
 
 			test_q(idx);
 /*
-			static tmp_cloud_t tmp_cloud;
+			static cloud_t tmp_cloud;
 			load_tmp_cloud(&tmp_cloud, idx);
 
 			po_coords_t po;
