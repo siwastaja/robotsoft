@@ -2371,7 +2371,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 
 
 
-int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
+int  fine_match_submaps(cloud_t* sma, cloud_t* smb,
                         int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
                         result_t* results_out)
 {
@@ -2379,16 +2379,6 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 	static result_t results[FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS];
 	memset(results, 0, sizeof(result_t)*FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);	
-
-
-	static cloud_t sma, smb;
-
-	// TODO: try removing memsets, shouldn't matter.
-	memset(&sma, 0, sizeof(cloud_t));
-	memset(&smb, 0, sizeof(cloud_t));
-
-	load_cloud(&sma, i_sma);
-	load_cloud(&smb, i_smb);
 
 	// SMA is ref_fine_matchmap
 	// SMB is cmp_fine_matchmap
@@ -2399,8 +2389,8 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 
 	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
-	cloud_to_ref_fine_matchmap_free(&sma, &ref_fine_matchmap, 0,0,0,0);
-	cloud_to_ref_fine_matchmap_occu(&sma, &ref_fine_matchmap, 0,0,0,0);
+	cloud_to_ref_fine_matchmap_free(sma, &ref_fine_matchmap, 0,0,0,0);
+	cloud_to_ref_fine_matchmap_occu(sma, &ref_fine_matchmap, 0,0,0,0);
 
 	// TODO: These batches could run in parallel, in multiple threads
 	for(int cur_yaw_step = 0; cur_yaw_step < FINE_MATCH_YAW_STEPS; cur_yaw_step++)
@@ -2422,7 +2412,7 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 
 		memset(&cmp_fine_matchmap, 0, sizeof(cmp_fine_matchmap));
 
-		int n_vox = cloud_to_cmp_fine_matchmap(&smb, &cmp_fine_matchmap, cx, cy, cz, cur_yaw_corr);
+		int n_vox = cloud_to_cmp_fine_matchmap(smb, &cmp_fine_matchmap, cx, cy, cz, cur_yaw_corr);
 
 		//printf("%d active voxels in cmp_matchmap\n", n_vox);
 
@@ -2498,16 +2488,6 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 				break;
 		}
 	}
-
-//	assert(n_results >= 1);
-//	if(n_results == 1)
-//	{
-//		results_out[1] = results[1]; // Restore filtered-out second-best result.
-		// TODO: .score is set at -99999. Work a way to revert this.
-//		n_results++;
-//	}
-
-	assert(n_results >= 2);
 
 	return n_results;
 }

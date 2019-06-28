@@ -36,8 +36,17 @@ typedef struct
 // When robot is fully stationary, max two sensors can see the same spot per full scan.
 // When moving, three sensors can see the same spot per full scan.
 // It's quite unlikely that 10 references would run out for 6 full scans. If it happens, no big harm done, data goes through without filtration
+// Tested different numbers of MAX_RAY_SOURCES for the Vuokravarasto Kellari dataset:
+// max  4: 390810 skipped points
+// max  7: 1544 skipped points
+// max  8: 107 skipped points
+// max  9: 6 skipped points
+// max 10: 0 skipped points
+// 10 is good: sizeof(voxfilter_point_t) = 24 bytes (alignable by 4 and 8)
+// It doesn't have a lot of extra margin, in some cases a few points could slip through the voxfilter,
+// but this is not catastrophic.
 
-#define VOXFILTER_MAX_RAY_SOURCES 10 // 10 -> voxfilter_point_t = 24 bytes (alignable by 4 and 8)
+#define VOXFILTER_MAX_RAY_SOURCES 10
 #define VOXFILTER_XS 128
 #define VOXFILTER_YS 128
 #define VOXFILTER_ZS 64
@@ -93,6 +102,7 @@ typedef struct
 int save_cloud(cloud_t* cloud, int idx);
 int load_cloud(cloud_t* cloud, int idx);
 void rotate_cloud(cloud_t* cloud, double yaw);
+void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw);
 void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl_y, int32_t transl_z);
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z);
 

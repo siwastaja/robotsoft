@@ -36,7 +36,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
                    int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
                    result_t* results_out);
 
-int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
+int  fine_match_submaps(cloud_t* sma, cloud_t* smb,
                         int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
                         result_t* results_out);
 

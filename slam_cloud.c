@@ -236,6 +236,37 @@ void rotate_cloud(cloud_t* cloud, double yaw)
 	}
 }
 
+void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw)
+{
+	double cosa = cos(yaw);
+	double sina = sin(yaw);
+
+	for(int p=0; p<cloud->n_points; p++)
+	{
+		double px_in = cloud->points[p].px;
+		double py_in = cloud->points[p].py;
+
+		double px = px_in*cosa - py_in*sina;
+		double py = px_in*sina + py_in*cosa;
+
+		out->points[p].px = px;
+		out->points[p].py = py;
+		out->points[p].pz = cloud->points[p].pz;
+
+		double sx_in = cloud->points[p].sx;
+		double sy_in = cloud->points[p].sy;
+
+		double sx = sx_in*cosa - sy_in*sina;
+		double sy = sx_in*sina + sy_in*cosa;
+
+		out->points[p].sx = sx;
+		out->points[p].sy = sy;
+		out->points[p].sz = cloud->points[p].sz;
+
+	}
+	out->n_points = cloud->n_points;
+}
+
 
 /*
 #define CLOUDFLT_XS 1280
@@ -510,7 +541,7 @@ void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud)
 		}
 	}
 
-	printf("INFO: voxfilter_to_cloud inserted %d points, %d of which are duplicates due to multiple sources\n", insert_cnt, insert_cnt-uniq_insert_cnt);
+	//printf("INFO: voxfilter_to_cloud inserted %d points, %d of which are duplicates due to multiple sources\n", insert_cnt, insert_cnt-uniq_insert_cnt);
 }
 
 
@@ -549,6 +580,7 @@ ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter
 		}
 	}
 
+	//printf("WARN: voxfilter - no space left to add source, skipping filter\n");
 	// Did not find the source, nor had space to add it. Just insert the point to the cloud, bypassing the filter.	
 	cloud_insert_point(cloud, sx, sy, sz, x, y, z);
 	return;
