@@ -1,26 +1,23 @@
-// Ray sources are always near the middle of the submap. Consider typical submap robot moving range of 5000mm (+/- 2500mm), so
-// 16-bit range of +/-32787mm is plentiful.
-// For Z, 16-bit range is more than enough as well -> struct is 16 bytes nicely.
+/*
+	Point cloud type, transforming, processing and filtration functions for SLAM
+*/
 
-typedef struct __attribute__((packed))
-{
-	int16_t sx;
-	int16_t sy;
-	int16_t sz;
+#include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
 
-	int32_t px;
-	int32_t py;
-	int16_t pz;
-} cloud_point_t;
+#include "slam_config.h"
+#include "slam_cloud.h"
+#include "api_board_to_soft.h"
 
-#define TRANSLATE_CLOUD_POINT(c_, x_, y_, z_) (cloud_point_t){c_.sx + (x_) , c_.sy + (y_) , c_.sz + (z_) , c_.px + (x_) , c_.py + (y_) , c_.pz + (z_)}
+#include "voxmap.h"
+#include "voxmap_memdisk.h"
 
-#define MAX_POINTS (9600*10*64)
-typedef struct
-{
-	int n_points;
-	cloud_point_t points[MAX_POINTS];
-} cloud_t;
+#define RESOLEVELS 0b1111
+
+
 
 /*
 	50 typical submaps = 
@@ -28,16 +25,16 @@ typedef struct
 	147MB, compressed at ZLIB_LEVEL=2
 */
 
-#define COMPRESS_TMP_CLOUDS
+#define COMPRESS_CLOUDS
 
-#ifdef COMPRESS_TMP_CLOUDS
+#ifdef COMPRESS_CLOUDS
 	#include <zlib.h>
 
 	#define ZLIB_CHUNK (256*1024)
 	#define ZLIB_LEVEL 2  // from 1 to 9, 9 = slowest but best compression
 #endif
 
-int save_tmp_cloud(cloud_t* cloud, int idx)
+int save_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
 	snprintf(fname, 1024, "submap%06u", idx);
@@ -47,7 +44,7 @@ int save_tmp_cloud(cloud_t* cloud, int idx)
 	uint32_t n_points = cloud->n_points;
 	assert(fwrite(&n_points, sizeof(uint32_t), 1, f) == 1);
 
-	#ifdef COMPRESS_TMP_CLOUDS
+	#ifdef COMPRESS_CLOUDS
 		uint8_t outbuf[ZLIB_CHUNK];
 		z_stream strm;
 		strm.zalloc = Z_NULL;
@@ -90,7 +87,7 @@ int save_tmp_cloud(cloud_t* cloud, int idx)
 	return 0;
 }
 
-int load_tmp_cloud(cloud_t* cloud, int idx)
+int load_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
 	snprintf(fname, 1024, "submap%06u", idx);
@@ -101,7 +98,7 @@ int load_tmp_cloud(cloud_t* cloud, int idx)
 	assert(fread(&n_points, sizeof(uint32_t), 1, f) == 1);
 	cloud->n_points = n_points;
 
-	#ifdef COMPRESS_TMP_CLOUDS
+	#ifdef COMPRESS_CLOUDS
 		uint8_t inbuf[ZLIB_CHUNK];
 		z_stream strm;
 		strm.zalloc = Z_NULL;
@@ -211,7 +208,7 @@ static void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t 
 }
 #endif
 
-static void rotate_cloud(cloud_t* cloud, double yaw)
+void rotate_cloud(cloud_t* cloud, double yaw)
 {
 	double cosa = cos(yaw);
 	double sina = sin(yaw);
@@ -449,7 +446,7 @@ void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl
 }
 
 
-static void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
+void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 {
 	for(int rl=0; rl<8; rl++)
 	{
@@ -468,29 +465,178 @@ static void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 }
 
 
-static inline void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, int16_t sz, int32_t px, int32_t py, int32_t pz)
+
+
+void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud)
 {
-	if(cloud->n_points >= MAX_POINTS)
+	int insert_cnt = 0, uniq_insert_cnt = 0;
+	for(int xx=0; xx<VOXFILTER_XS; xx++)
 	{
-		printf("WARNING: Ignoring point, cloud full.\n");
-		return;
+		for(int yy=0; yy<VOXFILTER_YS; yy++)
+		{
+			for(int zz=0; zz<VOXFILTER_ZS; zz++)
+			{
+				voxfilter_point_t* p = &(voxfilter->points[xx][yy][zz]);
+
+				if(p->cnt == 0)
+				{
+					continue;
+				}
+
+				int32_t x = p->x / p->cnt;
+				int32_t y = p->y / p->cnt;
+				int32_t z = p->z / p->cnt;
+
+				// Insert the same point for each source
+				// (Point cloud datatype doesn't have another mean to express
+				// that multiple sources see the same point)
+
+				for(int i=0; i<VOXFILTER_MAX_RAY_SOURCES; i++)
+				{
+					if(p->src_idxs[i] == 0)
+						break;
+
+					assert(p->src_idxs[i] > 0 && p->src_idxs[i] <= voxfilter->n_ray_sources);
+
+					cloud_insert_point(cloud, 
+						voxfilter->ray_sources[p->src_idxs[i]].x, 
+						voxfilter->ray_sources[p->src_idxs[i]].y,
+						voxfilter->ray_sources[p->src_idxs[i]].z, 
+						x, y, z);
+					insert_cnt++;
+				}
+				uniq_insert_cnt++;
+			}
+		}
 	}
-	assert(cloud->n_points >= 0);
 
-	assert(sx != 0 || sy != 0 || sz != 0); // Would be an alarming coincidence. Remove this assert later as it's a real possibility given enough data.
-
-	cloud->points[cloud->n_points].sx = sx;
-	cloud->points[cloud->n_points].sy = sy;
-	cloud->points[cloud->n_points].sz = sz;
-
-	cloud->points[cloud->n_points].px = px;
-	cloud->points[cloud->n_points].py = py;
-	cloud->points[cloud->n_points].pz = pz;
-
-	cloud->n_points++;
+	printf("INFO: voxfilter_to_cloud inserted %d points, %d of which are duplicates due to multiple sources\n", insert_cnt, insert_cnt-uniq_insert_cnt);
 }
 
 
+ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter, int srcid, 
+	int32_t sx, int32_t sy, int32_t sz, // source coordinates are only used when the point cannot go to voxfilter; otherwise, srcid is stored
+	int32_t x, int32_t y, int32_t z, // the point
+	int32_t ref_x, int32_t ref_y, int32_t ref_z) // Extra translation, so that the voxfilter can live in its own limited space instead of the larger submap span.
+	// Because only voxel selection is translated, not the actual stored coordinates (they fit int32_t accumulation variables just fine),
+	// there is no need to translate points back later, basically we just store at a certain offset to maximize the span.
+{
+	int vox_x = (x+ref_x)/VOXFILTER_STEP + VOXFILTER_XS/2;
+	int vox_y = (y+ref_y)/VOXFILTER_STEP + VOXFILTER_YS/2;
+	int vox_z = (z+ref_z)/VOXFILTER_STEP + VOXFILTER_ZS/2;
+
+	assert(srcid > 0 && srcid <= voxfilter->n_ray_sources);
+
+	if(vox_x < 0 || vox_x > VOXFILTER_XS-1 || vox_y < 0 || vox_y > VOXFILTER_YS-1 || vox_z < 0 || vox_z > VOXFILTER_ZS-1)
+	{
+//		printf("INFO: voxfilter: skipping OOR point %d, %d, %d\n", vox_x, vox_y, vox_z);
+		cloud_insert_point(cloud, sx, sy, sz, x, y, z);
+		return;
+	}
+
+	// If the source index doesn't exist on this voxel, add it.
+
+	for(int i = 0; i < VOXFILTER_MAX_RAY_SOURCES; i++)
+	{
+		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == srcid)
+			goto SOURCE_EXISTS;
+
+		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == 0)
+		{
+			// Zero terminator found: did not find the srcid, and this is a suitable place for adding it.
+			voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] = srcid;
+			goto SOURCE_EXISTS; // now it's there
+		}
+	}
+
+	// Did not find the source, nor had space to add it. Just insert the point to the cloud, bypassing the filter.	
+	cloud_insert_point(cloud, sx, sy, sz, x, y, z);
+	return;
+
+	SOURCE_EXISTS:;	
+
+	// Accumulate the point
+
+	voxfilter->points[vox_x][vox_y][vox_z].cnt++;
+	voxfilter->points[vox_x][vox_y][vox_z].x += x;
+	voxfilter->points[vox_x][vox_y][vox_z].y += y;
+	voxfilter->points[vox_x][vox_y][vox_z].z += z;
+
+	//printf("point (%d,%d,%d), voxel (%d,%d,%d), cnt now = %d\n", x, y, z, vox_x, vox_y, vox_z, voxfilter->points[vox_x][vox_y][vox_z].cnt);
+
+}
+
+
+
+
+typedef struct
+{
+	int32_t mount_mode;             // mount position 1,2,3 or 4
+	int32_t x_rel_robot;          // zero = robot origin. Positive = robot front (forward)
+	int32_t y_rel_robot;          // zero = robot origin. Positive = to the right of the robot
+	uint16_t ang_rel_robot;        // zero = robot forward direction. positive = ccw
+	uint16_t vert_ang_rel_ground;  // zero = looks directly forward. positive = looks up. negative = looks down
+	int32_t z_rel_ground;         // sensor height from the ground	
+} sensor_mount_t;
+
+
+/*
+	Sensor mount position 1:
+	 _ _
+	| | |
+	| |L|
+	|O|L|
+	| |L|
+	|_|_|  (front view)
+
+	Sensor mount position 2:
+	 _ _
+	| | |
+	|L| |
+	|L|O|
+	|L| |
+	|_|_|  (front view)
+
+	Sensor mount position 3:
+
+	-------------
+	|  L  L  L  |
+	-------------
+	|     O     |
+	-------------
+
+	Sensor mount position 4:
+
+	-------------
+	|     O     |
+	-------------
+	|  L  L  L  |
+	-------------
+*/
+
+
+
+#define DEGTOANG16(x)  ((uint16_t)((float)(x)/(360.0)*65536.0))
+
+sensor_mount_t sensor_mounts[N_SENSORS] =
+{          //      mountmode    x     y       hor ang           ver ang      height    
+ /*0:                */ { 0,     0,     0, DEGTOANG16(       0), DEGTOANG16( 2),         300 },
+
+ /*1:                */ { 1,   130,   103, DEGTOANG16(    24.4), DEGTOANG16( 4.4),       310  }, // -1
+ /*2:                */ { 2,  -235,   215, DEGTOANG16(    66.4), DEGTOANG16( 1.4),       310  }, // -1
+ /*3:                */ { 2,  -415,   215, DEGTOANG16(    93.5), DEGTOANG16( 1.9),       310  }, // -1
+ /*4:                */ { 2,  -522,   103, DEGTOANG16(   157.4), DEGTOANG16( 3.9),       280  }, // -1
+ /*5:                */ { 2,  -522,   -35, DEGTOANG16(   176.0), DEGTOANG16( 4.9),       290  }, // -1
+ /*6:                */ { 1,  -522,  -103, DEGTOANG16(   206.0), DEGTOANG16( 4.4),       290  }, // -1
+ /*7:                */ { 1,  -415,  -215, DEGTOANG16(   271.5), DEGTOANG16( 2.4),       280  }, // -1
+ /*8:                */ { 1,  -235,  -215, DEGTOANG16(   294.9), DEGTOANG16( 4.4),       300  }, // -1
+ /*9:                */ { 2,   130,  -103, DEGTOANG16(   334.9), DEGTOANG16( -0.9),      320  }  // 0
+};
+
+#define DIST_UNDEREXP 0
+#define DIST_OVEREXP 1
+#include "sin_lut.c"
+#include "geotables.h"
 
 // voxfilter_ref_*: difference between the submap origin, and the subsubmap (voxfilter) origin, to maximize the span of the limited voxmap.
 // E.g., submap is started at ref_* = 10000,0,0. First voxfilter is at voxfilter_ref_* = 0,0,0, so at the same location.
@@ -557,7 +703,7 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 	int sy = global_sensor_y;
 	int sz = global_sensor_z;
 
-	int voxfilter_ray_src_id;
+	int voxfilter_ray_src_id = 0;
 
 	if(voxfilter)
 	{
@@ -571,8 +717,8 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 			if(sqdist < sq(VOXFILTER_SOURCE_COMBINE_THRESHOLD))
 			{
 				// We already have a close enough source, let's use it instead:
-				printf("Hooray, could optimize source (%d,%d,%d) to earlier source #%d (%d,%d,%d)\n",
-					sx, sy, sz, i, voxfilter->ray_sources[i].x, voxfilter->ray_sources[i].y, voxfilter->ray_sources[i].z);
+				//printf("Hooray, could optimize source (%d,%d,%d) to earlier source #%d (%d,%d,%d)\n",
+				//	sx, sy, sz, i, voxfilter->ray_sources[i].x, voxfilter->ray_sources[i].y, voxfilter->ray_sources[i].z);
 				voxfilter_ray_src_id = i;
 				// But do not replace sx,sy,sz, we are OK with the more exact actual coordinates
 				// when working outside the voxfilter.

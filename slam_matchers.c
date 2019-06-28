@@ -1,3 +1,76 @@
+/*
+	Matching functions for SLAM.
+
+	These are the low-level core of the SLAM.
+	We have quite some many different types of functions, reducing code readability, sorry for that.
+
+	These functions need to be heavily tailored for their specific use cases, for performance.
+
+	We heavily utilize the inherent "vectorization" of any CPU, namely the automatic vectorization
+	of 1-bit datatypes on any CPU using the and, or, bitshift etc. operations.
+
+	Coarse matching is a brute-force scoring operation. Compare to, for example, classical 
+	iterative point matching algorithms, which fail to find global minima and get stuck
+	to the local minima nearest to the starting point.
+
+	Our coarse matching functions return a list of possible matches, which are then
+	filtered and sorted to create a list of possible matches. 
+
+	Consider matching this observation:
+
+	------------------
+
+
+
+	-------+    +-----
+	       |    |
+
+	
+	to this group of submaps:
+
+	--------------------------------------------------------------------
+	
+
+
+	-------+    +-------+    +-------+    +-------+    +-------+     +-- 
+	       |    |       |    |       |    |       |    |       |     |
+
+
+	After coming back from a long trip through one of these corridors,
+	so that we don't have a precise enough pose estimate to weigh the matching.
+
+	The only way is to brute-force through the entire range of possibilities
+	and store as many local minima as possible, then optimize the graph
+	later by utilizing other closures
+
+*/
+
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include <math.h>
+#include <time.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#include "slam_cloud.h"
+#include "slam_matchers.h"
+
+#include "voxmap.h"
+#include "voxmap_memdisk.h"
+
+
+#define HEAP_PARENT(i) (((i) - 1) >> 1)
+#define HEAP_LEFT(i)   (((i) << 1) + 1)
+#define HEAP_RIGHT(i) (((i) << 1) + 2)
+
+
+#define MATCHER_MAX_THREADS 4
+
+
 typedef struct __attribute__((packed))
 {
 	uint64_t occu;
@@ -860,7 +933,7 @@ static void bresenham3d_ref_fine_matchmap(int x1, int y1, int z1, int x2, int y2
 
 
 
-// remember that tmp_clouds are centered on zero (so that the ref_x,y,z from the submap meta corresponds to 0,0,0)
+// remember that clouds are centered on zero (so that the ref_x,y,z from the submap meta corresponds to 0,0,0)
 // This zero center is good for rotational center as well.
 
 /*
@@ -1316,16 +1389,6 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 }
 
 
-static int compar_scores(const void* a, const void* b)
-{
-	if(((result_t*)a)->score > ((result_t*)b)->score)
-		return -1;
-	else if(((result_t*)a)->score < ((result_t*)b)->score)
-		return 1;
-
-	return 0;
-}
-
 typedef struct __attribute__((packed))
 {
 	/*
@@ -1639,7 +1702,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 	for(int i=0; i<n_sma; i++)
 	{
 		smas[i] = malloc(sizeof(cloud_t));
-		load_tmp_cloud(smas[i], i_sma[i]);
+		load_cloud(smas[i], i_sma[i]);
 
 		cloud_to_ref_matchmap_free(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
 		cloud_to_ref_fine_matchmap_free(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
@@ -1800,7 +1863,7 @@ void test_q(int smi)
 	float smallest = 999.9;
 	float smallest_a = 0.0;
 	static cloud_t cloud;
-	load_tmp_cloud(&cloud, smi);
+	load_cloud(&cloud, smi);
 	for(float a=DEGTORAD(-40.0); a<DEGTORAD(40.1); a+=DEGTORAD(10.0))
 	{
 		memset(&ref_matchmap, 0, sizeof(ref_matchmap));
@@ -1896,7 +1959,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 	for(int i=0; i<n_sma; i++)
 	{
 		smas[i] = malloc(sizeof(cloud_t));
-		load_tmp_cloud(smas[i], i_sma[i]);
+		load_cloud(smas[i], i_sma[i]);
 
 		cloud_to_ref_matchmap_free(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
 		cloud_to_ref_fine_matchmap_free(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
@@ -1973,7 +2036,7 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 	printf("xy_batch=%d, tot_z_step=%d (%d batch, thread %d(+%d)) --> ", xy_batches, total_z_steps, z_batches, threads_at_least, remaining_threads); fflush(stdout);
 
 	cloud_t* smb = malloc(sizeof(cloud_t));
-	load_tmp_cloud(smb, i_smb);
+	load_cloud(smb, i_smb);
 
 	for(int cur_yaw_step = 0; cur_yaw_step < yaw_steps; cur_yaw_step++)
 	{
@@ -2306,7 +2369,6 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 #define FINE_MATCH_YAW_START DEGTORAD(-3.75)
 #define FINE_MATCH_YAW_STEPS 13
 
-#define N_FINE_MATCH_RESULTS 16
 
 
 int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
@@ -2325,8 +2387,8 @@ int  fine_match_submaps(int i_sma, int i_smb,  // Ref and cmp submap indeces
 	memset(&sma, 0, sizeof(cloud_t));
 	memset(&smb, 0, sizeof(cloud_t));
 
-	load_tmp_cloud(&sma, i_sma);
-	load_tmp_cloud(&smb, i_smb);
+	load_cloud(&sma, i_sma);
+	load_cloud(&smb, i_smb);
 
 	// SMA is ref_fine_matchmap
 	// SMB is cmp_fine_matchmap
