@@ -71,6 +71,15 @@
 #define MATCHER_MAX_THREADS 4
 
 
+#define COMPRESS_CLOUDS
+
+#ifdef COMPRESS_CLOUDS
+	#include <zlib.h>
+
+	#define ZLIB_CHUNK (256*1024)
+	#define ZLIB_LEVEL 2  // from 1 to 9, 9 = slowest but best compression
+#endif
+
 typedef struct __attribute__((packed))
 {
 	uint64_t occu;
@@ -165,6 +174,37 @@ static void ref_matchmap_to_voxmap(ref_matchmap_t* matchmap, int ref_x, int ref_
 	}
 }
 
+
+static void ref_fine_matchmap_to_voxmap(ref_fine_matchmap_t* matchmap, int ref_x, int ref_y, int ref_z)
+{
+	int rl = 0;
+
+	for(int yy=0; yy<FINE_MATCHMAP_YS; yy++)
+	{
+		for(int xx=0; xx<FINE_MATCHMAP_XS; xx++)
+		{
+			for(int zz=0; zz<FINE_MATCHMAP_ZS; zz++)
+			{
+				if(matchmap->units[yy][xx].occu & (1ULL<<zz))
+				{
+					po_coords_t po = po_coords(xx*VOX_UNITS[rl]+ref_x, yy*VOX_UNITS[rl]+ref_y, zz*VOX_UNITS[rl]+ref_z, rl);
+					uint8_t* p_vox = get_p_voxel(po, rl);
+						(*p_vox) |= 0x0f;
+					mark_page_changed(po.px, po.py, po.pz);
+				}
+
+				
+				if(matchmap->units[yy][xx].free & (1ULL<<zz))
+				{
+					po_coords_t po = po_coords(xx*VOX_UNITS[rl]+ref_x, yy*VOX_UNITS[rl]+ref_y, zz*VOX_UNITS[rl]+ref_z, rl);
+					uint8_t* p_vox = get_p_voxel(po, rl);
+						(*p_vox) |= 0xf0;
+					mark_page_changed(po.px, po.py, po.pz);
+				}
+			}
+		}
+	}
+}
 
 
 ref_matchmap_t ref_matchmap __attribute__((aligned(64)));
@@ -1160,6 +1200,7 @@ static void cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* matchmap,
 	}
 }
 
+#define REF_BOLD_MODE 0
 static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
@@ -1176,25 +1217,99 @@ static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap,
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
 		int   mmpz = cloud->points[p].pz + z_corr;
 
-		int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
-		int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
-		int pz = mmpz/MATCHMAP_UNIT + MATCHMAP_ZS/2;
 
-		// For every matcher thread, reference map is shifted >>1
-		if(px < 1 || px > MATCHMAP_XS-2 || py < 1 || py > MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > MATCHMAP_ZS-2)
-		{
-			printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
-			continue;
-		}
+		#if REF_BOLD_MODE==1 || REF_BOLD_MODE==2
+			// Calculate the voxel coordinates for double resolution
+			int px = mmpx/(MATCHMAP_UNIT/2) + MATCHMAP_XS;
+			int py = mmpy/(MATCHMAP_UNIT/2) + MATCHMAP_YS;
+			int pz = mmpz/(MATCHMAP_UNIT/2) + MATCHMAP_ZS;
 
-		for(int ix=-1; ix<=1; ix++)
-		{
-			for(int iy=-1; iy<=1; iy++)
+			// For every matcher thread, reference map is shifted >>1
+			if(px < 1 || px > 2*MATCHMAP_XS-2 || py < 1 || py > 2*MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > 2*MATCHMAP_ZS-2)
 			{
-				matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-				matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+				printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
+				continue;
 			}
-		}
+
+		#else
+			int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
+			int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
+			int pz = mmpz/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+
+			// For every matcher thread, reference map is shifted >>1
+			if(px < 1 || px > MATCHMAP_XS-2 || py < 1 || py > MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > MATCHMAP_ZS-2)
+			{
+				printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
+				continue;
+			}
+		#endif
+
+		#if REF_BOLD_MODE==0 // Create voxels directly, no bolding
+			matchmap->units[py][px].occu |= 1ULL << (pz);
+			matchmap->units[py][px].free &= ~(1ULL << (pz));
+
+		#elif REF_BOLD_MODE==1 // Create four voxels, by adding one on each axis (x,y,z) to the side nearer the actual voxel
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+		#elif REF_BOLD_MODE==2 // Similarly, but create 8 voxels, a 2x2x2 cube biased correctly
+
+			// comment 1 = use the neighbor on this axis (has the math thing in the index), 0 = actual voxel on this axis
+			// y x z
+			// 0 0 0
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
+
+			// 0 0 1
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 0 1 0
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			// 0 1 1
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 1 0 0
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
+
+			// 1 0 1
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 1 1 0
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			// 1 1 1
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+		
+		#elif REF_BOLD_MODE==3 // Create extra voxel in every neighbor, i.e., create a cube of 3x3x3 = 27 voxels
+			for(int ix=-1; ix<=1; ix++)
+			{
+				for(int iy=-1; iy<=1; iy++)
+				{
+					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
+					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+				}
+			}
+		#else
+			#error set REF_BOLD_MODE correctly
+		#endif
 	}
 }
 
@@ -1266,27 +1381,102 @@ static void decim_cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* mat
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
 		int   mmpz = cloud->points[p].pz + z_corr;
 
-		int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
-		int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
-		int pz = mmpz/MATCHMAP_UNIT + MATCHMAP_ZS/2;
 
-		// For every matcher thread, reference map is shifted >>1
-		if(px < 1 || px > MATCHMAP_XS-2 || py < 1 || py > MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > MATCHMAP_ZS-2)
-		{
-			printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
-			continue;
-		}
+		#if REF_BOLD_MODE==1 || REF_BOLD_MODE==2
+			// Calculate the voxel coordinates for double resolution
+			int px = mmpx/(MATCHMAP_UNIT/2) + MATCHMAP_XS;
+			int py = mmpy/(MATCHMAP_UNIT/2) + MATCHMAP_YS;
+			int pz = mmpz/(MATCHMAP_UNIT/2) + MATCHMAP_ZS;
 
-		for(int ix=-1; ix<=1; ix++)
-		{
-			for(int iy=-1; iy<=1; iy++)
+			// For every matcher thread, reference map is shifted >>1
+			if(px < 1 || px > 2*MATCHMAP_XS-2 || py < 1 || py > 2*MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > 2*MATCHMAP_ZS-2)
 			{
-				matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-				matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+				printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
+				continue;
 			}
-		}
+
+		#else
+			int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
+			int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
+			int pz = mmpz/MATCHMAP_UNIT + MATCHMAP_ZS/2;
+
+			// For every matcher thread, reference map is shifted >>1
+			if(px < 1 || px > MATCHMAP_XS-2 || py < 1 || py > MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > MATCHMAP_ZS-2)
+			{
+				printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
+				continue;
+			}
+		#endif
+
+		#if REF_BOLD_MODE==0 // Create voxels directly, no bolding
+			matchmap->units[py][px].occu |= 1ULL << (pz);
+			matchmap->units[py][px].free &= ~(1ULL << (pz));
+
+		#elif REF_BOLD_MODE==1 // Create four voxels, by adding one on each axis (x,y,z) to the side nearer the actual voxel
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+		#elif REF_BOLD_MODE==2 // Similarly, but create 8 voxels, a 2x2x2 cube biased correctly
+
+			// comment 1 = use the neighbor on this axis (has the math thing in the index), 0 = actual voxel on this axis
+			// y x z
+			// 0 0 0
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
+
+			// 0 0 1
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 0 1 0
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			// 0 1 1
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 1 0 0
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
+
+			// 1 0 1
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 1 1 0
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			// 1 1 1
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+		
+		#elif REF_BOLD_MODE==3 // Create extra voxel in every neighbor, i.e., create a cube of 3x3x3 = 27 voxels
+			for(int ix=-1; ix<=1; ix++)
+			{
+				for(int iy=-1; iy<=1; iy++)
+				{
+					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
+					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+				}
+			}
+		#else
+			#error set REF_BOLD_MODE correctly
+		#endif
 	}
 }
+
 
 
 static inline int uint32_log2(uint32_t in)
@@ -1344,6 +1534,7 @@ static void cloud_to_ref_fine_matchmap_free(cloud_t* cloud, ref_fine_matchmap_t*
 	}
 }
 
+#define REF_FINE_BOLD_MODE 2
 
 static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
@@ -1362,24 +1553,94 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
 		int   mmpz = cloud->points[p].pz + z_corr;
 
-		int px = mmpx/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
-		int py = mmpy/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
-		int pz = mmpz/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
+		#if REF_FINE_BOLD_MODE==1 || REF_FINE_BOLD_MODE==2
+			int px = mmpx/(FINE_MATCHMAP_UNIT/2) + FINE_MATCHMAP_XS;
+			int py = mmpy/(FINE_MATCHMAP_UNIT/2) + FINE_MATCHMAP_YS;
+			int pz = mmpz/(FINE_MATCHMAP_UNIT/2) + FINE_MATCHMAP_ZS;
 
-		if(px < 1 || px > FINE_MATCHMAP_XS-2 || py < 1 || py > FINE_MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > FINE_MATCHMAP_ZS-2)
-		{
-			oor++;
-			continue;
-		}
-
-		for(int ix=-1; ix<=1; ix++)
-		{
-			for(int iy=-1; iy<=1; iy++)
+			if(px < 1 || px > 2*FINE_MATCHMAP_XS-2 || py < 1 || py > 2*FINE_MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > 2*FINE_MATCHMAP_ZS-2)
 			{
-				matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-				matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+				oor++;
+				continue;
 			}
-		}
+		#else
+			int px = mmpx/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
+			int py = mmpy/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
+			int pz = mmpz/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_ZS/2;
+
+			if(px < 1 || px > FINE_MATCHMAP_XS-2 || py < 1 || py > FINE_MATCHMAP_YS-2 || pz < MATCHER_MAX_THREADS || pz > FINE_MATCHMAP_ZS-2)
+			{
+				oor++;
+				continue;
+			}
+		#endif
+
+		#if REF_FINE_BOLD_MODE==0 // Create voxels directly, no bolding
+			matchmap->units[py][px].occu |= 1ULL << (pz);
+			matchmap->units[py][px].free &= ~(1ULL << (pz));
+
+		#elif REF_FINE_BOLD_MODE==1 // Create four voxels, by adding one on each axis (x,y,z) to the side nearer the actual voxel
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+		#elif REF_FINE_BOLD_MODE==2 // Similarly, but create 8 voxels, a 2x2x2 cube biased correctly
+
+			// comment 1 = use the neighbor on this axis (has the math thing in the index), 0 = actual voxel on this axis
+			// y x z
+			// 0 0 0
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
+
+			// 0 0 1
+			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 0 1 0
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			// 0 1 1
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 1 0 0
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
+
+			// 1 0 1
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+			// 1 1 0
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
+
+			// 1 1 1
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
+			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
+
+		
+		#elif REF_FINE_BOLD_MODE==3 // Create extra voxel in every neighbor, i.e., create a cube of 3x3x3 = 27 voxels
+			for(int ix=-1; ix<=1; ix++)
+			{
+				for(int iy=-1; iy<=1; iy++)
+				{
+					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
+					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+				}
+			}
+		#else
+			#error set REF_FINE_BOLD_MODE correctly
+		#endif
 	}
 
 	if(oor > cloud->n_points/20)
@@ -1389,63 +1650,6 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 }
 
 
-typedef struct __attribute__((packed))
-{
-	/*
-		Ratio between objects seen from optimally chosen imaginary axes 90 degrees apart.
-
-		#########################
-		.........................
-		.........................
-		.........................
-		#########################
-
-		0%, uncertain_angle = 0 (or pi, or -pi)
-
-		#......#
-		  #......#
-		    #......#
-		      #......#
-		        #......#
-		          #......#
-
-		0% as well, uncertain_angle = -1/4 pi (or 3/4 pi)
-
-		                        #
-		#########################.
-		...........................
-		............................
-		...........#................
-		############################
-
-		maybe 5%, uncertain_angle still 0
-
-		       #.....#
-		       #.....#
-		########.....###########
-		........................
-		........................
-		........................
-		##########.....#########
-		         #.....#
-		         #.....#
-		         #.....#
-
-		Near 100%, uncertain_angle irrelevant
-
-		uncertain_angle can be used to weight scores along the uncertain axis when xy_ratio is far below 100%.
-
-		Note that 100% ratio seldom happens, and 50% ratio is quite good already for matching without tricks like this.
-
-		But if the ratio is somewhere around 10%, false matches are very likely.
-
-	*/
-	int32_t xtot;
-	int32_t ytot;
-	int32_t ztot;
-	float xy_ratio; 
-	float uncertain_angle;
-} ref_quality_t;
 
 
 ref_quality_t calc_ref_matchmap_quality(ref_matchmap_t* matchmap)
@@ -1522,20 +1726,56 @@ ref_quality_t calc_ref_matchmap_quality(ref_matchmap_t* matchmap)
 	}
 
 
-//	printf("X+ > %8d   X- < %8d   Y+ ^ %8d   Y- v %8d   Z+ ceil %8d   Z- floor %8d    ",
-//		pos_x_cnt, neg_x_cnt, pos_y_cnt, neg_y_cnt, pos_z_cnt, neg_z_cnt);
-//	printf("X %8d (%2.0f%%)    Y %8d (%2.0f%%)    Z %8d (%2.0f%%)",
-//		xtot, 100.0*(float)xtot/larger_xy, ytot, 100.0*(float)ytot/larger_xy, ztot, 100.0*(float)ztot/larger_xy);
-
 	ref_quality_t ret;
+
+	float xy_ratio = (float)smaller_xy/(float)larger_xy;
+	float z_ratio = (float)ztot/(float)larger_xy;
+
+	float xy_ratio_satur = xy_ratio*1.4; 
+	if(xy_ratio_satur > 1.0)
+		xy_ratio_satur = 1.0;
+
+	float z_ratio_inv = (z_ratio>1.0) ? (1.0/z_ratio) : z_ratio;
+
+	float z_ratio_inv_satur = z_ratio_inv*1.4;
+	if(z_ratio_inv_satur > 1.0)
+		z_ratio_inv_satur = 1.0;
 
 	ret.xtot = xtot;
 	ret.ytot = ytot;
 	ret.ztot = ztot;
-	ret.xy_ratio = (float)smaller_xy/(float)larger_xy;
+
+	// Good counts are around 2000
+	// Really bad counts are around 200
+	// Log2 makes the differences too small.
+	// sqrt sounds allright.
+	// sqrt(2000) = 44, sqrt(150) = 12
+
+	ret.quality = 
+		(sqrt(pos_x_cnt) + sqrt(neg_x_cnt) +
+		sqrt(pos_y_cnt) + sqrt(neg_y_cnt) +
+		sqrt(pos_z_cnt) + sqrt(neg_z_cnt) - 6.0*12.0) * 80.0 *
+		(xy_ratio_satur*z_ratio_inv_satur);
+
+		
+	ret.xy_ratio = xy_ratio;
+
+/*
+	printf("lin: X+ > %8d   X- < %8d   Y+ ^ %8d   Y- v %8d   Z+ ceil %8d   Z- flr %8d\n",
+		pos_x_cnt, neg_x_cnt, pos_y_cnt, neg_y_cnt, pos_z_cnt, neg_z_cnt);
+	printf("sqr: X+ > %8.1f   X- < %8.1f   Y+ ^ %8.1f   Y- v %8.1f   Z+ ceil %8.1f   Z- flr %8.1f\n",
+		sqrt(pos_x_cnt), sqrt(neg_x_cnt), sqrt(pos_y_cnt), sqrt(neg_y_cnt), sqrt(pos_z_cnt), sqrt(neg_z_cnt));
+
+	printf("xy_ratio=%.3f z_ratio=%.3f  xy_ratio_satur=%.3f  z_ratio_inv_satur=%.3f quality=%d\n",
+		xy_ratio, z_ratio, xy_ratio_satur, z_ratio_inv_satur, ret.quality);
+*/
+//	if(ret.quality > 10000)
+//		ret.quality = 10000;
+
 
 	return ret;
 }
+
 
 
 /*
@@ -1546,18 +1786,20 @@ ref_quality_t calc_ref_matchmap_quality(ref_matchmap_t* matchmap)
 	corrcb = transform from cb to cc, similarly
 
 */
-int gen_save_ref_matchmap_set(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc)
+ref_quality_t calc_ref_quality_3sm(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc)
 {
 
 /*
-	kak1: -45.0 ; +45.1 ; 7.5   -7.5 ; +7.5 ; 2.5  13+7 = 20 ops  reference
-	kak2: -40   ; +40.1 ; 10.0  -7.5 ; +7.5 ; 2.5  9+7 = 16 ops   OK -> use this
-	kak3: -40   ; +40.1 ; 10.0  -5.0 ; +5.0 ; 2.5  9+5 = 14 ops   different result
-	kak4: -37.5 ; +37.6 ; 12.5  -7.5 ; +7.5 ; 2.5  7+7 = 14 ops   OK, but let's not go this far.
+	Tested how many operations (step sizes) are needed, to get the same result.
+	Compared over the full development dataset (173 submaps):
+
+	test1: -45.0 ; +45.1 ; 7.5   -7.5 ; +7.5 ; 2.5  13+7 = 20 ops  reference
+	test2: -40   ; +40.1 ; 10.0  -7.5 ; +7.5 ; 2.5  9+7 = 16 ops   same as ref -> use this
+	test3: -40   ; +40.1 ; 10.0  -5.0 ; +5.0 ; 2.5  9+5 = 14 ops   different result
+	test4: -37.5 ; +37.6 ; 12.5  -7.5 ; +7.5 ; 2.5  7+7 = 14 ops   same as ref, but let's not go this far.
 */
 	float smallest = 999.9;
 	float smallest_a = 0.0;
-	//int dbg_y = 0;
 	// See Screenshot_2019-06-20_18-41-53.png showing how the combined ref_matchmap looks like.
 	for(float a=DEGTORAD(-40.0); a<DEGTORAD(40.1); a+=DEGTORAD(10.0))
 	{
@@ -1568,8 +1810,8 @@ int gen_save_ref_matchmap_set(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t co
 		// Note that parameter A rotates the whole thing, so the translation parameters must be rotated as well, hence the sin, cos stuff.
 		// ca first, in inverse transform:
 		decim_cloud_to_ref_matchmap_free(ca, &ref_matchmap, 
-			-corrab.x - corrab.x*cos(a) + corrab.y*sin(a), // X translation to place ca correctly relative to cb
-			-corrab.y - corrab.x*sin(a) - corrab.y*cos(a), // Y translation
+			- corrab.x*cos(a) + corrab.y*sin(a), // X translation to place ca correctly relative to cb
+			- corrab.x*sin(a) - corrab.y*cos(a), // Y translation
 			-corrab.z, // Z translation
 			-corrab.yaw + a); // yaw rotation
 
@@ -1578,8 +1820,8 @@ int gen_save_ref_matchmap_set(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t co
 
 		// cc last, transformed:
 		decim_cloud_to_ref_matchmap_free(cc, &ref_matchmap, 
-			+corrbc.x + corrbc.x*cos(a) - corrbc.y*sin(a), // X translation to place cc correctly relative to cb
-			+corrbc.y + corrbc.x*sin(a) + corrbc.y*cos(a), // Y translation
+			+ corrbc.x*cos(a) - corrbc.y*sin(a), // X translation to place cc correctly relative to cb
+			+ corrbc.x*sin(a) + corrbc.y*cos(a), // Y translation
 			+corrbc.z, // Z translation
 			+corrbc.yaw + a); // yaw rotation
 
@@ -1587,29 +1829,32 @@ int gen_save_ref_matchmap_set(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t co
 		// Exact same thing for occupied space:
 
 		decim_cloud_to_ref_matchmap_occu(ca, &ref_matchmap, 
-			-corrab.x - corrab.x*cos(a) + corrab.y*sin(a), // X translation to place ca correctly relative to cb
-			-corrab.y - corrab.x*sin(a) - corrab.y*cos(a), // Y translation
+			- corrab.x*cos(a) + corrab.y*sin(a), // X translation to place ca correctly relative to cb
+			- corrab.x*sin(a) - corrab.y*cos(a), // Y translation
 			-corrab.z, // Z translation
 			-corrab.yaw + a); // yaw rotation
 
 		decim_cloud_to_ref_matchmap_occu(cb, &ref_matchmap, 0,0,0, a);
 
 		decim_cloud_to_ref_matchmap_occu(cc, &ref_matchmap, 
-			+corrbc.x + corrbc.x*cos(a) - corrbc.y*sin(a), // X translation to place cc correctly relative to cb
-			+corrbc.y + corrbc.x*sin(a) + corrbc.y*cos(a), // Y translation
+			+ corrbc.x*cos(a) - corrbc.y*sin(a), // X translation to place cc correctly relative to cb
+			+ corrbc.x*sin(a) + corrbc.y*cos(a), // Y translation
 			+corrbc.z, // Z translation
 			+corrbc.yaw + a); // yaw rotation
 
-
 		// Test code:
-			/*
+		#if 0
+			static int dbg_y = 0;
 			po_coords_t po;
 			po = po_coords(0,dbg_y,0, 0);
 			load_pages(1,1,  po.px-1, po.px+3, po.py-3, po.py+3, po.pz-1, po.pz+2);
 
 			ref_matchmap_to_voxmap(&ref_matchmap, 0, dbg_y, 0);
 			dbg_y -= 4096;
-			*/
+
+			store_all_pages();
+
+		#endif
 
 		//printf("a=%+6.1f: ", RADTODEG(a)); fflush(stdout);
 		ref_quality_t q = calc_ref_matchmap_quality(&ref_matchmap);
@@ -1631,30 +1876,30 @@ int gen_save_ref_matchmap_set(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t co
 		memset(&ref_matchmap, 0, sizeof(ref_matchmap));
 
 		decim_cloud_to_ref_matchmap_free(ca, &ref_matchmap, 
-			-corrab.x - corrab.x*cos(a) + corrab.y*sin(a), // X translation to place ca correctly relative to cb
-			-corrab.y - corrab.x*sin(a) - corrab.y*cos(a), // Y translation
+			-corrab.x - corrab.x*cos(-corrab.yaw + a) + corrab.y*sin(-corrab.yaw + a), // X translation to place ca correctly relative to cb
+			-corrab.y - corrab.x*sin(-corrab.yaw + a) - corrab.y*cos(-corrab.yaw + a), // Y translation
 			-corrab.z, // Z translation
 			-corrab.yaw + a); // yaw rotation
 
 		decim_cloud_to_ref_matchmap_free(cb, &ref_matchmap, 0,0,0, a);
 
 		decim_cloud_to_ref_matchmap_free(cc, &ref_matchmap, 
-			+corrbc.x + corrbc.x*cos(a) - corrbc.y*sin(a), // X translation to place cc correctly relative to cb
-			+corrbc.y + corrbc.x*sin(a) + corrbc.y*cos(a), // Y translation
+			+corrbc.x + corrbc.x*cos(+corrbc.yaw + a) - corrbc.y*sin(+corrbc.yaw + a), // X translation to place cc correctly relative to cb
+			+corrbc.y + corrbc.x*sin(+corrbc.yaw + a) + corrbc.y*cos(+corrbc.yaw + a), // Y translation
 			+corrbc.z, // Z translation
 			+corrbc.yaw + a); // yaw rotation
 
 		decim_cloud_to_ref_matchmap_occu(ca, &ref_matchmap, 
-			-corrab.x - corrab.x*cos(a) + corrab.y*sin(a), // X translation to place ca correctly relative to cb
-			-corrab.y - corrab.x*sin(a) - corrab.y*cos(a), // Y translation
+			-corrab.x - corrab.x*cos(-corrab.yaw + a) + corrab.y*sin(-corrab.yaw + a), // X translation to place ca correctly relative to cb
+			-corrab.y - corrab.x*sin(-corrab.yaw + a) - corrab.y*cos(-corrab.yaw + a), // Y translation
 			-corrab.z, // Z translation
 			-corrab.yaw + a); // yaw rotation
 
 		decim_cloud_to_ref_matchmap_occu(cb, &ref_matchmap, 0,0,0, a);
 
 		decim_cloud_to_ref_matchmap_occu(cc, &ref_matchmap, 
-			+corrbc.x + corrbc.x*cos(a) - corrbc.y*sin(a), // X translation to place cc correctly relative to cb
-			+corrbc.y + corrbc.x*sin(a) + corrbc.y*cos(a), // Y translation
+			+corrbc.x + corrbc.x*cos(+corrbc.yaw + a) - corrbc.y*sin(+corrbc.yaw + a), // X translation to place cc correctly relative to cb
+			+corrbc.y + corrbc.x*sin(+corrbc.yaw + a) + corrbc.y*cos(+corrbc.yaw + a), // Y translation
 			+corrbc.z, // Z translation
 			+corrbc.yaw + a); // yaw rotation
 
@@ -1680,56 +1925,44 @@ int gen_save_ref_matchmap_set(cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t co
 		q_best.uncertain_angle = -smallest_a;
 	}
 
-	printf("----> ratio %.2f, uncertain_angle = %.1f deg\n", q_best.xy_ratio, RADTODEG(q_best.uncertain_angle));
+	//printf("----> ratio %.2f, uncertain_angle = %.1f deg\n", q_best.xy_ratio, RADTODEG(q_best.uncertain_angle));
 
-	return 0;
-
-/*
-
+	return q_best;
+}
 
 
-int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref submaps, ref submap indeces, and relative corrections compared to the ref midpoint (which is again related to dx,dy,dz)
-                   int i_smb,  // cmp submap index
-                   double xy_range, double z_range, double yaw_range, // Matching correction ranges (mm, rad)
-                   int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
-                   result_t* results_out)
+int save_ref_matchmap(int idxb, cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc)
 {
-	cloud_t* smas[4];
-
-	// Glue the ref submaps together to ref_matchmap:
 	memset(&ref_matchmap, 0, sizeof(ref_matchmap));
-	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
-	for(int i=0; i<n_sma; i++)
+
+	cloud_to_ref_matchmap_free(ca, &ref_matchmap, -corrab.x, -corrab.y, -corrab.z, -corrab.yaw);
+	cloud_to_ref_matchmap_free(cb, &ref_matchmap, 0,0,0, 0);
+	cloud_to_ref_matchmap_free(cc, &ref_matchmap, +corrbc.x, +corrbc.y, +corrbc.z, +corrbc.yaw);
+
+	cloud_to_ref_matchmap_occu(ca, &ref_matchmap, -corrab.x, -corrab.y, -corrab.z, -corrab.yaw);
+	cloud_to_ref_matchmap_occu(cb, &ref_matchmap, 0,0,0, 0);
+	cloud_to_ref_matchmap_occu(cc, &ref_matchmap, +corrbc.x, +corrbc.y, +corrbc.z, +corrbc.yaw);
+
+	// Test code:
+	#if 0
 	{
-		smas[i] = malloc(sizeof(cloud_t));
-		load_cloud(smas[i], i_sma[i]);
+		static int dbg_y = 0;
+		po_coords_t po;
+		po = po_coords(0,dbg_y,0, 0);
+		load_pages(1,1,  po.px-1, po.px+3, po.py-3, po.py+3, po.pz-1, po.pz+2);
 
-		cloud_to_ref_matchmap_free(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
-		cloud_to_ref_fine_matchmap_free(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
+		ref_matchmap_to_voxmap(&ref_matchmap, 0, dbg_y, 0);
+		dbg_y -= 4096;
+		store_all_pages();
 	}
-
-	for(int i=0; i<n_sma; i++)
-	{
-		cloud_to_ref_matchmap_occu(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
-		cloud_to_ref_fine_matchmap_occu(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
-		free(smas[i]);
-	}
-
-
-
-
-
-	ref_matchmap_
+	#endif
 
 	char fname[1024];
-	snprintf(fname, 1024, "submap%06u", idx);
+	snprintf(fname, 1024, "ref_matchmap_%06u.bin", idxb);
 	FILE* f = fopen(fname, "wb");
 	assert(f);
 
-	uint32_t n_points = cloud->n_points;
-	assert(fwrite(&n_points, sizeof(uint32_t), 1, f) == 1);
-
-	#ifdef COMPRESS_TMP_CLOUDS
+	#ifdef COMPRESS_CLOUDS
 		uint8_t outbuf[ZLIB_CHUNK];
 		z_stream strm;
 		strm.zalloc = Z_NULL;
@@ -1740,8 +1973,8 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 			printf("ERROR: ZLIB initialization failed\n");
 			abort();
 		}
-		strm.avail_in = n_points*sizeof(cloud_point_t);
-		strm.next_in = (uint8_t*)cloud->points;
+		strm.avail_in = sizeof(ref_matchmap_t);
+		strm.next_in = (uint8_t*)&ref_matchmap;
 
 		do
 		{
@@ -1765,27 +1998,120 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 		deflateEnd(&strm);
 
 	#else
-		assert(fwrite(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
+		assert(fwrite(&ref_matchmap, sizeof(ref_matchmap_t), 1, f) == 1);
+	#endif
+
+	fclose(f);
+	return 0;
+}
+
+int save_ref_fine_matchmap(int idxb, cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc)
+{
+
+	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
+
+	cloud_to_ref_fine_matchmap_free(ca, &ref_fine_matchmap, -corrab.x, -corrab.y, -corrab.z, -corrab.yaw);
+	cloud_to_ref_fine_matchmap_free(cb, &ref_fine_matchmap, 0,0,0, 0);
+	cloud_to_ref_fine_matchmap_free(cc, &ref_fine_matchmap, +corrbc.x, +corrbc.y, +corrbc.z, +corrbc.yaw);
+
+	cloud_to_ref_fine_matchmap_occu(ca, &ref_fine_matchmap, -corrab.x, -corrab.y, -corrab.z, -corrab.yaw);
+	cloud_to_ref_fine_matchmap_occu(cb, &ref_fine_matchmap, 0,0,0, 0);
+	cloud_to_ref_fine_matchmap_occu(cc, &ref_fine_matchmap, +corrbc.x, +corrbc.y, +corrbc.z, +corrbc.yaw);
+
+
+	// Test code:
+	#if 0
+	{
+		static int dbg_y = 0;
+		po_coords_t po;
+		po = po_coords(0,dbg_y,0, 0);
+		load_pages(1,1,  po.px-1, po.px+3, po.py-3, po.py+3, po.pz-1, po.pz+2);
+
+		ref_fine_matchmap_to_voxmap(&ref_fine_matchmap, 0, dbg_y, 0);
+		dbg_y -= 8192;
+		store_all_pages();
+	}
+	#endif
+
+
+	char fname[1024];
+	snprintf(fname, 1024, "ref_fine_matchmap_%06u.bin", idxb);
+	FILE* f = fopen(fname, "wb");
+	assert(f);
+
+	#ifdef COMPRESS_CLOUDS
+		uint8_t outbuf[ZLIB_CHUNK];
+		z_stream strm;
+		strm.zalloc = Z_NULL;
+		strm.zfree = Z_NULL;
+		strm.opaque = Z_NULL;
+		if(deflateInit(&strm, ZLIB_LEVEL) != Z_OK)
+		{
+			printf("ERROR: ZLIB initialization failed\n");
+			abort();
+		}
+		strm.avail_in = sizeof(ref_fine_matchmap_t);
+		strm.next_in = (uint8_t*)&ref_fine_matchmap;
+
+		do
+		{
+			strm.avail_out = ZLIB_CHUNK;
+			strm.next_out = outbuf;
+
+			int ret = deflate(&strm, Z_FINISH);
+			assert(ret != Z_STREAM_ERROR);
+
+			int produced = ZLIB_CHUNK - strm.avail_out;
+
+			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
+			{
+				printf("ERROR: fwrite failed\n");
+				abort();
+			}
+		} while(strm.avail_out == 0);
+
+		assert(strm.avail_in == 0);
+
+		deflateEnd(&strm);
+
+	#else
+		assert(fwrite(&ref_fine_matchmap, sizeof(ref_fine_matchmap_t), 1, f) == 1);
 	#endif
 
 	fclose(f);
 	return 0;
 
-*/
 }
+
 /*
-int load_tmp_cloud(cloud_t* cloud, int idx)
+	idxb = index of the submap of interest, used to generate the filename
+	ca = submap before our submap of interest
+	cb = submap of interest
+	cc = next submap after our submap of interest
+	corrab = transform from ca to cb for smooth joining (combination of submap avg delta + adjacent match, for example)
+	corrcb = transform from cb to cc, similarly
+*/
+
+ref_quality_t gen_save_ref_matchmap_set(int idxb, cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc)
 {
+	ref_quality_t quality = calc_ref_quality_3sm(ca, cb, cc, corrab, corrbc);
+	printf("idxb = %3d, quality = %+05d\n", idxb, quality.quality);
+	save_ref_matchmap(idxb, ca, cb, cc, corrab, corrbc);
+	save_ref_fine_matchmap(idxb, ca, cb, cc, corrab, corrbc);
+	return quality;
+}
+
+
+int load_ref_matchmap(int idxb, ref_matchmap_t* mm)
+{
+	memset(mm, 0, sizeof(ref_matchmap_t));
+
 	char fname[1024];
-	snprintf(fname, 1024, "submap%06u", idx);
+	snprintf(fname, 1024, "ref_matchmap_%06u.bin", idxb);
 	FILE* f = fopen(fname, "rb");
 	assert(f);
 
-	uint32_t n_points = 0;
-	assert(fread(&n_points, sizeof(uint32_t), 1, f) == 1);
-	cloud->n_points = n_points;
-
-	#ifdef COMPRESS_TMP_CLOUDS
+	#ifdef COMPRESS_CLOUDS
 		uint8_t inbuf[ZLIB_CHUNK];
 		z_stream strm;
 		strm.zalloc = Z_NULL;
@@ -1801,7 +2127,7 @@ int load_tmp_cloud(cloud_t* cloud, int idx)
 		}
 
 		int got_bytes = 0;
-		int bytes_left = n_points*sizeof(cloud_point_t);
+		int bytes_left = sizeof(ref_matchmap_t);
 		int ret = 0;
 		do
 		{
@@ -1818,7 +2144,7 @@ int load_tmp_cloud(cloud_t* cloud, int idx)
 			do
 			{
 				strm.avail_out = bytes_left;
-				strm.next_out = (uint8_t*)cloud->points + got_bytes;
+				strm.next_out = (uint8_t*)mm + got_bytes;
 
 				ret = inflate(&strm, Z_FINISH);
 				assert(ret != Z_STREAM_ERROR);
@@ -1842,80 +2168,92 @@ int load_tmp_cloud(cloud_t* cloud, int idx)
 
 		inflateEnd(&strm);
 	#else
-		assert(fread(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
+		assert(fread(mm, sizeof(ref_matchmap_t), 1, f) == 1);
 	#endif
 
+
 	fclose(f);
+
+	return 0;
+
+}
+
+int load_ref_fine_matchmap(int idxb, ref_fine_matchmap_t* mm)
+{
+	memset(mm, 0, sizeof(ref_fine_matchmap_t));
+
+	char fname[1024];
+	snprintf(fname, 1024, "ref_fine_matchmap_%06u.bin", idxb);
+	FILE* f = fopen(fname, "rb");
+	assert(f);
+
+	#ifdef COMPRESS_CLOUDS
+		uint8_t inbuf[ZLIB_CHUNK];
+		z_stream strm;
+		strm.zalloc = Z_NULL;
+		strm.zfree = Z_NULL;
+		strm.opaque = Z_NULL;
+		strm.avail_in = 0;
+		strm.next_in = Z_NULL;
+
+		if(inflateInit(&strm) != Z_OK)
+		{
+			printf("ERROR: ZLIB initialization failed\n");
+			abort();
+		}
+
+		int got_bytes = 0;
+		int bytes_left = sizeof(ref_fine_matchmap_t);
+		int ret = 0;
+		do
+		{
+			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
+			if(ferror(f))
+			{
+				printf("ERROR reading submap input file\n");
+				abort();
+			}
+			if(strm.avail_in == 0)
+				break;
+
+			strm.next_in = inbuf;
+			do
+			{
+				strm.avail_out = bytes_left;
+				strm.next_out = (uint8_t*)mm + got_bytes;
+
+				ret = inflate(&strm, Z_FINISH);
+				assert(ret != Z_STREAM_ERROR);
+
+				switch(ret)
+				{
+					case Z_NEED_DICT:
+					case Z_DATA_ERROR:
+					case Z_MEM_ERROR:
+					{
+						printf("ERROR: submap file decompression error, inflate() returned %d\n", ret);
+						abort();
+					}
+					default: break;
+				}
+
+				got_bytes += bytes_left - strm.avail_out;
+
+			} while(strm.avail_out == 0);
+		} while(ret != Z_STREAM_END);
+
+		inflateEnd(&strm);
+	#else
+		assert(fread(mm, sizeof(ref_fine_matchmap_t), 1, f) == 1);
+	#endif
+
+
+	fclose(f);
+
 	return 0;
 }
-*/
 
-/*
-	kak1: -45.0 ; +45.1 ; 7.5   -7.5 ; +7.5 ; 2.5  13+7 = 20 ops  reference
-	kak2: -40   ; +40.1 ; 10.0  -7.5 ; +7.5 ; 2.5  9+7 = 16 ops   OK -> use this
-	kak3: -40   ; +40.1 ; 10.0  -5.0 ; +5.0 ; 2.5  9+5 = 14 ops   different result
-	kak4: -37.5 ; +37.6 ; 12.5  -7.5 ; +7.5 ; 2.5  7+7 = 14 ops   OK, but let's not go this far.
-*/
 
-void test_q(int smi)
-{
-
-	float smallest = 999.9;
-	float smallest_a = 0.0;
-	static cloud_t cloud;
-	load_cloud(&cloud, smi);
-	for(float a=DEGTORAD(-40.0); a<DEGTORAD(40.1); a+=DEGTORAD(10.0))
-	{
-		memset(&ref_matchmap, 0, sizeof(ref_matchmap));
-		decim_cloud_to_ref_matchmap_free(&cloud, &ref_matchmap, 0,0,0, a);
-		decim_cloud_to_ref_matchmap_occu(&cloud, &ref_matchmap, 0,0,0, a);
-
-		//printf("a=%+6.1f: ", RADTODEG(a)); fflush(stdout);
-		ref_quality_t q = calc_ref_matchmap_quality(&ref_matchmap);
-
-		//printf(" -> q.xy_ratio = %.2f\n", q.xy_ratio);
-
-		if(q.xy_ratio < smallest)
-		{
-			smallest = q.xy_ratio;
-			smallest_a = a;
-		}
-	}
-
-	smallest = 999.9;
-	smallest_a = 0.0;
-	ref_quality_t q_best;
-	for(float a=smallest_a-DEGTORAD(7.5); a<smallest_a+DEGTORAD(7.6); a+=DEGTORAD(2.5))
-	{
-		memset(&ref_matchmap, 0, sizeof(ref_matchmap));
-		decim_cloud_to_ref_matchmap_free(&cloud, &ref_matchmap, 0,0,0, a);
-		decim_cloud_to_ref_matchmap_occu(&cloud, &ref_matchmap, 0,0,0, a);
-
-		//printf("a=%+6.1f: ", RADTODEG(a)); fflush(stdout);
-		ref_quality_t q = calc_ref_matchmap_quality(&ref_matchmap);
-
-		//printf(" -> q.xy_ratio = %.2f\n", q.xy_ratio);
-
-		if(q.xy_ratio < smallest)
-		{
-			smallest = q.xy_ratio;
-			smallest_a = a;
-			q_best = q;
-		}
-	}
-
-	if(q_best.xtot > q_best.ytot)
-	{
-		q_best.uncertain_angle = M_PI/2.0 - smallest_a;
-	}
-	else
-	{
-		q_best.uncertain_angle = -smallest_a;
-	}
-
-	printf("----> ratio %.2f, uncertain_angle = %.1f deg\n", q_best.xy_ratio, RADTODEG(q_best.uncertain_angle));
-
-}
 
 
 /*
@@ -1940,37 +2278,18 @@ void test_q(int smi)
 	dx, dy, dz = world coordinate differences between sm10 and sm50
 */
 
-int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref submaps, ref submap indeces, and relative corrections compared to the ref midpoint (which is again related to dx,dy,dz)
-                   int i_smb,  // cmp submap index
+int match_submaps( int i_ref,  // reference submap index, to load the correct ref_matchmap file
+                   cloud_t* smb,  // cmp submap
                    double xy_range, double z_range, double yaw_range, // Matching correction ranges (mm, rad)
                    int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
                    result_t* results_out)
 {
-	memset(results_out, 0, sizeof(result_t)*N_MATCH_RESULTS);
-
 	double start_time = subsec_timestamp();
 
-	assert(n_sma >= 1 && n_sma <= 4);
-	cloud_t* smas[4];
+	memset(results_out, 0, sizeof(result_t)*N_MATCH_RESULTS);
 
-	// Glue the ref submaps together to ref_matchmap:
-	memset(&ref_matchmap, 0, sizeof(ref_matchmap));
-	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
-	for(int i=0; i<n_sma; i++)
-	{
-		smas[i] = malloc(sizeof(cloud_t));
-		load_cloud(smas[i], i_sma[i]);
-
-		cloud_to_ref_matchmap_free(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
-		cloud_to_ref_fine_matchmap_free(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
-	}
-
-	for(int i=0; i<n_sma; i++)
-	{
-		cloud_to_ref_matchmap_occu(smas[i], &ref_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
-		cloud_to_ref_fine_matchmap_occu(smas[i], &ref_fine_matchmap, sma_corrs[i].x, sma_corrs[i].y, sma_corrs[i].z, sma_corrs[i].yaw);
-		free(smas[i]);
-	}
+	load_ref_matchmap(i_ref, &ref_matchmap);
+	load_ref_fine_matchmap(i_ref, &ref_fine_matchmap);
 
 
 	// ref_matchmap includes free space, so is slower to calculate
@@ -2034,9 +2353,6 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 	assert(results);
 
 	printf("xy_batch=%d, tot_z_step=%d (%d batch, thread %d(+%d)) --> ", xy_batches, total_z_steps, z_batches, threads_at_least, remaining_threads); fflush(stdout);
-
-	cloud_t* smb = malloc(sizeof(cloud_t));
-	load_cloud(smb, i_smb);
 
 	for(int cur_yaw_step = 0; cur_yaw_step < yaw_steps; cur_yaw_step++)
 	{
@@ -2360,7 +2676,6 @@ int match_submaps(int n_sma, int* i_sma, result_t* sma_corrs, // Number of ref s
 //	printf(" %d results, took %.3f sec\n", n_results, (end_time-start_time));
 
 	free(results);
-	free(smb);
 
 	return n_results;
 }
@@ -2473,13 +2788,13 @@ int  fine_match_submaps(cloud_t* sma, cloud_t* smb,
 	#endif
 
 	int n_results = 0;
-	printf("total results (from %d pcs):\n", FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);
+//	printf("total results (from %d pcs):\n", FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);
 	for(int i=0; i<FINE_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; i++)
 	{
 		if(results[i].score > 0 && results[i].score > results[0].score/2)
 		{
-			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d abscore=%+5d\n",
-				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore);
+//			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d abscore=%+5d\n",
+//				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore);
 
 
 			results_out[n_results] = results[i];

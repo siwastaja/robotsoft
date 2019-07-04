@@ -58,19 +58,19 @@ When the voxfilter accumulates (averages) close points from different sources, w
 sources involved, so that the free space can be traced from all correct sources. 
 
 In order to filter better, we allow another source point to be used instead, if it's close enough to
-the correct source. This happens, for example, if the robot is stationary or near stationary. Or, in some cases, when
-the robot happens to run forward at a certain lucky speed, so that another sensor gets an image close to the point
-where the another sensor picked an image earlier.
+the correct source. This happens, for example, if the robot is stationary (creating exact same source coordinates again)
+or crawling very slowly (nearly the same). Or, in some cases, when the robot happens to run forward at a certain lucky
+speed, so that another sensor gets an image close to the point where the another sensor picked an image earlier.
 
-Upside in increasing this: point clouds gets smaller, because each different source needs to generate a new point even if
-the target point is combined by the voxfilter. 
+Upside in increasing this: point clouds gets smaller. Normally, each different source needs to generate a new point even if
+the target point is combined by the voxfilter, but if the sources are combined, one point per one combined target suffices.
 
 The only downside to increasing this: free space very close to the robot may not be traced perfectly - some
 small stripes and spots *might* remain unknown (not free) even when they are actually free. Note that if you have
 a lot of moving people around the robot while mapping, this might prevent the later free space filter from removing
 some artefacts.
 */
-#define VOXFILTER_SOURCE_COMBINE_THRESHOLD 32 // mm
+#define VOXFILTER_SOURCE_COMBINE_THRESHOLD 50 // mm
 
 typedef struct __attribute__((packed))
 {
