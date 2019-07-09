@@ -272,12 +272,12 @@ double neg_gyro_corr = -0.02700;
 // Accumulating yaw error is eventually limited by compass, but compass will be inaccurate and subject
 // to local magnetic fields.
 
-#define XY_ACCUM_UNCERT_BY_SUBMAP 100 // mm
+#define XY_ACCUM_UNCERT_BY_SUBMAP 400 // mm
 #define Z_ACCUM_UNCERT_BY_SUBMAP 0   // mm
-#define YAW_ACCUM_UNCERT_BY_SUBMAP (DEGTORAD(1.8))
-#define YAW_ACCUM_UNCERT_SATURATION (DEGTORAD(40))
+#define YAW_ACCUM_UNCERT_BY_SUBMAP (DEGTORAD(1.5))
+#define YAW_ACCUM_UNCERT_SATURATION (DEGTORAD(110))
 
-#define TRY_CLOSURE_MARGIN_XY 5000
+#define TRY_CLOSURE_MARGIN_XY 6000
 #define TRY_CLOSURE_MARGIN_Z  1000
 
 
@@ -338,7 +338,7 @@ int load_adjacent_matches(uint32_t n_submaps)
 }
 
 
-#define MIN_CLOSURE_LEN 5
+#define MIN_CLOSURE_LEN 4
 #define MAX_CLOSURE_LEN 256
 
 typedef struct __attribute__((packed))
@@ -357,7 +357,51 @@ typedef struct __attribute__((packed))
 
 #define MAX_CLOSURES 256
 
-int save_closures(closure_t* closures, uint32_t n_closures)
+typedef struct __attribute__((packed))
+{
+	// Submap indeces, [first] and [last] match together
+	int32_t first;
+	int32_t last;
+
+	int n_possibilities;
+	result_t possibilities[N_MATCH_RESULTS];
+} closure_set_t;
+
+uint32_t n_closures = 0;
+
+closure_set_t closures[MAX_CLOSURES];
+
+void print_closure_set(closure_set_t* cs, int n)
+{
+	for(int i=0; i<n; i++)
+	{
+		printf("C%03d ", i);
+
+		printf("%d pos: ", cs[i].n_possibilities);
+		for(int p=0; p < 3; p++)
+		{
+			if(p < cs[i].n_possibilities)
+				printf("%+6d ", cs[i].possibilities[p].score);
+			else
+				printf("       ");
+		}
+
+		putchar('|');
+
+		for(int a=0; a<cs[i].first; a++)
+			putchar(' ');
+		printf(" %03d O", cs[i].first);
+		for(int a=0; a<cs[i].last-cs[i].first-1; a++)
+			putchar('=');
+		printf("O %03d ", cs[i].last);
+
+		printf("\n");
+	}
+
+
+}
+
+int save_closures(closure_set_t* closures, uint32_t n_closures)
 {
 	char fname[1024];
 	snprintf(fname, 1024, "closures.bin");
@@ -365,13 +409,13 @@ int save_closures(closure_t* closures, uint32_t n_closures)
 	assert(f);
 
 	assert(fwrite(&n_closures, sizeof(uint32_t), 1, f) == 1);
-	assert(fwrite(closures, sizeof(closure_t), n_closures, f) == n_closures);
+	assert(fwrite(closures, sizeof(closure_set_t), n_closures, f) == n_closures);
 
 	fclose(f);
 	return 0;
 }
 
-int load_closures(closure_t* closures, uint32_t* n_closures)
+int load_closures(closure_set_t* closures, uint32_t* n_closures)
 {
 	char fname[1024];
 	snprintf(fname, 1024, "closures.bin");
@@ -384,17 +428,13 @@ int load_closures(closure_t* closures, uint32_t* n_closures)
 
 	assert(n_closures_file < MAX_CLOSURES);
 
-	assert(fread(closures, sizeof(closure_t), n_closures_file, f) == n_closures_file);
+	assert(fread(closures, sizeof(closure_set_t), n_closures_file, f) == n_closures_file);
 
 	*n_closures = n_closures_file;
 
 	fclose(f);
 	return 0;
 }
-
-
-uint32_t n_closures = 0;
-static closure_t closures[MAX_CLOSURES];
 
 
 static int find_possible_closures(submap_meta_t* sms, int cur_sms, cloud_t* cur_cloud)
@@ -416,6 +456,12 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, cloud_t* cur_
 //	result_t results[N_EARLIER_SUBMAPS][N_MATCH_RESULTS];
 	// Closures built using the matching results:
 //	closure_t closures[N_EARLIER_SUBMAPS][N_MATCH_RESULTS];
+
+	if(ref_qs[cur_sms].quality < 4000)
+	{
+		printf("poor cmp quality (%d), won't match\n", ref_qs[cur_sms].quality);
+		return 0;
+	}
 
 	for(int i=cur_sms-MIN_CLOSURE_LEN; i>=1; i--)
 	{
@@ -464,7 +510,7 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, cloud_t* cur_
 		fflush(stdout);
 
 
-		if(ref_qs[i].quality < 5000)
+		if(ref_qs[i].quality < 4000)
 		{
 			printf("poor ref quality (%d), won't match\n", ref_qs[i].quality);
 			continue;
@@ -484,20 +530,37 @@ static int find_possible_closures(submap_meta_t* sms, int cur_sms, cloud_t* cur_
 		printf("%d results, best score = %d -->", now_n_results, result[0].score);
 
 
-		if(result[0].score > 5000 && ref_qs[i].quality * result[0].score > 6000*6000)
+		for(int res=0; 
+			res < now_n_results &&
+			result[res].score > 4000 &&
+			result[res].abscore > 6000 &&
+			(int64_t)ref_qs[i].quality * (int64_t)ref_qs[cur_sms].quality * (int64_t)result[res].score > 5000LL*5000LL*5000LL;
+			res++)
 		{
-			printf("new closure %d\n", n_closures);
-			closures[n_closures].score = result[0].score;
 			closures[n_closures].first = i;
 			closures[n_closures].last = cur_sms;
-			closures[n_closures].match = result[0];
 
+			assert(closures[n_closures].n_possibilities < N_MATCH_RESULTS);
+
+			closures[n_closures].possibilities[closures[n_closures].n_possibilities] = result[res];
+			closures[n_closures].n_possibilities++;
+		}
+
+		if(closures[n_closures].n_possibilities > 0)
+		{
+			printf("new closure %d (%d possibilities (from %d) added)\n", n_closures, closures[n_closures].n_possibilities, now_n_results);
 			n_closures++;
+
+			print_closure_set(closures, n_closures);
+			save_closures(closures, n_closures);
+
 		}
 		else
 		{
-			printf("no closure\n");
+			printf("no good closures\n");
 		}
+
+
 	}
 
 #if 0
@@ -1044,7 +1107,7 @@ void input_from_file(int file_idx)
 				//result_t adjab = (result_t){0,0,0,0,0,0};
 				//result_t adjbc = (result_t){0,0,0,0,0,0};
 
-				printf("adjab (%d %d %d %f) adjbc (%d %d %d %f)\n", adjab.x,adjab.y,adjab.z,RADTODEG(adjab.yaw),adjbc.x,adjbc.y,adjbc.z,RADTODEG(adjbc.yaw));
+				//printf("adjab (%d %d %d %f) adjbc (%d %d %d %f)\n", adjab.x,adjab.y,adjab.z,RADTODEG(adjab.yaw),adjbc.x,adjbc.y,adjbc.z,RADTODEG(adjbc.yaw));
 				result_t corrab = {
 					(submap_metas[ret-1].avg_x-submap_metas[ret-2].avg_x)-adjab.x,
 					(submap_metas[ret-1].avg_y-submap_metas[ret-2].avg_y)-adjab.y,
@@ -1075,9 +1138,10 @@ void input_from_file(int file_idx)
 
 			}
 
-			if(ret >= 5)
+			if(ret >= MIN_CLOSURE_LEN+1)
+			//if(ret == 97)
 			{
-				find_possible_closures(submap_metas, ret, p_cur_cloud);
+				find_possible_closures(submap_metas, ret-1, p_prev_cloud);
 			}
 
 			// Swap pointers to reuse the three-level buffer:
@@ -1745,6 +1809,33 @@ static int build_closure(submap_meta_t* sms, int first, int last, result_t* clos
 }
 
 
+void visualize_submaps()
+{
+	const int STEPY=20000;
+	int32_t running_y = 0;
+
+	printf("VISUALIZING SUBMAPS\n\n");
+
+	for(int c=0; c<97; c++)
+	{
+		static cloud_t tmp_cloud;
+
+		printf("Y = %d: submap %d\n", running_y, c);
+		{
+			load_cloud(&tmp_cloud, c);
+			//rotate_cloud(&tmp_cloud, 0.0);
+			po_coords_t po;
+			po = po_coords(0,0+running_y,0, 0);
+			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+			cloud_to_voxmap(&tmp_cloud, 0,0+running_y,0);
+		}
+		running_y -= STEPY;
+
+	}
+	printf("\n");
+	free_all_pages();
+
+}
 
 
 int main(int argc, char** argv)
@@ -1757,11 +1848,74 @@ int main(int argc, char** argv)
 	int end_i = 27294; //12800;
 
 	for(int i = start_i; i<=end_i; i++)
-	{
 		input_from_file(i);
+
+	//free_all_pages();
+
+	//visualize_submaps();
+
+	return 0;
+	load_closures(closures, &n_closures);
+
+
+	{
+		#define STEPX 15000
+		#define STEPY 20000
+		int32_t running_x = 0, running_y = 0;
+
+		printf("VISUALIZING CLOSURES\n\n");
+
+		int col = 0;
+		//int c = 0;
+		for(int c=0; c<n_closures; c++)
+		{
+			static cloud_t tmp_cloud;
+
+			int sma = closures[c].first;
+			int smb = closures[c].last;
+//			int smc = closures[c].first + 1;
+
+			result_t result = closures[c].possibilities[0];
+
+			printf("y=%+6d   %3d  %3d  (%+6d,%+6d,%+6d,%+6.2f) SCORE=%d ABSCORE=%d\n", running_y, sma, smb, 
+				result.x, result.y, result.z, RADTODEG(result.yaw), result.score, result.abscore);
+
+			// SMA alone
+			{
+				load_cloud(&tmp_cloud, sma);
+				//rotate_cloud(&tmp_cloud, 0.0);
+				po_coords_t po;
+				po = po_coords(0+running_x,0+running_y,0, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 0+running_x,0+running_y,0);
+			}
+
+			// SMB alone
+			{
+				load_cloud(&tmp_cloud, smb);
+				//rotate_cloud(&tmp_cloud, yaw_corr);
+				po_coords_t po;
+				po = po_coords(STEPX+running_x,running_y,0, 0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, STEPX+running_x,running_y,0);
+			}
+
+
+			running_y -= STEPY;
+
+		}
+		printf("\n");
 	}
 
+
 	free_all_pages();
+
+
+
+
+
+
+
 
 
 #if 0

@@ -37,7 +37,7 @@
 int save_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
-	snprintf(fname, 1024, "submap%06u", idx);
+	snprintf(fname, 1024, "submap%06u.bin", idx);
 	FILE* f = fopen(fname, "wb");
 	assert(f);
 
@@ -90,7 +90,7 @@ int save_cloud(cloud_t* cloud, int idx)
 int load_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
-	snprintf(fname, 1024, "submap%06u", idx);
+	snprintf(fname, 1024, "submap%06u.bin", idx);
 	FILE* f = fopen(fname, "rb");
 	assert(f);
 

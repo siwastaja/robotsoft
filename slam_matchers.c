@@ -111,12 +111,12 @@ typedef struct __attribute__((packed))
 	wiggle room of +/- 12.5m, 12.5m, 3m
 */
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	ref_matchmap_unit_t units[MATCHMAP_YS][MATCHMAP_XS];
 } ref_matchmap_t;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	ref_fine_matchmap_unit_t units[FINE_MATCHMAP_YS][FINE_MATCHMAP_XS];
 } ref_fine_matchmap_t;
@@ -131,12 +131,12 @@ typedef struct __attribute__((packed))
 	uint64_t occu;
 } cmp_fine_matchmap_unit_t;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	cmp_matchmap_unit_t units[MATCHMAP_YS][MATCHMAP_XS];
 } cmp_matchmap_t;
 
-typedef struct
+typedef struct __attribute__((packed))
 {
 	cmp_fine_matchmap_unit_t units[FINE_MATCHMAP_YS][FINE_MATCHMAP_XS];
 } cmp_fine_matchmap_t;
@@ -167,6 +167,28 @@ static void ref_matchmap_to_voxmap(ref_matchmap_t* matchmap, int ref_x, int ref_
 					po_coords_t po = po_coords(xx*VOX_UNITS[rl]+ref_x, yy*VOX_UNITS[rl]+ref_y, zz*VOX_UNITS[rl]+ref_z, rl);
 					uint8_t* p_vox = get_p_voxel(po, rl);
 						(*p_vox) |= 0xf0;
+					mark_page_changed(po.px, po.py, po.pz);
+				}
+			}
+		}
+	}
+}
+
+static void cmp_matchmap_to_voxmap(cmp_matchmap_t* matchmap, int ref_x, int ref_y, int ref_z)
+{
+	int rl = 0;
+
+	for(int yy=0; yy<MATCHMAP_YS; yy++)
+	{
+		for(int xx=0; xx<MATCHMAP_XS; xx++)
+		{
+			for(int zz=0; zz<MATCHMAP_ZS; zz++)
+			{
+				if(matchmap->units[yy][xx].occu & (1ULL<<zz))
+				{
+					po_coords_t po = po_coords(xx*VOX_UNITS[rl]+ref_x, yy*VOX_UNITS[rl]+ref_y, zz*VOX_UNITS[rl]+ref_z, rl);
+					uint8_t* p_vox = get_p_voxel(po, rl);
+						(*p_vox) |= 0x0f;
 					mark_page_changed(po.px, po.py, po.pz);
 				}
 			}
@@ -286,7 +308,7 @@ static inline int count_ones_u64(uint64_t in)
 
 // 100% match with no occu_on_free will be score=10000 (OCCU_MATCH_COEFF*REL_SCORE_MULT)
 #define OCCU_MATCH_COEFF 1 // 1 is good for efficiency
-#define OCCU_ON_FREE_COEFF -8
+#define OCCU_ON_FREE_COEFF -8 //-8
 #define REL_SCORE_MULT 10000
 
 #define FINE_REL_SCORE_MULT 10000
@@ -1200,7 +1222,8 @@ static void cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* matchmap,
 	}
 }
 
-#define REF_BOLD_MODE 0
+// "Free" bits are removed at the highest "bold" level
+#define REF_BOLD_MODE 2
 static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
 	float cosa = cosf(yaw_corr);
@@ -1231,6 +1254,11 @@ static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap,
 				continue;
 			}
 
+			// Remove free at highest bold level
+			for(int ix=-1; ix<=1; ix++)
+				for(int iy=-1; iy<=1; iy++)
+					matchmap->units[py/2+iy][px/2+ix].free &= ~(0b111ULL << (pz/2-1));
+
 		#else
 			int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
 			int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -1242,24 +1270,26 @@ static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap,
 				printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
 				continue;
 			}
+
+
+			// Remove free at highest bold level
+			for(int ix=-1; ix<=1; ix++)
+				for(int iy=-1; iy<=1; iy++)
+					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+
 		#endif
 
 		#if REF_BOLD_MODE==0 // Create voxels directly, no bolding
 			matchmap->units[py][px].occu |= 1ULL << (pz);
-			matchmap->units[py][px].free &= ~(1ULL << (pz));
 
 		#elif REF_BOLD_MODE==1 // Create four voxels, by adding one on each axis (x,y,z) to the side nearer the actual voxel
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 		#elif REF_BOLD_MODE==2 // Similarly, but create 8 voxels, a 2x2x2 cube biased correctly
 
@@ -1267,49 +1297,37 @@ static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap,
 			// y x z
 			// 0 0 0
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
 
 			// 0 0 1
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 0 1 0
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			// 0 1 1
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 1 0 0
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
 
 			// 1 0 1
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 1 1 0
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			// 1 1 1
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 		
 		#elif REF_BOLD_MODE==3 // Create extra voxel in every neighbor, i.e., create a cube of 3x3x3 = 27 voxels
 			for(int ix=-1; ix<=1; ix++)
-			{
 				for(int iy=-1; iy<=1; iy++)
-				{
 					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
-				}
-			}
 		#else
 			#error set REF_BOLD_MODE correctly
 		#endif
+
 	}
 }
 
@@ -1395,6 +1413,11 @@ static void decim_cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* mat
 				continue;
 			}
 
+			// Remove free at highest bold level
+			for(int ix=-1; ix<=1; ix++)
+				for(int iy=-1; iy<=1; iy++)
+					matchmap->units[py/2+iy][px/2+ix].free &= ~(0b111ULL << (pz/2-1));
+
 		#else
 			int px = mmpx/MATCHMAP_UNIT + MATCHMAP_XS/2;
 			int py = mmpy/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -1406,24 +1429,25 @@ static void decim_cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* mat
 				printf("cloud_to_ref_matchmap: WARN, OOR point %d,%d,%d\n", px, py, pz);
 				continue;
 			}
+
+			// Remove free at highest bold level
+			for(int ix=-1; ix<=1; ix++)
+				for(int iy=-1; iy<=1; iy++)
+					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+
 		#endif
 
 		#if REF_BOLD_MODE==0 // Create voxels directly, no bolding
 			matchmap->units[py][px].occu |= 1ULL << (pz);
-			matchmap->units[py][px].free &= ~(1ULL << (pz));
 
 		#elif REF_BOLD_MODE==1 // Create four voxels, by adding one on each axis (x,y,z) to the side nearer the actual voxel
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 		#elif REF_BOLD_MODE==2 // Similarly, but create 8 voxels, a 2x2x2 cube biased correctly
 
@@ -1431,46 +1455,33 @@ static void decim_cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* mat
 			// y x z
 			// 0 0 0
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
 
 			// 0 0 1
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 0 1 0
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			// 0 1 1
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 1 0 0
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
 
 			// 1 0 1
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 1 1 0
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			// 1 1 1
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 		
 		#elif REF_BOLD_MODE==3 // Create extra voxel in every neighbor, i.e., create a cube of 3x3x3 = 27 voxels
 			for(int ix=-1; ix<=1; ix++)
-			{
 				for(int iy=-1; iy<=1; iy++)
-				{
 					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
-				}
-			}
 		#else
 			#error set REF_BOLD_MODE correctly
 		#endif
@@ -1534,7 +1545,7 @@ static void cloud_to_ref_fine_matchmap_free(cloud_t* cloud, ref_fine_matchmap_t*
 	}
 }
 
-#define REF_FINE_BOLD_MODE 2
+#define REF_FINE_BOLD_MODE 3
 
 static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
@@ -1563,6 +1574,12 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 				oor++;
 				continue;
 			}
+
+			// Remove free at highest bold level
+			for(int ix=-1; ix<=1; ix++)
+				for(int iy=-1; iy<=1; iy++)
+					matchmap->units[py/2+iy][px/2+ix].free &= ~(0b111ULL << (pz/2-1));
+
 		#else
 			int px = mmpx/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
 			int py = mmpy/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
@@ -1573,24 +1590,25 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 				oor++;
 				continue;
 			}
+
+			// Remove free at highest bold level
+			for(int ix=-1; ix<=1; ix++)
+				for(int iy=-1; iy<=1; iy++)
+					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
+
 		#endif
 
 		#if REF_FINE_BOLD_MODE==0 // Create voxels directly, no bolding
 			matchmap->units[py][px].occu |= 1ULL << (pz);
-			matchmap->units[py][px].free &= ~(1ULL << (pz));
 
 		#elif REF_FINE_BOLD_MODE==1 // Create four voxels, by adding one on each axis (x,y,z) to the side nearer the actual voxel
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 		#elif REF_FINE_BOLD_MODE==2 // Similarly, but create 8 voxels, a 2x2x2 cube biased correctly
 
@@ -1598,49 +1616,37 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 			// y x z
 			// 0 0 0
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2));
 
 			// 0 0 1
 			matchmap->units[py/2][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 0 1 0
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			// 0 1 1
 			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 1 0 0
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2));
 
 			// 1 0 1
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 			// 1 1 0
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2);
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2));
 
 			// 1 1 1
 			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].occu |= 1ULL << (pz/2 - 1 + 2*(pz%2));
-			matchmap->units[py/2 - 1 + 2*(py%2)][px/2 - 1 + 2*(px%2)].free &= ~(1ULL << (pz/2 - 1 + 2*(pz%2)));
 
 		
 		#elif REF_FINE_BOLD_MODE==3 // Create extra voxel in every neighbor, i.e., create a cube of 3x3x3 = 27 voxels
 			for(int ix=-1; ix<=1; ix++)
-			{
 				for(int iy=-1; iy<=1; iy++)
-				{
 					matchmap->units[py+iy][px+ix].occu |= 0b111ULL << (pz-1);
-					matchmap->units[py+iy][px+ix].free &= ~(0b111ULL << (pz-1));
-				}
-			}
 		#else
 			#error set REF_FINE_BOLD_MODE correctly
 		#endif
+
 	}
 
 	if(oor > cloud->n_points/20)
@@ -2095,7 +2101,7 @@ int save_ref_fine_matchmap(int idxb, cloud_t* ca, cloud_t* cb, cloud_t* cc, resu
 ref_quality_t gen_save_ref_matchmap_set(int idxb, cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc)
 {
 	ref_quality_t quality = calc_ref_quality_3sm(ca, cb, cc, corrab, corrbc);
-	printf("idxb = %3d, quality = %+05d\n", idxb, quality.quality);
+	//	printf("idxb = %3d, quality = %+05d\n", idxb, quality.quality);
 	save_ref_matchmap(idxb, ca, cb, cc, corrab, corrbc);
 	save_ref_fine_matchmap(idxb, ca, cb, cc, corrab, corrbc);
 	return quality;
@@ -2277,6 +2283,7 @@ int load_ref_fine_matchmap(int idxb, ref_fine_matchmap_t* mm)
 
 	dx, dy, dz = world coordinate differences between sm10 and sm50
 */
+//#define DBG_OUTPUT_MATCHMAPS
 
 int match_submaps( int i_ref,  // reference submap index, to load the correct ref_matchmap file
                    cloud_t* smb,  // cmp submap
@@ -2340,7 +2347,7 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 
 	// 1 deg step is 260mm shift at 15m distance
 	// 1.5 deg step is 390mm shift at 15m distance
-	double yaw_step = DEGTORAD(1.5);
+	double yaw_step = DEGTORAD(2.5);
 
 	// Round yaw_range up so that midpoint is at zero.
 	yaw_range = ceil(yaw_range/yaw_step) * yaw_step;
@@ -2352,11 +2359,22 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 	result_t* results = calloc(total_results, sizeof(result_t));	
 	assert(results);
 
-	printf("xy_batch=%d, tot_z_step=%d (%d batch, thread %d(+%d)) --> ", xy_batches, total_z_steps, z_batches, threads_at_least, remaining_threads); fflush(stdout);
+	//printf("xy_batch=%d, tot_z_step=%d (%d batch, thread %d(+%d)) --> ", xy_batches, total_z_steps, z_batches, threads_at_least, remaining_threads); fflush(stdout);
+
+	#ifdef DBG_OUTPUT_MATCHMAPS
+		static int dbg_y = 0;
+		int dbg_x = 0;
+		po_coords_t po;
+		po = po_coords(0,dbg_y,0, 0);
+		load_pages(1,1,  po.px-1, po.px+3, po.py-3, po.py+3, po.pz-1, po.pz+2);
+
+		ref_matchmap_to_voxmap(&ref_matchmap, 0, dbg_y, 0);
+	#endif
+
 
 	for(int cur_yaw_step = 0; cur_yaw_step < yaw_steps; cur_yaw_step++)
 	{
-		int not_skipped = 0;
+		int32_t best_score_now = INT32_MIN;
 		double cur_yaw_corr = -yaw_range + (double)cur_yaw_step*yaw_step;
 		for(int cur_y_batch = 0; cur_y_batch < xy_batches; cur_y_batch++)
 		{
@@ -2394,7 +2412,7 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 
 					if(fabs(cx) > 6000+(MATCHMAP_XY_RANGE*MATCHMAP_UNIT) || fabs(cy) > 6000+(MATCHMAP_XY_RANGE*MATCHMAP_UNIT) || fabs(cz) > 4000)
 					{
-						//printf("SKIP 1\n");
+					//	printf("SKIP 1\n");
 						goto SKIP_BATCH;
 					}
 
@@ -2428,13 +2446,20 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 					//printf("qscore = %d, n_vox = %d, ratio = %.3f\n", qscore, n_vox, qscore_ratio);
 					if(qscore_ratio < 0.20)
 					{
-						//printf("SKIP 2\n");
+					//	printf("SKIP 2\n");
 						goto SKIP_BATCH;
 					}
 
-					not_skipped = 1;
-
 					n_vox += cloud_to_cmp_matchmap_odd(smb, &cmp_matchmap, cx, cy, cz, cur_yaw_corr);
+
+					#ifdef DBG_OUTPUT_MATCHMAPS
+						dbg_x += 4096;
+						po_coords_t po;
+						po = po_coords(dbg_x,dbg_y,0, 0);
+						load_pages(1,1,  po.px-1, po.px+3, po.py-3, po.py+3, po.pz-1, po.pz+2);
+
+						cmp_matchmap_to_voxmap(&cmp_matchmap, dbg_x, dbg_y, 0);
+					#endif
 
 
 
@@ -2457,7 +2482,6 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 
 					}
 
-
 					for(int th=n_threads_now-1; th>=0; th--)
 					{
 						pthread_join(threads[th], NULL);
@@ -2474,6 +2498,8 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 						for(int i=0; i<MATCHMAP_XYZ_N_RESULTS; i++)
 						{
 							int cur_rel_score = (cur_results[th][i].score*REL_SCORE_MULT)/n_vox;
+							if(cur_rel_score > best_score_now)
+								best_score_now = cur_rel_score;
 							results[result_idx + i].abscore = cur_results[th][i].score;
 							//printf("i=%2d  (%+3d,%+3d,%+3d) score=%+8d, relative=%+6d\n",
 							//	i, 
@@ -2487,7 +2513,6 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 						}
 					}
 
-
 					SKIP_BATCH:
 					cur_z_corr += n_threads_now * MATCHMAP_UNIT;
 					cur_th_idx += n_threads_now;
@@ -2497,12 +2522,26 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 
 		}
 
-		if(!not_skipped)
-		{
-			// For this yaw, all x,y,z batches were skipped - we are very far off. Skip a few yaw rounds.
-			cur_yaw_step+=2;
-		}
+		// For this yaw, all x,y,z batches were skipped (best_score_now == INT32_MIN),
+		// or best score was very low - we are very far off. Skip a few yaw rounds.
+		if(best_score_now < 2000)
+			cur_yaw_step++;
+
+		if(best_score_now < 1500)
+			cur_yaw_step++;
+
+		if(best_score_now < 1000)
+			cur_yaw_step++;
+
+		if(best_score_now < 0)
+			cur_yaw_step++;
+
 	}
+
+	#ifdef DBG_OUTPUT_MATCHMAPS
+		dbg_y -= 4096;
+		store_all_pages();
+	#endif
 
 	qsort(results, total_results, sizeof(result_t), compar_scores); // about 1.5 ms
 
@@ -2561,8 +2600,8 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 				//printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d, abscore=%+5d ..", i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore); fflush(stdout);;
 
 				const double yaw_fine_step = DEGTORAD(0.75);
-				const double yaw_fine_start = DEGTORAD(-2.25);
-				const int n_yaw_fine_steps = 7;
+				const double yaw_fine_start = DEGTORAD(-3.00);
+				const int n_yaw_fine_steps = 9;
 
 	//			const double yaw_fine_step = DEGTORAD(0.5);
 	//			const double yaw_fine_start = DEGTORAD(0);
