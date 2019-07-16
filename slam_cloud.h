@@ -1,8 +1,8 @@
 #pragma once
 
+#include <inttypes.h>
 #include "api_board_to_soft.h"
 #include "misc.h"
-#include "slam_cloud.h"
 #include "slam_config.h"
 
 // Ray sources are always near the middle of the submap. Consider typical submap robot moving range of 5000mm (+/- 2500mm), so
@@ -28,6 +28,14 @@ typedef struct
 	int n_points;
 	cloud_point_t points[MAX_POINTS];
 } cloud_t;
+
+
+typedef struct __attribute__((packed))
+{
+	int16_t x;
+	int16_t y;
+	int16_t z;
+} small_cloud_point_t;
 
 
 
@@ -120,7 +128,7 @@ ALWAYS_INLINE void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, in
 	}
 	assert(cloud->n_points >= 0);
 
-	assert(sx != 0 || sy != 0 || sz != 0); // Would be an alarming coincidence. Remove this assert later as it's a real possibility given enough data.
+	//assert(sx != 0 || sy != 0 || sz != 0); // Would be an alarming coincidence. Remove this assert later as it's a real possibility given enough data.
 
 	cloud->points[cloud->n_points].sx = sx;
 	cloud->points[cloud->n_points].sy = sy;
@@ -133,6 +141,21 @@ ALWAYS_INLINE void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, in
 	cloud->n_points++;
 }
 
+#include "../robotboard2-fw/tof_process.h" // for sensor_mount_t
+typedef struct __attribute__((packed))
+{
+	uint32_t magic;
+	uint32_t chip_id;
+	uint32_t calib_timestamp;
+	uint32_t calib_info;
+	uint32_t reserved;
 
+	sensor_mount_t mount;
 
+	uint16_t hor_angs[TOF_XS*TOF_YS];
+	uint16_t ver_angs[TOF_XS*TOF_YS];
+	
+} sensor_softcal_t;
+
+void load_sensor_softcals();
 

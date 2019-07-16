@@ -42,7 +42,6 @@
 #include "datatypes.h"
 #include "map_memdisk.h"
 #include "mapping.h"
-#include "hwdata.h"
 #include "routing.h"
 
 #include "tcp_comm.h"   // to send dbgpoint.
@@ -959,7 +958,7 @@ void autofsm()
 			state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
 
 			#define NUM_LATEST_LIDARS_FOR_ROUTING_START 7
-			extern lidar_scan_t* lidars_to_map_at_routing_start[NUM_LATEST_LIDARS_FOR_ROUTING_START];
+			//extern lidar_scan_t* lidars_to_map_at_routing_start[NUM_LATEST_LIDARS_FOR_ROUTING_START];
 // jooooooo			map_lidars_to_minimap(NUM_LATEST_LIDARS_FOR_ROUTING_START, lidars_to_map_at_routing_start);
 
 //			map_lidar_to_minimap(latest_lidar);

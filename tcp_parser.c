@@ -210,6 +210,7 @@ void tcp_send_hmap(int xsamps, int ysamps, int32_t ang, int xorig_mm, int yorig_
 
 void tcp_send_route(int32_t first_x, int32_t first_y, route_unit_t **route)
 {
+#if 0
 	uint8_t buf[2000];
 	int i = 4+4;
 	route_unit_t *rt;
@@ -233,7 +234,7 @@ void tcp_send_route(int32_t first_x, int32_t first_y, route_unit_t **route)
 	I32TOBUF(first_y, buf, 4);
 
 	tcp_send(TCP_RC_ROUTEINFO_MID, i, buf);
-
+#endif
 }
 
 void tcp_send_dbgpoint(int x, int y, uint8_t r, uint8_t g, uint8_t b, int persistence)

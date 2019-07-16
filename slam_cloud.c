@@ -600,92 +600,395 @@ ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter
 
 
 
-
-typedef struct
-{
-	int32_t mount_mode;             // mount position 1,2,3 or 4
-	int32_t x_rel_robot;          // zero = robot origin. Positive = robot front (forward)
-	int32_t y_rel_robot;          // zero = robot origin. Positive = to the right of the robot
-	uint16_t ang_rel_robot;        // zero = robot forward direction. positive = ccw
-	uint16_t vert_ang_rel_ground;  // zero = looks directly forward. positive = looks up. negative = looks down
-	int32_t z_rel_ground;         // sensor height from the ground	
-} sensor_mount_t;
-
-
-/*
-	Sensor mount position 1:
-	 _ _
-	| | |
-	| |L|
-	|O|L|
-	| |L|
-	|_|_|  (front view)
-
-	Sensor mount position 2:
-	 _ _
-	| | |
-	|L| |
-	|L|O|
-	|L| |
-	|_|_|  (front view)
-
-	Sensor mount position 3:
-
-	-------------
-	|  L  L  L  |
-	-------------
-	|     O     |
-	-------------
-
-	Sensor mount position 4:
-
-	-------------
-	|     O     |
-	-------------
-	|  L  L  L  |
-	-------------
-*/
-
-
-
-#define DEGTOANG16(x)  ((uint16_t)((float)(x)/(360.0)*65536.0))
-
-sensor_mount_t sensor_mounts[N_SENSORS] =
-{          //      mountmode    x     y       hor ang           ver ang      height    
- /*0:                */ { 0,     0,     0, DEGTOANG16(       0), DEGTOANG16( 2),         300 },
-
- /*1:                */ { 1,   130,   103, DEGTOANG16(    24.4), DEGTOANG16( 4.4),       310  }, // -1
- /*2:                */ { 2,  -235,   215, DEGTOANG16(    66.4), DEGTOANG16( 1.4),       310  }, // -1
- /*3:                */ { 2,  -415,   215, DEGTOANG16(    93.5), DEGTOANG16( 1.9),       310  }, // -1
- /*4:                */ { 2,  -522,   103, DEGTOANG16(   157.4), DEGTOANG16( 3.9),       280  }, // -1
- /*5:                */ { 2,  -522,   -35, DEGTOANG16(   176.0), DEGTOANG16( 4.9),       290  }, // -1
- /*6:                */ { 1,  -522,  -103, DEGTOANG16(   206.0), DEGTOANG16( 4.4),       290  }, // -1
- /*7:                */ { 1,  -415,  -215, DEGTOANG16(   271.5), DEGTOANG16( 2.4),       280  }, // -1
- /*8:                */ { 1,  -235,  -215, DEGTOANG16(   294.9), DEGTOANG16( 4.4),       300  }, // -1
- /*9:                */ { 2,   130,  -103, DEGTOANG16(   334.9), DEGTOANG16( -0.9),      320  }  // 0
-};
-
 #define DIST_UNDEREXP 0
 #define DIST_OVEREXP 1
 #include "sin_lut.c"
-#include "geotables.h"
 
-// voxfilter_ref_*: difference between the submap origin, and the subsubmap (voxfilter) origin, to maximize the span of the limited voxmap.
-// E.g., submap is started at ref_* = 10000,0,0. First voxfilter is at voxfilter_ref_* = 0,0,0, so at the same location.
-// Now the first voxfilter ends, and the robot is at, say 11000,0,0, and we would have already lost half of our voxfilter span available. But
-// luckily, we can now set voxfilter_ref_* = 1000,0,0, and the new data is again translated near the middle of the voxfilter, internally.
-// Actual coordinates in the voxfilter accumulation variables are not translated, only voxel selection code uses this information.
+#ifdef REV2A
+
+	typedef struct
+	{
+		int32_t mount_mode;             // mount position 1,2,3 or 4
+		int32_t x_rel_robot;          // zero = robot origin. Positive = robot front (forward)
+		int32_t y_rel_robot;          // zero = robot origin. Positive = to the right of the robot
+		uint16_t ang_rel_robot;        // zero = robot forward direction. positive = ccw
+		uint16_t vert_ang_rel_ground;  // zero = looks directly forward. positive = looks up. negative = looks down
+		int32_t z_rel_ground;         // sensor height from the ground	
+	} sensor_mount_t;
+
+
+	/*
+		Sensor mount position 1:
+		 _ _
+		| | |
+		| |L|
+		|O|L|
+		| |L|
+		|_|_|  (front view)
+
+		Sensor mount position 2:
+		 _ _
+		| | |
+		|L| |
+		|L|O|
+		|L| |
+		|_|_|  (front view)
+
+		Sensor mount position 3:
+
+		-------------
+		|  L  L  L  |
+		-------------
+		|     O     |
+		-------------
+
+		Sensor mount position 4:
+
+		-------------
+		|     O     |
+		-------------
+		|  L  L  L  |
+		-------------
+	*/
+
+
+
+	#define DEGTOANG16(x)  ((uint16_t)((float)(x)/(360.0)*65536.0))
+
+	sensor_mount_t sensor_mounts[N_SENSORS] =
+	{          //      mountmode    x     y       hor ang           ver ang      height    
+	 /*0:                */ { 0,     0,     0, DEGTOANG16(       0), DEGTOANG16( 2),         300 },
+
+	 /*1:                */ { 1,   130,   103, DEGTOANG16(    24.4), DEGTOANG16( 4.4),       310  }, // -1
+	 /*2:                */ { 2,  -235,   215, DEGTOANG16(    66.4), DEGTOANG16( 1.4),       310  }, // -1
+	 /*3:                */ { 2,  -415,   215, DEGTOANG16(    93.5), DEGTOANG16( 1.9),       310  }, // -1
+	 /*4:                */ { 2,  -522,   103, DEGTOANG16(   157.4), DEGTOANG16( 3.9),       280  }, // -1
+	 /*5:                */ { 2,  -522,   -35, DEGTOANG16(   176.0), DEGTOANG16( 4.9),       290  }, // -1
+	 /*6:                */ { 1,  -522,  -103, DEGTOANG16(   206.0), DEGTOANG16( 4.4),       290  }, // -1
+	 /*7:                */ { 1,  -415,  -215, DEGTOANG16(   271.5), DEGTOANG16( 2.4),       280  }, // -1
+	 /*8:                */ { 1,  -235,  -215, DEGTOANG16(   294.9), DEGTOANG16( 4.4),       300  }, // -1
+	 /*9:                */ { 2,   130,  -103, DEGTOANG16(   334.9), DEGTOANG16( -0.9),      320  }  // 0
+	};
+
+	#include "geotables.h"
+
+	// voxfilter_ref_*: difference between the submap origin, and the subsubmap (voxfilter) origin, to maximize the span of the limited voxmap.
+	// E.g., submap is started at ref_* = 10000,0,0. First voxfilter is at voxfilter_ref_* = 0,0,0, so at the same location.
+	// Now the first voxfilter ends, and the robot is at, say 11000,0,0, and we would have already lost half of our voxfilter span available. But
+	// luckily, we can now set voxfilter_ref_* = 1000,0,0, and the new data is again translated near the middle of the voxfilter, internally.
+	// Actual coordinates in the voxfilter accumulation variables are not translated, only voxel selection code uses this information.
+
+	// Old version to deal with the legacy not individually calibrated data:
+
+	void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
+		 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold)
+	{
+		if(sidx < 0 || sidx >= N_SENSORS)
+		{
+			printf("Invalid sidx\n");
+			return;
+		}
+
+	//	if(sidx != 8)
+	//		return;
+
+		int32_t robot_x = pose.x;
+		int32_t robot_y = pose.y;
+		int32_t robot_z = pose.z;
+
+		uint16_t robot_ang = pose.ang>>16;
+
+		// Rotation: xr = x*cos(a) + y*sin(a)
+		//           yr = -x*sin(a) + y*cos(a)
+		// It seems to me this widely touted formula has inverted y axis, don't understand why, so it should be:
+		// Rotation: xr = x*cos(a) - y*sin(a)
+		//           yr = x*sin(a) + y*cos(a)
+
+
+		uint16_t global_sensor_hor_ang = sensor_mounts[sidx].ang_rel_robot + robot_ang;
+	//	uint16_t global_sensor_ver_ang = sensor_mounts[sidx].vert_ang_rel_ground;
+
+		int16_t pitch_ang = pose.pitch>>16;
+		int16_t roll_ang = pose.roll>>16;
+
+		uint16_t global_sensor_ver_ang = 
+			(int32_t)((int16_t)sensor_mounts[sidx].vert_ang_rel_ground) +
+			((lut_cos_from_u16(sensor_mounts[sidx].ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
+			((lut_sin_from_u16(sensor_mounts[sidx].ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
+
+
+		uint16_t local_sensor_hor_ang = sensor_mounts[sidx].ang_rel_robot;
+		uint16_t local_sensor_ver_ang = sensor_mounts[sidx].vert_ang_rel_ground;
+
+		int32_t  global_sensor_x = robot_x - ref_x +
+				((lut_cos_from_u16(robot_ang)*sensor_mounts[sidx].x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
+				((lut_sin_from_u16(robot_ang)*-1*sensor_mounts[sidx].y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
+
+		int32_t  global_sensor_y = robot_y - ref_y + 
+				((lut_sin_from_u16(robot_ang)*sensor_mounts[sidx].x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
+				((lut_cos_from_u16(robot_ang)*sensor_mounts[sidx].y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
+
+		int32_t  global_sensor_z = robot_z - ref_z + sensor_mounts[sidx].z_rel_ground;
+
+
+		int32_t  local_sensor_x = sensor_mounts[sidx].x_rel_robot;
+		int32_t  local_sensor_y = sensor_mounts[sidx].y_rel_robot;
+		int32_t  local_sensor_z = sensor_mounts[sidx].z_rel_ground;
+
+
+		int sx = global_sensor_x;
+		int sy = global_sensor_y;
+		int sz = global_sensor_z;
+
+		int voxfilter_ray_src_id = 0;
+
+		if(voxfilter)
+		{
+			for(int i=1; i < voxfilter->n_ray_sources+1; i++)
+			{
+				int64_t sqdist = 
+					sq((int64_t)voxfilter->ray_sources[i].x - (int64_t)sx)	+
+					sq((int64_t)voxfilter->ray_sources[i].y - (int64_t)sy)	+
+					sq((int64_t)voxfilter->ray_sources[i].z - (int64_t)sz);
+
+				if(sqdist < sq(VOXFILTER_SOURCE_COMBINE_THRESHOLD))
+				{
+					// We already have a close enough source, let's use it instead:
+					//printf("Hooray, could optimize source (%d,%d,%d) to earlier source #%d (%d,%d,%d)\n",
+					//	sx, sy, sz, i, voxfilter->ray_sources[i].x, voxfilter->ray_sources[i].y, voxfilter->ray_sources[i].z);
+					voxfilter_ray_src_id = i;
+					// But do not replace sx,sy,sz, we are OK with the more exact actual coordinates
+					// when working outside the voxfilter.
+					goto USE_OLD;
+				}
+			}
+
+			// No appropriate source was found; add a new one.
+
+	 		voxfilter->n_ray_sources++; // Increment first, we want the first one to be at [1], and so on.
+
+			assert(voxfilter->n_ray_sources < VOXFILTER_N_SCANS*N_SENSORS+1);
+
+			voxfilter->ray_sources[voxfilter->n_ray_sources].x = sx;
+			voxfilter->ray_sources[voxfilter->n_ray_sources].y = sy;
+			voxfilter->ray_sources[voxfilter->n_ray_sources].z = sz;
+			voxfilter_ray_src_id = voxfilter->n_ray_sources;
+
+			USE_OLD:;
+		}
+
+		int y_ignore=1;
+		int x_ignore=1;
+
+		// Horrible temporary kludge
+		if(!is_narrow)
+		{
+
+			int32_t nearfield_avg_dist = 0;
+			int nearfield_avg_n = 0;
+			for(volatile int py=10; py<TOF_YS-10; py++)
+			{
+				for(volatile int px=50; px<TOF_XS-50; px++)
+				{
+					int32_t dist = ampldist[(py)*TOF_XS+(px)]&DIST_MASK;
+
+	//				printf("py=%d, px=%d, dist=%d\n", py, px, dist);
+
+					if(dist == DIST_UNDEREXP) dist = 2000>>DIST_SHIFT;
+
+					nearfield_avg_dist += dist; // -O3 segfaults here for no apparent reason - defining loop variables volatile prevents buggy optimization.
+					nearfield_avg_n++;
+				}
+			}	
+
+			nearfield_avg_dist /= nearfield_avg_n;
+			nearfield_avg_dist <<= DIST_SHIFT;
+
+
+
+			// x_ignore: 0 at 1000mm, 66.6 at 0mm
+			// y_ignore: 0 at 500mm, 25 at 0mm
+		//	x_ignore = (1000-nearfield_avg_dist)/15;
+		//	y_ignore = (500-nearfield_avg_dist)/20;
+
+			// x_ignore: 0 at 1400mm, 87.5 at 0mm
+			// y_ignore: 0 at 500mm, 25 at 0mm
+		//	x_ignore = (1400-nearfield_avg_dist)/16;
+		//	y_ignore = (500-nearfield_avg_dist)/20;
+
+			// x_ignore: 0 at 1600mm, 94 at 0mm
+			// y_ignore: 0 at 800mm, 32 at 0mm
+			x_ignore = (1600-nearfield_avg_dist)/13; // /17
+			y_ignore = (800-nearfield_avg_dist)/22; // /25
+
+			if(x_ignore < 1) x_ignore = 1;
+			if(x_ignore > 72) x_ignore = 72;
+
+			if(y_ignore < 1) y_ignore = 1;
+			if(y_ignore > 26) y_ignore = 26;
+
+		//	printf("nearfield_avg_dist = %d, x_ignore=%d, y_ignore=%d\n", nearfield_avg_dist, x_ignore, y_ignore);
+		}
+
+		//printf("x_ignore=%d y_ignore=%d\n", x_ignore, y_ignore);
+		// end kludge
+
+		for(int py=y_ignore; py<TOF_YS-y_ignore; py++)
+	//	for(int py=29; py<32; py++)
+		{
+			for(int px=x_ignore; px<TOF_XS-x_ignore; px++)
+	//		for(int px=75; px<85; px++)
+	//		for(int px=79; px<82; px++)
+			{
+				int32_t avg = 0;
+				int n_conform = 0;
+				if(is_narrow)
+				{
+					int npy, npx;
+					npx=px-TOF_NARROW_X_START;
+					npy=py-TOF_NARROW_Y_START;
+					if(npx < 1 || npy < 1 || npx >= TOF_XS_NARROW-1 || npx >= TOF_YS_NARROW-1)
+						continue;
+
+					int32_t refdist = ampldist[(npy+0)*TOF_XS_NARROW+(npx+0)]&DIST_MASK;
+					if(refdist == DIST_UNDEREXP)
+						continue;
+
+					for(int iy=-1; iy<=1; iy++)
+					{
+						for(int ix=-1; ix<=1; ix++)
+						{
+							int32_t dist = ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK;
+							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(120>>DIST_SHIFT) && dist < refdist+(120>>DIST_SHIFT))
+							{
+								avg+=dist;
+								n_conform++;
+							}
+						
+						}
+					}
+
+				}
+				else
+				{
+					int32_t refdist = ampldist[(py+0)*TOF_XS+(px+0)]&DIST_MASK;
+					if(refdist == DIST_UNDEREXP)
+						continue;
+
+					for(int iy=-1; iy<=1; iy++)
+					{
+						for(int ix=-1; ix<=1; ix++)
+						{
+							int32_t dist = ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
+							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(120>>DIST_SHIFT) && dist < refdist+(120>>DIST_SHIFT))
+							{
+								avg+=dist;
+								n_conform++;
+							}
+						
+						}
+					}
+				}
+
+				if(n_conform >= 7)
+				{
+					avg <<= DIST_SHIFT;
+					avg /= n_conform;
+
+					int32_t d = avg;
+
+					if(d < dist_ignore_threshold)
+						continue;
+
+					uint16_t hor_ang, ver_ang;
+
+
+					// TODO: This optimizes out once we have sensor-by-sensor geometric tables;
+					// they can be pre-built to the actual mount_mode.
+					switch(sensor_mounts[sidx].mount_mode)
+					{
+						case 1: 
+						hor_ang = -1*geocoords[py*TOF_XS+px].yang;
+						ver_ang = geocoords[py*TOF_XS+px].xang;
+						break;
+
+						case 2: 
+						hor_ang = geocoords[py*TOF_XS+px].yang;
+						ver_ang = -1*geocoords[py*TOF_XS+px].xang;
+						break;
+
+						case 3:
+						hor_ang = -1*geocoords[py*TOF_XS+px].xang;
+						ver_ang = geocoords[py*TOF_XS+px].yang;
+						break;
+
+						case 4:
+						hor_ang = geocoords[py*TOF_XS+px].xang;
+						ver_ang = -1*geocoords[py*TOF_XS+px].yang;
+						break;
+
+						default: return;
+					}
+
+					uint16_t comb_hor_ang = hor_ang + global_sensor_hor_ang;
+					uint16_t comb_ver_ang = ver_ang + global_sensor_ver_ang;
+
+					int32_t x = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_cos_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_x;
+					int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
+					int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
+
+					uint16_t local_comb_hor_ang = hor_ang + local_sensor_hor_ang;
+					uint16_t local_comb_ver_ang = ver_ang + local_sensor_ver_ang;
+
+					int32_t local_x = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_cos_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_x;
+					int32_t local_y = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_sin_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_y;
+					int32_t local_z = (((int64_t)d * (int64_t)lut_sin_from_u16(local_comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + local_sensor_z;
+
+					// VACUUM APP: Ignore the nozzle
+					#define NOZZLE_WIDTH 760
+					if(local_z < 200 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
+						continue;
+
+					// Completely ignore nozzle area obstacles for mapping, but give the floor if visible!
+					if(local_z > 100 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
+						continue;
+
+	//				if(z > 2200)
+	//					continue;
+
+					if(voxfilter && d < voxfilter_threshold)
+						voxfilter_insert_point(cloud, voxfilter, voxfilter_ray_src_id, sx, sy, sz, x, y, z, voxfilter_ref_x, voxfilter_ref_y, voxfilter_ref_z);
+					else
+						cloud_insert_point(cloud, sx, sy, sz, x, y, z);
+
+				}
+			}
+		}
+	}
+#endif
+
+sensor_softcal_t sensor_softcals[N_SENSORS];
+
+void load_sensor_softcals()
+{
+	for(int sidx=0; sidx<N_SENSORS; sidx++)
+	{
+		char fname[4096];
+		snprintf(fname,4096, "./softcals/softcal_%02u.bin", sidx);
+		FILE* f = fopen(fname, "rb");
+		if(!f || fread(&sensor_softcals[sidx], sizeof(sensor_softcal_t), 1, f) != 1)
+		{
+			printf("ERROR: Opening sensor calibration file %s failed.\n", fname);
+			abort();
+		}
+		fclose(f);
+	}
+}
+
 void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
 	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold)
 {
-	if(sidx < 0 || sidx >= N_SENSORS)
-	{
-		printf("Invalid sidx\n");
-		return;
-	}
-
-//	if(sidx != 8)
-//		return;
+	assert(sidx >= 0 && sidx < N_SENSORS);
 
 	int32_t robot_x = pose.x;
 	int32_t robot_y = pose.y;
@@ -693,42 +996,37 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 
 	uint16_t robot_ang = pose.ang>>16;
 
-	// Rotation: xr = x*cos(a) + y*sin(a)
-	//           yr = -x*sin(a) + y*cos(a)
-	// It seems to me this widely touted formula has inverted y axis, don't understand why, so it should be:
 	// Rotation: xr = x*cos(a) - y*sin(a)
 	//           yr = x*sin(a) + y*cos(a)
 
-
-	uint16_t global_sensor_hor_ang = sensor_mounts[sidx].ang_rel_robot + robot_ang;
-//	uint16_t global_sensor_ver_ang = sensor_mounts[sidx].vert_ang_rel_ground;
+	uint16_t global_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot + robot_ang;
+//	uint16_t global_sensor_ver_ang = sensor_softcals[sidx].mount.vert_ang_rel_ground;
 
 	int16_t pitch_ang = pose.pitch>>16;
 	int16_t roll_ang = pose.roll>>16;
 
 	uint16_t global_sensor_ver_ang = 
-		(int32_t)((int16_t)sensor_mounts[sidx].vert_ang_rel_ground) +
-		((lut_cos_from_u16(sensor_mounts[sidx].ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
-		((lut_sin_from_u16(sensor_mounts[sidx].ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
+		(int32_t)((int16_t)sensor_softcals[sidx].mount.vert_ang_rel_ground) +
+		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
+		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
 
-
-	uint16_t local_sensor_hor_ang = sensor_mounts[sidx].ang_rel_robot;
-	uint16_t local_sensor_ver_ang = sensor_mounts[sidx].vert_ang_rel_ground;
+	uint16_t local_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot;
+	uint16_t local_sensor_ver_ang = sensor_softcals[sidx].mount.vert_ang_rel_ground;
 
 	int32_t  global_sensor_x = robot_x - ref_x +
-			((lut_cos_from_u16(robot_ang)*sensor_mounts[sidx].x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-			((lut_sin_from_u16(robot_ang)*-1*sensor_mounts[sidx].y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
+			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
+			((lut_sin_from_u16(robot_ang)*-1*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
 
 	int32_t  global_sensor_y = robot_y - ref_y + 
-			((lut_sin_from_u16(robot_ang)*sensor_mounts[sidx].x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-			((lut_cos_from_u16(robot_ang)*sensor_mounts[sidx].y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
+			((lut_sin_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
+			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
 
-	int32_t  global_sensor_z = robot_z - ref_z + sensor_mounts[sidx].z_rel_ground;
+	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground;
 
 
-	int32_t  local_sensor_x = sensor_mounts[sidx].x_rel_robot;
-	int32_t  local_sensor_y = sensor_mounts[sidx].y_rel_robot;
-	int32_t  local_sensor_z = sensor_mounts[sidx].z_rel_ground;
+	int32_t  local_sensor_x = sensor_softcals[sidx].mount.x_rel_robot;
+	int32_t  local_sensor_y = sensor_softcals[sidx].mount.y_rel_robot;
+	int32_t  local_sensor_z = sensor_softcals[sidx].mount.z_rel_ground;
 
 
 	int sx = global_sensor_x;
@@ -772,68 +1070,10 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 		USE_OLD:;
 	}
 
-	int y_ignore=1;
-	int x_ignore=1;
 
-	// Horrible temporary kludge
-	if(!is_narrow)
+	for(int py=1; py<TOF_YS-1; py++)
 	{
-
-		int32_t nearfield_avg_dist = 0;
-		int nearfield_avg_n = 0;
-		for(volatile int py=10; py<TOF_YS-10; py++)
-		{
-			for(volatile int px=50; px<TOF_XS-50; px++)
-			{
-				int32_t dist = ampldist[(py)*TOF_XS+(px)]&DIST_MASK;
-
-//				printf("py=%d, px=%d, dist=%d\n", py, px, dist);
-
-				if(dist == DIST_UNDEREXP) dist = 2000>>DIST_SHIFT;
-
-				nearfield_avg_dist += dist; // -O3 segfaults here for no apparent reason - defining loop variables volatile prevents buggy optimization.
-				nearfield_avg_n++;
-			}
-		}	
-
-		nearfield_avg_dist /= nearfield_avg_n;
-		nearfield_avg_dist <<= DIST_SHIFT;
-
-
-
-		// x_ignore: 0 at 1000mm, 66.6 at 0mm
-		// y_ignore: 0 at 500mm, 25 at 0mm
-	//	x_ignore = (1000-nearfield_avg_dist)/15;
-	//	y_ignore = (500-nearfield_avg_dist)/20;
-
-		// x_ignore: 0 at 1400mm, 87.5 at 0mm
-		// y_ignore: 0 at 500mm, 25 at 0mm
-	//	x_ignore = (1400-nearfield_avg_dist)/16;
-	//	y_ignore = (500-nearfield_avg_dist)/20;
-
-		// x_ignore: 0 at 1600mm, 94 at 0mm
-		// y_ignore: 0 at 800mm, 32 at 0mm
-		x_ignore = (1600-nearfield_avg_dist)/13; // /17
-		y_ignore = (800-nearfield_avg_dist)/22; // /25
-
-		if(x_ignore < 1) x_ignore = 1;
-		if(x_ignore > 72) x_ignore = 72;
-
-		if(y_ignore < 1) y_ignore = 1;
-		if(y_ignore > 26) y_ignore = 26;
-
-	//	printf("nearfield_avg_dist = %d, x_ignore=%d, y_ignore=%d\n", nearfield_avg_dist, x_ignore, y_ignore);
-	}
-
-	//printf("x_ignore=%d y_ignore=%d\n", x_ignore, y_ignore);
-	// end kludge
-
-	for(int py=y_ignore; py<TOF_YS-y_ignore; py++)
-//	for(int py=29; py<32; py++)
-	{
-		for(int px=x_ignore; px<TOF_XS-x_ignore; px++)
-//		for(int px=75; px<85; px++)
-//		for(int px=79; px<82; px++)
+		for(int px=1; px<TOF_XS-1; px++)
 		{
 			int32_t avg = 0;
 			int n_conform = 0;
@@ -897,33 +1137,8 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 
 				uint16_t hor_ang, ver_ang;
 
-
-				// TODO: This optimizes out once we have sensor-by-sensor geometric tables;
-				// they can be pre-built to the actual mount_mode.
-				switch(sensor_mounts[sidx].mount_mode)
-				{
-					case 1: 
-					hor_ang = -1*geocoords[py*TOF_XS+px].yang;
-					ver_ang = geocoords[py*TOF_XS+px].xang;
-					break;
-
-					case 2: 
-					hor_ang = geocoords[py*TOF_XS+px].yang;
-					ver_ang = -1*geocoords[py*TOF_XS+px].xang;
-					break;
-
-					case 3:
-					hor_ang = -1*geocoords[py*TOF_XS+px].xang;
-					ver_ang = geocoords[py*TOF_XS+px].yang;
-					break;
-
-					case 4:
-					hor_ang = geocoords[py*TOF_XS+px].xang;
-					ver_ang = -1*geocoords[py*TOF_XS+px].yang;
-					break;
-
-					default: return;
-				}
+				hor_ang = sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
+				ver_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
 
 				uint16_t comb_hor_ang = hor_ang + global_sensor_hor_ang;
 				uint16_t comb_ver_ang = ver_ang + global_sensor_ver_ang;
@@ -939,14 +1154,16 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				int32_t local_y = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_sin_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_y;
 				int32_t local_z = (((int64_t)d * (int64_t)lut_sin_from_u16(local_comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + local_sensor_z;
 
-				// VACUUM APP: Ignore the nozzle
-				#define NOZZLE_WIDTH 760
-				if(local_z < 200 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
-					continue;
+				#ifdef VACUUM_APP
+					// VACUUM APP: Ignore the nozzle
+					#define NOZZLE_WIDTH 760
+					if(local_z < 200 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
+						continue;
 
-				// Completely ignore nozzle area obstacles for mapping, but give the floor if visible!
-				if(local_z > 100 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
-					continue;
+					// Completely ignore nozzle area obstacles for mapping, but give the floor if visible!
+					if(local_z > 100 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
+						continue;
+				#endif
 
 //				if(z > 2200)
 //					continue;
@@ -960,6 +1177,7 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 		}
 	}
 }
+
 
 void cloud_to_xyz_file(cloud_t* cloud, char* fname)
 {

@@ -19,6 +19,10 @@
 
 */
 
+float main_robot_xs = 450.0;
+float main_robot_ys = 600.0;
+float main_robot_middle_to_lidar = 120.0;
+
 /*
 
 	Currently, we recommend the following procedure to localize on existing maps:
@@ -59,11 +63,7 @@
 
 */
 
-
-//#define PULUTOF1_GIVE_RAWS
-
 #define _BSD_SOURCE  // glibc backwards incompatibility workaround to bring usleep back.
-
 #define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <stdio.h>
@@ -84,12 +84,9 @@
 
 #include "datatypes.h"
 #include "map_memdisk.h"
-#include "mapping.h"
 #include "tcp_comm.h"
 #include "tcp_parser.h"
-#include "routing.h"
 #include "utlist.h"
-#include "hwdata.h"
 
 #include "misc.h"
 
@@ -101,6 +98,7 @@
 #include "mcu_micronavi_docu.c"
 #include "config.h"
 
+#include "slam_top.h"
 
 #define DEFAULT_SPEEDLIM 45
 #define MAX_CONFIGURABLE_SPEEDLIM 70
@@ -135,15 +133,9 @@ state_vect_t state_vect =
 	}
 };
 
+
+
 #define SPEED(x_) do{ cur_speedlim = ((x_)>max_speedlim)?(max_speedlim):(x_); } while(0);
-
-double subsec_timestamp()
-{
-	struct timespec spec;
-	clock_gettime(CLOCK_MONOTONIC, &spec);
-
-	return (double)spec.tv_sec + (double)spec.tv_nsec/1.0e9;
-}
 
 int live_obstacle_checking_on = 0; // only temporarily disabled by charger mounting code.
 int pos_corr_id = 42;
@@ -156,7 +148,7 @@ uint32_t robot_id = 0xacdcabba; // Hopefully unique identifier for the robot.
 
 int cmd_state;
 
-extern world_t world;
+//extern world_t world;
 #define BUFLEN 2048
 
 int32_t cur_ang, cur_x, cur_y;
@@ -178,6 +170,7 @@ route_point_t the_route[THE_ROUTE_MAX];
 int the_route_len = 0;
 
 int do_follow_route = 0;
+int route_finished_for_charger = 0;
 int route_finished_or_notfound = 0;
 int route_pos = 0;
 int start_route = 0;
@@ -186,12 +179,6 @@ int id_cnt = 1;
 int good_time_for_lidar_mapping = 0;
 
 int route_reverse = 1;
-
-
-#define sq(x) ((x)*(x))
-
-#define NUM_LATEST_LIDARS_FOR_ROUTING_START 4
-lidar_scan_t* lidars_to_map_at_routing_start[NUM_LATEST_LIDARS_FOR_ROUTING_START];
 
 void send_info(info_state_t state)
 {
@@ -208,8 +195,8 @@ static volatile sig_atomic_t search_thread_running;
 static volatile sig_atomic_t search_thread_retval;
 int search_instructed;
 
+#if 0
 pthread_t thread_search;
-
 void* search_thread()
 {
 	int ret = search_route(&world, &some_route, ANG32TORAD(cur_ang), cur_x, cur_y, search_thread_dest_x, search_thread_dest_y, route_reverse);
@@ -370,11 +357,28 @@ int rerun_search()
 {
 	return run_search(prev_search_dest_x, prev_search_dest_y, 0);
 }
+#endif
+int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars){}
+int poll_search_status(int act_as_well){}
+void send_route_end_status(uint8_t reason){}
+int rerun_search() {}
 
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn);
 int rerequest_move_to();
 int new_stop_movement();
 
+void limit_speed(int x)
+{
+}
+
+void daiju_mode(int x)
+{
+}
+
+void do_live_obstacle_checking(){}
+void route_fsm(){}
+
+#if 0
 static int maneuver_cnt = 0; // to prevent too many successive maneuver operations
 void do_live_obstacle_checking()
 {
@@ -685,6 +689,7 @@ void route_fsm()
 	}
 
 }
+#endif
 
 int32_t charger_ang;
 int charger_fwd;
@@ -712,7 +717,7 @@ void retrieve_robot_pos()
 	{
 		fscanf(f_cha, "%d %d %d", &ang, &x, &y);
 		fclose(f_cha);
-		set_robot_pos(ang, x, y);
+		//set_robot_pos(ang, x, y);
 	}
 }
 
@@ -1022,7 +1027,6 @@ void* main_thread()
 	srand(time(NULL));
 
 	daiju_mode(0);
-	correct_robot_pos(0,0,0, pos_corr_id); // To set the pos_corr_id.
 /*	turn_and_go_rel_rel(-5*ANG_1_DEG, 0, 25, 1);
 	sleep(1);
 	send_keepalive();
@@ -1035,7 +1039,6 @@ void* main_thread()
 	turn_and_go_rel_rel(0, -50, 25, 1);
 	sleep(1);
 */
-	set_hw_obstacle_avoidance_margin(0);
 
 	if(spi_init_cmd_queue() < 0)
 	{
@@ -1079,10 +1082,10 @@ void* main_thread()
 							cur_y = ((hw_pose_t*)&p_data[offs])->y;
 							cur_ang = ((hw_pose_t*)&p_data[offs])->ang;
 
-							if(state_vect.v.vacuum_on || state_vect.v.command_source)
-								mark_current_as_visited(&world, cur_ang, cur_x, cur_y);
+							//if(state_vect.v.vacuum_on || state_vect.v.command_source)
+							//	mark_current_as_visited(&world, cur_ang, cur_x, cur_y);
 
-							clear_within_robot(&world, cur_ang, cur_x, cur_y);
+							//clear_within_robot(&world, cur_ang, cur_x, cur_y);
 
 						}
 
@@ -1105,6 +1108,11 @@ void* main_thread()
 							move_remaining = ((drive_diag_t*)&p_data[offs])->remaining;
 							micronavi_stop_flags = ((drive_diag_t*)&p_data[offs])->micronavi_stop_flags;
 					//		printf("GOT: move_id=%d, move_remaining=%d, stop_flags=%x\n", move_id, move_remaining, micronavi_stop_flags);
+						}
+
+						if(s==14)
+						{
+							slam_input_from_tss((tof_slam_set_t*)&p_data[offs]);
 						}
 
 
@@ -1172,12 +1180,12 @@ void* main_thread()
 
 			if(cmd == 'S')
 			{
-				save_map_pages(&world);
+//				save_map_pages(&world);
 //				save_robot_pos();
 			}
 			if(cmd == 's')
 			{
-				save_map_pages(&world);
+//				save_map_pages(&world);
 //				retrieve_robot_pos();
 			}
 
@@ -1188,7 +1196,7 @@ void* main_thread()
 
 			if(cmd == '0')
 			{
-				set_robot_pos(0,0,0);
+				//set_robot_pos(0,0,0);
 			}
 			if(cmd == 'M')
 			{
@@ -1310,7 +1318,7 @@ void* main_thread()
 			else if(ret == TCP_CR_ADDCONSTRAINT_MID)
 			{
 				printf("  ---> ADD CONSTRAINT params: X=%d Y=%d\n", msg_cr_addconstraint.x, msg_cr_addconstraint.y);
-				add_map_constraint(&world, msg_cr_addconstraint.x, msg_cr_addconstraint.y);
+//				add_map_constraint(&world, msg_cr_addconstraint.x, msg_cr_addconstraint.y);
 			}
 			else if(ret == TCP_CR_REMCONSTRAINT_MID)
 			{
@@ -1319,7 +1327,7 @@ void* main_thread()
 				{
 					for(int yy = -2; yy<=2; yy++)
 					{
-						remove_map_constraint(&world, msg_cr_remconstraint.x + xx*40, msg_cr_remconstraint.y + yy*40);
+//						remove_map_constraint(&world, msg_cr_remconstraint.x + xx*40, msg_cr_remconstraint.y + yy*40);
 					}
 				}
 			}
@@ -1332,7 +1340,7 @@ void* main_thread()
 					{
 						state_vect.v.keep_position = 1;
 						daiju_mode(0);
-						stop_automapping();
+						//stop_automapping();
 						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 0;
 					} break;
 
@@ -1340,7 +1348,7 @@ void* main_thread()
 					{
 						state_vect.v.keep_position = 1;
 						daiju_mode(0);
-						stop_automapping();
+						//stop_automapping();
 						find_charger_state = 0;
 						do_follow_route = 0;
 						send_info(INFO_STATE_IDLE);
@@ -1352,8 +1360,8 @@ void* main_thread()
 					{
 						state_vect.v.keep_position = 1;
 						daiju_mode(0);
-						routing_set_world(&world);
-						start_automapping_skip_compass();
+//						routing_set_world(&world);
+						//start_automapping_skip_compass();
 						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
 					} break;
 
@@ -1361,14 +1369,14 @@ void* main_thread()
 					{
 						state_vect.v.keep_position = 1;
 						daiju_mode(0);
-						routing_set_world(&world);
-						start_automapping_from_compass();
+//						routing_set_world(&world);
+						//start_automapping_from_compass();
 						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
 					} break;
 
 					case 4:
 					{
-						stop_automapping();
+						//stop_automapping();
 						find_charger_state = 0;
 						do_follow_route = 0;
 						state_vect.v.keep_position = 1;
@@ -1379,23 +1387,21 @@ void* main_thread()
 
 					case 5:
 					{
-						stop_automapping();
+						//stop_automapping();
 						find_charger_state = 0;
 						do_follow_route = 0;
 						send_info(INFO_STATE_IDLE);
 						state_vect.v.keep_position = 0;
-						release_motors();
 						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
 					} break;
 
 					case 6:
 					{
-						stop_automapping();
+						//stop_automapping();
 						find_charger_state = 0;
 						send_info(INFO_STATE_IDLE);
 						do_follow_route = 0;
 						state_vect.v.keep_position = 0;
-						release_motors();
 						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 0;
 					} break;
 
@@ -1406,7 +1412,7 @@ void* main_thread()
 
 					case 8:
 					{
-						stop_automapping();
+						//stop_automapping();
 						find_charger_state = 0;
 						do_follow_route = 0;
 						new_stop_movement();
@@ -1433,23 +1439,23 @@ void* main_thread()
 				#define MANU_BACK  11
 				#define MANU_LEFT  12
 				#define MANU_RIGHT 13
-				stop_automapping();
+				//stop_automapping();
 				daiju_mode(0);
 				state_vect.v.keep_position = 1;
 				printf("Manual OP %d\n", msg_cr_manu.op);
 				switch(msg_cr_manu.op)
 				{
 					case MANU_FWD:
-						turn_and_go_abs_rel(cur_ang, 100, 10, 1);
+						//turn_and_go_abs_rel(cur_ang, 100, 10, 1);
 					break;
 					case MANU_BACK:
-						turn_and_go_abs_rel(cur_ang, -100, 10, 1);
+						//turn_and_go_abs_rel(cur_ang, -100, 10, 1);
 					break;
 					case MANU_LEFT:
-						turn_and_go_abs_rel(cur_ang-10*ANG_1_DEG, 0, 10, 1);
+						//turn_and_go_abs_rel(cur_ang-10*ANG_1_DEG, 0, 10, 1);
 					break;
 					case MANU_RIGHT:
-						turn_and_go_abs_rel(cur_ang+10*ANG_1_DEG, 0, 10, 1);
+						//turn_and_go_abs_rel(cur_ang+10*ANG_1_DEG, 0, 10, 1);
 					break;
 					default:
 					break;
@@ -1488,10 +1494,7 @@ void* main_thread()
 			}
 			else if(ret == TCP_CR_SETPOS_MID)
 			{
-				set_robot_pos(msg_cr_setpos.ang<<16, msg_cr_setpos.x, msg_cr_setpos.y);
-
-				INCR_POS_CORR_ID();
-				correct_robot_pos(0, 0, 0, pos_corr_id); // forces new LIDAR ID, so that correct amount of images (on old coords) are ignored
+				//set_robot_pos(msg_cr_setpos.ang<<16, msg_cr_setpos.x, msg_cr_setpos.y);
 
 			}
 		}
@@ -1533,15 +1536,6 @@ void* main_thread()
 					if(micronavi_stop_flags&(1UL<<i))
 					{
 						printf("bit %2d: %s\n", i, MCU_NAVI_STOP_NAMES[i]);
-					}
-				}
-
-				printf("Actions being taken:\n");
-				for(int i=0; i<32; i++)
-				{
-					if(cur_xymove.micronavi_action_flags&(1UL<<i))
-					{
-						printf("bit %2d: %s\n", i, MCU_NAVI_ACTION_NAMES[i]);
 					}
 				}
 
@@ -1694,8 +1688,8 @@ void* main_thread()
 			}
 		}
 
-		route_fsm();
-		autofsm();
+		//route_fsm();
+		//autofsm();
 
 
 		{
@@ -1721,11 +1715,12 @@ void* main_thread()
 		}
 
 
+		/*
 		static uint8_t prev_keep_position;
 		if(!state_vect.v.keep_position && prev_keep_position)
 			release_motors();
 		prev_keep_position = state_vect.v.keep_position;
-
+		*/
 
 		static uint8_t prev_vacuum_on;
 
@@ -1742,13 +1737,13 @@ void* main_thread()
 		if(state_vect.v.command_source && !prev_autonomous)
 		{
 			daiju_mode(0);
-			routing_set_world(&world);
-			start_automapping_skip_compass();
+//			routing_set_world(&world);
+//			start_automapping_skip_compass();
 			state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
 		}
 		if(!state_vect.v.command_source && prev_autonomous)
 		{
-			stop_automapping();
+//			stop_automapping();
 		}
 		prev_autonomous = state_vect.v.command_source;
 
@@ -1770,15 +1765,16 @@ void* main_thread()
 		if(tcp_client_sock >= 0)
 			write_interval = 7.0;
 
+#if 0
 		if( (stamp=subsec_timestamp()) > prev_sync+write_interval)
 		{
 			prev_sync = stamp;
 
 			int idx_x, idx_y, offs_x, offs_y;
-			page_coords(cur_x, cur_y, &idx_x, &idx_y, &offs_x, &offs_y);
+//			page_coords(cur_x, cur_y, &idx_x, &idx_y, &offs_x, &offs_y);
 
 			// Do some "garbage collection" by disk-syncing and deallocating far-away map pages.
-			unload_map_pages(&world, idx_x, idx_y);
+//			unload_map_pages(&world, idx_x, idx_y);
 
 			// Sync all changed map pages to disk
 			if(save_map_pages(&world))
@@ -1793,6 +1789,7 @@ void* main_thread()
 			fflush(stdout); // syncs log file.
 
 		}
+#endif
 
 		if(cmd_send_to_robot)
 		{

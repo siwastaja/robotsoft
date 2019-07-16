@@ -9,7 +9,9 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#define DEFINE_API_VARIABLES
+#ifdef SLAM_STANDALONE
+	#define DEFINE_API_VARIABLES
+#endif
 #include "api_board_to_soft.h"
 #undef DEFINE_API_VARIABLES
 
@@ -17,7 +19,9 @@
 #include "voxmap_memdisk.h"
 
 
-#include "b2s_prints.c"
+#ifdef SLAM_STANDALONE
+	#include "b2s_prints.c"
+#endif
 
 #include "slam_config.h"
 
@@ -133,9 +137,6 @@ int load_submap_metas(submap_meta_t* smm, uint32_t* n_submaps)
 
 
 int process_file(char* fname, tof_slam_set_t** tss);
-
-#define FIRST_SIDX 1
-#define LAST_SIDX 9
 
 static double translation_vect_len(hw_pose_t pose1, hw_pose_t pose2)
 {
@@ -1004,7 +1005,7 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 			ss_n_scans = 0;
 			n_subsubmaps++;
 
-			//printf("input_tof_slam_set: subsubmap finished, n_subsubmaps = %d\n", n_subsubmaps);
+			printf("input_tof_slam_set: subsubmap finished, n_subsubmaps = %d\n", n_subsubmaps);
 
 
 			// Check if we need to finish the current submap:
@@ -1079,6 +1080,73 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 }
 
+void process_after_input(int ret)
+{
+	save_cloud(p_cur_cloud, ret);
+
+	if(ret >= 1)
+		match_to_prev_submap(ret, p_prev_cloud, p_cur_cloud);
+
+	/*
+		Matchmap sets (for later loop closure matching) combine three adjacent submaps,
+		still in memory. Resulting matchmaps are stored on disk.
+	*/
+	if(ret >= 2)
+	{
+		result_t adjab = adjacent_matches[ret-2].results[0];
+		result_t adjbc = adjacent_matches[ret-1].results[0];
+
+		//result_t adjab = (result_t){0,0,0,0,0,0};
+		//result_t adjbc = (result_t){0,0,0,0,0,0};
+
+		//printf("adjab (%d %d %d %f) adjbc (%d %d %d %f)\n", adjab.x,adjab.y,adjab.z,RADTODEG(adjab.yaw),adjbc.x,adjbc.y,adjbc.z,RADTODEG(adjbc.yaw));
+		result_t corrab = {
+			(submap_metas[ret-1].avg_x-submap_metas[ret-2].avg_x)-adjab.x,
+			(submap_metas[ret-1].avg_y-submap_metas[ret-2].avg_y)-adjab.y,
+			(submap_metas[ret-1].avg_z-submap_metas[ret-2].avg_z)-adjab.z,
+			adjab.yaw};
+
+		result_t corrbc = {
+			(submap_metas[ret].avg_x-submap_metas[ret-1].avg_x)-adjbc.x,
+			(submap_metas[ret].avg_y-submap_metas[ret-1].avg_y)-adjbc.y,
+			(submap_metas[ret].avg_z-submap_metas[ret-1].avg_z)-adjbc.z,
+			adjbc.yaw};
+
+		ref_qs[ret-1] = gen_save_ref_matchmap_set(ret-1, p_prev_prev_cloud, p_prev_cloud, p_cur_cloud, corrab, corrbc);
+
+		#if 0
+		{
+			static int tmp_run_y = 0;
+			printf("IMG Y = %+8d, SCORE ^\n", tmp_run_y); 
+			po_coords_t po;
+			po = po_coords(0,tmp_run_y,0, 0);
+			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+			cloud_to_voxmap(p_prev_cloud, 0,tmp_run_y,0);
+
+			tmp_run_y -= 20000;
+			store_all_pages();
+		}
+		#endif
+
+	}
+
+	if(ret >= MIN_CLOSURE_LEN+1)
+	//if(ret == 97)
+	{
+		find_possible_closures(submap_metas, ret-1, p_prev_cloud);
+	}
+
+	// Swap pointers to reuse the three-level buffer:
+	// prev_prev is no longer needed, and will be rewritten as cur
+	// The one which was cur, is now prev.
+	// The one which was prev, is now prev_prev.
+	cloud_t* tmp = p_prev_prev_cloud;
+	p_prev_prev_cloud = p_prev_cloud;
+	p_prev_cloud = p_cur_cloud;
+	p_cur_cloud = tmp;
+
+}
+
 void input_from_file(int file_idx)
 {
 	char fname[1024];
@@ -1090,74 +1158,21 @@ void input_from_file(int file_idx)
 
 		if(ret >= 0)
 		{
-			save_cloud(p_cur_cloud, ret);
-
-			if(ret >= 1)
-				match_to_prev_submap(ret, p_prev_cloud, p_cur_cloud);
-
-			/*
-				Matchmap sets (for later loop closure matching) combine three adjacent submaps,
-				still in memory. Resulting matchmaps are stored on disk.
-			*/
-			if(ret >= 2)
-			{
-				result_t adjab = adjacent_matches[ret-2].results[0];
-				result_t adjbc = adjacent_matches[ret-1].results[0];
-
-				//result_t adjab = (result_t){0,0,0,0,0,0};
-				//result_t adjbc = (result_t){0,0,0,0,0,0};
-
-				//printf("adjab (%d %d %d %f) adjbc (%d %d %d %f)\n", adjab.x,adjab.y,adjab.z,RADTODEG(adjab.yaw),adjbc.x,adjbc.y,adjbc.z,RADTODEG(adjbc.yaw));
-				result_t corrab = {
-					(submap_metas[ret-1].avg_x-submap_metas[ret-2].avg_x)-adjab.x,
-					(submap_metas[ret-1].avg_y-submap_metas[ret-2].avg_y)-adjab.y,
-					(submap_metas[ret-1].avg_z-submap_metas[ret-2].avg_z)-adjab.z,
-					adjab.yaw};
-
-				result_t corrbc = {
-					(submap_metas[ret].avg_x-submap_metas[ret-1].avg_x)-adjbc.x,
-					(submap_metas[ret].avg_y-submap_metas[ret-1].avg_y)-adjbc.y,
-					(submap_metas[ret].avg_z-submap_metas[ret-1].avg_z)-adjbc.z,
-					adjbc.yaw};
-
-				ref_qs[ret-1] = gen_save_ref_matchmap_set(ret-1, p_prev_prev_cloud, p_prev_cloud, p_cur_cloud, corrab, corrbc);
-
-				#if 0
-				{
-					static int tmp_run_y = 0;
-					printf("IMG Y = %+8d, SCORE ^\n", tmp_run_y); 
-					po_coords_t po;
-					po = po_coords(0,tmp_run_y,0, 0);
-					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-					cloud_to_voxmap(p_prev_cloud, 0,tmp_run_y,0);
-
-					tmp_run_y -= 20000;
-					store_all_pages();
-				}
-				#endif
-
-			}
-
-			if(ret >= MIN_CLOSURE_LEN+1)
-			//if(ret == 97)
-			{
-				find_possible_closures(submap_metas, ret-1, p_prev_cloud);
-			}
-
-			// Swap pointers to reuse the three-level buffer:
-			// prev_prev is no longer needed, and will be rewritten as cur
-			// The one which was cur, is now prev.
-			// The one which was prev, is now prev_prev.
-			cloud_t* tmp = p_prev_prev_cloud;
-			p_prev_prev_cloud = p_prev_cloud;
-			p_prev_cloud = p_cur_cloud;
-			p_cur_cloud = tmp;
-
+			process_after_input(ret);
 		}
 
 	}
 }
 
+void slam_input_from_tss(tof_slam_set_t* tss)
+{
+	int ret = input_tof_slam_set(tss);
+
+	if(ret >= 0)
+	{
+		process_after_input(ret);
+	}
+}
 
 
 
@@ -1837,356 +1852,567 @@ void visualize_submaps()
 
 }
 
-
-int main(int argc, char** argv)
-{
-	p_cur_cloud = &filtered_clouds[0];
-	p_prev_cloud = &filtered_clouds[1];
-	p_prev_prev_cloud = &filtered_clouds[2];
-
-	int start_i = 0;
-	int end_i = 27294; //12800;
-
-	for(int i = start_i; i<=end_i; i++)
-		input_from_file(i);
-
-	//free_all_pages();
-
-	//visualize_submaps();
-
-	return 0;
-	load_closures(closures, &n_closures);
-
-
+#ifdef SLAM_STANDALONE
+	int main(int argc, char** argv)
 	{
-		#define STEPX 15000
-		#define STEPY 20000
-		int32_t running_x = 0, running_y = 0;
+		p_cur_cloud = &filtered_clouds[0];
+		p_prev_cloud = &filtered_clouds[1];
+		p_prev_prev_cloud = &filtered_clouds[2];
 
-		printf("VISUALIZING CLOSURES\n\n");
+		int start_i = 0;
+		int end_i = 27294; //12800;
 
-		int col = 0;
-		//int c = 0;
-		for(int c=0; c<n_closures; c++)
+		for(int i = start_i; i<=end_i; i++)
+			input_from_file(i);
+
+		//free_all_pages();
+
+		//visualize_submaps();
+
+		return 0;
+		load_closures(closures, &n_closures);
+
+
 		{
-			static cloud_t tmp_cloud;
+			#define STEPX 15000
+			#define STEPY 20000
+			int32_t running_x = 0, running_y = 0;
 
-			int sma = closures[c].first;
-			int smb = closures[c].last;
-//			int smc = closures[c].first + 1;
+			printf("VISUALIZING CLOSURES\n\n");
 
-			result_t result = closures[c].possibilities[0];
-
-			printf("y=%+6d   %3d  %3d  (%+6d,%+6d,%+6d,%+6.2f) SCORE=%d ABSCORE=%d\n", running_y, sma, smb, 
-				result.x, result.y, result.z, RADTODEG(result.yaw), result.score, result.abscore);
-
-			// SMA alone
+			int col = 0;
+			//int c = 0;
+			for(int c=0; c<n_closures; c++)
 			{
-				load_cloud(&tmp_cloud, sma);
-				//rotate_cloud(&tmp_cloud, 0.0);
-				po_coords_t po;
-				po = po_coords(0+running_x,0+running_y,0, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, 0+running_x,0+running_y,0);
-			}
+				static cloud_t tmp_cloud;
 
-			// SMB alone
-			{
-				load_cloud(&tmp_cloud, smb);
-				//rotate_cloud(&tmp_cloud, yaw_corr);
-				po_coords_t po;
-				po = po_coords(STEPX+running_x,running_y,0, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, STEPX+running_x,running_y,0);
-			}
+				int sma = closures[c].first;
+				int smb = closures[c].last;
+	//			int smc = closures[c].first + 1;
 
+				result_t result = closures[c].possibilities[0];
 
-			running_y -= STEPY;
+				printf("y=%+6d   %3d  %3d  (%+6d,%+6d,%+6d,%+6.2f) SCORE=%d ABSCORE=%d\n", running_y, sma, smb, 
+					result.x, result.y, result.z, RADTODEG(result.yaw), result.score, result.abscore);
 
-		}
-		printf("\n");
-	}
-
-
-	free_all_pages();
-
-
-
-
-
-
-
-
-
-#if 0
-	if(argc < 2)
-	{
-		printf("Usage: slam 1234 [submap_end_idx]\n");
-		printf("Params required:\n");
-		printf("1 = create submap_metas & pointclouds\n");
-		printf("2 = create adjacent matches\n");
-		printf("3 = create loop closures\n");
-		printf("4 = visualize closures\n");
-		printf("5 = combine loop closures\n");
-		printf("6 = create output\n");
-		return -1;
-
-	}
-
-	int limit_submaps = -1;
-
-	int create_pointclouds = 0;
-	int adjacent_match = 0;
-	int do_closures = 0;
-	int create_output = 0;
-	int visualize_closures = 0;
-	int combine_closures = 0;
-
-	{
-		char c;
-		int i = 0;
-		while( (c = argv[1][i++]) != 0)
-		{
-			if(c == '1')
-				create_pointclouds = 1;
-
-			if(c == '2')
-				adjacent_match = 1;
-
-			if(c == '3')
-				do_closures = 1;
-
-			if(c == '4')
-				visualize_closures = 1;
-
-			if(c == '5')
-				combine_closures = 1;
-
-			if(c == '6')
-				create_output = 1;
-
-
-		}
-	}
-
-	if(argc >= 3)
-	{
-		sscanf(argv[2], "%d", &limit_submaps);
-		if(limit_submaps < 1 || limit_submaps > MAX_SUBMAPS)
-		{
-			printf("ERROR: invalid [submap_end_idx] parameter\n");
-			abort();
-		}
-	}
-
-	printf("Super Slammings 2.0 2000\n");
-	printf("pos_gyro_corr = %lf, neg_gyro_corr = %lf\n", pos_gyro_corr, neg_gyro_corr);
-
-	uint32_t n_submaps;
-	static submap_meta_t submap_metas[MAX_SUBMAPS];
-
-	static cloud_t tmp_cloud;
-
-	if(create_pointclouds)
-	{
-		init_corr_points();
-
-		static firstsidx_pose_t firstsidx_poses[MAX_FIRSTSIDX_POSES];
-		static firstsidx_pose_t pose_corrs[MAX_FIRSTSIDX_POSES];
-
-		int n_firstsidx_poses;
-
-		extract_firstsidx_poses(firstsidx_poses, &n_firstsidx_poses);
-
-		static fpose_t fposes[MAX_FIRSTSIDX_POSES];
-		gen_fposes(firstsidx_poses, n_firstsidx_poses, fposes);
-
-
-		gen_pose_corrs(firstsidx_poses, pose_corrs, n_firstsidx_poses, fposes);
-
-
-
-		// Copy the last correction, will be accessed later.
-		pose_corrs[n_firstsidx_poses] = pose_corrs[n_firstsidx_poses-1];
-		int n_pose_corrs = n_firstsidx_poses + 1;
-
-
-		#if 0
-			for(int i=0; i < n_firstsidx_poses; i++)
-			{
-				printf("%6d (%8d): (%+6d %+6d %+6d  %5.1f) -> (%+6.0f %+6.0f %+6.0f  %5.1f), corr (%+6d %+6d %+6d  %5.1f)\n",
-					i, firstsidx_poses[i].idx,
-					firstsidx_poses[i].pose.x, firstsidx_poses[i].pose.y, firstsidx_poses[i].pose.z, ANG32TOFDEG(firstsidx_poses[i].pose.ang),
-					fposes[i].x, fposes[i].y, fposes[i].z, RADTODEG(fposes[i].ang),
-					pose_corrs[i].pose.x, pose_corrs[i].pose.y, pose_corrs[i].pose.z, ANG32TOFDEG(pose_corrs[i].pose.ang));
-			}
-		#endif
-
-		
-		group_submaps(submap_metas, &n_submaps, firstsidx_poses, n_firstsidx_poses, pose_corrs);
-
-		printf("\n\n      GROUPED DATA IN %d SUBMAPS\n\n", n_submaps);
-
-		if(limit_submaps > 0 && limit_submaps < n_submaps)
-		{
-			printf("NOTE: limiting number of submaps from %d to %d, requested by user\n", n_submaps, limit_submaps);
-			n_submaps = limit_submaps;
-		}
-
-		save_submap_metas(submap_metas, n_submaps);
-
-		// Create and filter pointclouds
-		int64_t total_points = 0;
-		int64_t total_after_filtering = 0;
-
-		for(int sm=0; sm<n_submaps; sm++)
-		{
-			if(!enable_submaps[sm])
-				continue;
-
-			printf("Optimizing pointcloud for submap %d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
-			printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
-				submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-
-			// One point cloud is created for every submap
-			// One voxel filter is used for every subsubmap.
-			// Subsubmaps are contiguous and span the whole submap - if you loop through all subsubmap indices,
-			// you have looped through the submap as well.
-
-			// Create the cloud here:
-			tmp_cloud.n_points = 0;
-
-			for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
-			{
-				// And the voxfilter here:
-				static voxfilter_t tmp_voxfilter;
-				memset(&tmp_voxfilter, 0, sizeof(voxfilter_t));
-				for(int idx=submap_metas[sm].subsubmaps[ssm].start_idx; idx < submap_metas[sm].subsubmaps[ssm].end_idx; idx++)
+				// SMA alone
 				{
-					// Brute-force (todo: more efficiently) search the matching table index for pose correction
-					int cidx = -1;
-					for(int i=0; i<n_pose_corrs-1; i++)
-					{
-						if(idx >= pose_corrs[i].idx && idx <= pose_corrs[i+1].idx)
-						{
-							cidx = i;
-						//	printf("idx=%d; cidx=%d: pose_corrs[%d].idx = %d\n", idx, cidx, i, pose_corrs[i].idx);
-							break;
-						}
-					}
-					assert(cidx>=0);
-
-					// Voxfilter requires a source index running starting from 1.
-					int voxflt_src_idx = idx - submap_metas[sm].subsubmaps[ssm].start_idx + 1;
-
-					char fname[1024];
-					sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", idx);
-					tof_slam_set_t* tss;
-					if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
-					{
-						hw_pose_t pose0 = add_poses(tss->sets[0].pose, pose_corrs[cidx].pose);
-						hw_pose_t pose1 = add_poses(tss->sets[1].pose, pose_corrs[cidx].pose);
-						tof_to_voxfilter_and_cloud(0, 
-							tss->sets[0].ampldist, pose0,
-							voxflt_src_idx, tss->sidx, 
-							submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
-							&tmp_voxfilter, &tmp_cloud, 1800, 300);
-
-						if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
-							tof_to_voxfilter_and_cloud(1, 
-								tss->sets[1].ampldist, pose1,
-								voxflt_src_idx, tss->sidx, 
-								submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
-								NULL, &tmp_cloud, 1800, 3000);
-
-						if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
-							tof_to_voxfilter_and_cloud(0, 
-								tss->sets[1].ampldist, pose1,
-								voxflt_src_idx, tss->sidx, 
-								submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
-								NULL, &tmp_cloud, 1800, 3000);
-					}
-					else
-					{
-						printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
-					}
-
+					load_cloud(&tmp_cloud, sma);
+					//rotate_cloud(&tmp_cloud, 0.0);
+					po_coords_t po;
+					po = po_coords(0+running_x,0+running_y,0, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, 0+running_x,0+running_y,0);
 				}
 
-				// Voxfilter was used for a small subsubmap - insert it to the larger submap cloud
-				voxfilter_to_cloud(&tmp_voxfilter, &tmp_cloud);
+				// SMB alone
+				{
+					load_cloud(&tmp_cloud, smb);
+					//rotate_cloud(&tmp_cloud, yaw_corr);
+					po_coords_t po;
+					po = po_coords(STEPX+running_x,running_y,0, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, STEPX+running_x,running_y,0);
+				}
+
+
+				running_y -= STEPY;
+
 			}
-
-			printf("---> n_points = %d ", tmp_cloud.n_points);
-			total_points += tmp_cloud.n_points;
-
-			static cloud_t tmp_cloud_filtered;
-
-			filter_cloud(&tmp_cloud, &tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-			printf("--> after filtering = %d\n", tmp_cloud_filtered.n_points);
-			total_after_filtering += tmp_cloud_filtered.n_points;
-
-
-			save_tmp_cloud(&tmp_cloud_filtered, sm);
-
-	//		po_coords_t po;
-	//		po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
-	//		load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-	//		cloud_to_voxmap(&tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-	//		cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-		}
-		printf("Total points: %"PRIi64", after filtering %"PRIi64"\n", total_points, total_after_filtering);
-
-		/*
-		Example of voxfilter data reduction: 78836630/119061330 = 0.66215 (threshold 1500)
-				                     77905961/119061330 = 0.65433 (threshold 1800)
-		*/
-
-	}
-	else
-	{
-		load_submap_metas(submap_metas, &n_submaps);
-
-		printf("\n\n      LOADED SUBMAP GROUPING OF %d SUBMAPS\n\n", n_submaps);
-
-
-		if(limit_submaps > 0 && limit_submaps < n_submaps)
-		{
-			printf("NOTE: limiting number of submaps from %d to %d, requested by user\n", n_submaps, limit_submaps);
-			n_submaps = limit_submaps;
+			printf("\n");
 		}
 
 
-	}
+		free_all_pages();
+
+
+
+
+
+
+
+
 
 	#if 0
-		for(int i=0; i<10; i++)
+		if(argc < 2)
 		{
-			static cloud_t cloud;
-			load_tmp_cloud(&cloud, i);
-			char name[1000];
-			sprintf(name, "submap%05d_x%d_y%d_z%d.xyz", i, submap_metas[i].avg_x, submap_metas[i].avg_y, submap_metas[i].avg_z);
-			cloud_to_xyz_file(&cloud, name);
+			printf("Usage: slam 1234 [submap_end_idx]\n");
+			printf("Params required:\n");
+			printf("1 = create submap_metas & pointclouds\n");
+			printf("2 = create adjacent matches\n");
+			printf("3 = create loop closures\n");
+			printf("4 = visualize closures\n");
+			printf("5 = combine loop closures\n");
+			printf("6 = create output\n");
+			return -1;
+
 		}
-		return;
-	#endif
 
-// idea:
-// 01 12 23 34 45 56 67
-//    02 13 24 35 46 57 
+		int limit_submaps = -1;
 
-	// Match adjacent submaps
-	if(adjacent_match)
-	{
-		int32_t running_x = 0, running_y = 0, running_z = 0;
-		double running_yaw = 0.0;
+		int create_pointclouds = 0;
+		int adjacent_match = 0;
+		int do_closures = 0;
+		int create_output = 0;
+		int visualize_closures = 0;
+		int combine_closures = 0;
+
+		{
+			char c;
+			int i = 0;
+			while( (c = argv[1][i++]) != 0)
+			{
+				if(c == '1')
+					create_pointclouds = 1;
+
+				if(c == '2')
+					adjacent_match = 1;
+
+				if(c == '3')
+					do_closures = 1;
+
+				if(c == '4')
+					visualize_closures = 1;
+
+				if(c == '5')
+					combine_closures = 1;
+
+				if(c == '6')
+					create_output = 1;
+
+
+			}
+		}
+
+		if(argc >= 3)
+		{
+			sscanf(argv[2], "%d", &limit_submaps);
+			if(limit_submaps < 1 || limit_submaps > MAX_SUBMAPS)
+			{
+				printf("ERROR: invalid [submap_end_idx] parameter\n");
+				abort();
+			}
+		}
+
+		printf("Super Slammings 2.0 2000\n");
+		printf("pos_gyro_corr = %lf, neg_gyro_corr = %lf\n", pos_gyro_corr, neg_gyro_corr);
+
+		uint32_t n_submaps;
+		static submap_meta_t submap_metas[MAX_SUBMAPS];
+
+		static cloud_t tmp_cloud;
+
+		if(create_pointclouds)
+		{
+			init_corr_points();
+
+			static firstsidx_pose_t firstsidx_poses[MAX_FIRSTSIDX_POSES];
+			static firstsidx_pose_t pose_corrs[MAX_FIRSTSIDX_POSES];
+
+			int n_firstsidx_poses;
+
+			extract_firstsidx_poses(firstsidx_poses, &n_firstsidx_poses);
+
+			static fpose_t fposes[MAX_FIRSTSIDX_POSES];
+			gen_fposes(firstsidx_poses, n_firstsidx_poses, fposes);
+
+
+			gen_pose_corrs(firstsidx_poses, pose_corrs, n_firstsidx_poses, fposes);
+
+
+
+			// Copy the last correction, will be accessed later.
+			pose_corrs[n_firstsidx_poses] = pose_corrs[n_firstsidx_poses-1];
+			int n_pose_corrs = n_firstsidx_poses + 1;
+
+
+			#if 0
+				for(int i=0; i < n_firstsidx_poses; i++)
+				{
+					printf("%6d (%8d): (%+6d %+6d %+6d  %5.1f) -> (%+6.0f %+6.0f %+6.0f  %5.1f), corr (%+6d %+6d %+6d  %5.1f)\n",
+						i, firstsidx_poses[i].idx,
+						firstsidx_poses[i].pose.x, firstsidx_poses[i].pose.y, firstsidx_poses[i].pose.z, ANG32TOFDEG(firstsidx_poses[i].pose.ang),
+						fposes[i].x, fposes[i].y, fposes[i].z, RADTODEG(fposes[i].ang),
+						pose_corrs[i].pose.x, pose_corrs[i].pose.y, pose_corrs[i].pose.z, ANG32TOFDEG(pose_corrs[i].pose.ang));
+				}
+			#endif
+
+			
+			group_submaps(submap_metas, &n_submaps, firstsidx_poses, n_firstsidx_poses, pose_corrs);
+
+			printf("\n\n      GROUPED DATA IN %d SUBMAPS\n\n", n_submaps);
+
+			if(limit_submaps > 0 && limit_submaps < n_submaps)
+			{
+				printf("NOTE: limiting number of submaps from %d to %d, requested by user\n", n_submaps, limit_submaps);
+				n_submaps = limit_submaps;
+			}
+
+			save_submap_metas(submap_metas, n_submaps);
+
+			// Create and filter pointclouds
+			int64_t total_points = 0;
+			int64_t total_after_filtering = 0;
+
+			for(int sm=0; sm<n_submaps; sm++)
+			{
+				if(!enable_submaps[sm])
+					continue;
+
+				printf("Optimizing pointcloud for submap %d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+				printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
+					submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+
+				// One point cloud is created for every submap
+				// One voxel filter is used for every subsubmap.
+				// Subsubmaps are contiguous and span the whole submap - if you loop through all subsubmap indices,
+				// you have looped through the submap as well.
+
+				// Create the cloud here:
+				tmp_cloud.n_points = 0;
+
+				for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
+				{
+					// And the voxfilter here:
+					static voxfilter_t tmp_voxfilter;
+					memset(&tmp_voxfilter, 0, sizeof(voxfilter_t));
+					for(int idx=submap_metas[sm].subsubmaps[ssm].start_idx; idx < submap_metas[sm].subsubmaps[ssm].end_idx; idx++)
+					{
+						// Brute-force (todo: more efficiently) search the matching table index for pose correction
+						int cidx = -1;
+						for(int i=0; i<n_pose_corrs-1; i++)
+						{
+							if(idx >= pose_corrs[i].idx && idx <= pose_corrs[i+1].idx)
+							{
+								cidx = i;
+							//	printf("idx=%d; cidx=%d: pose_corrs[%d].idx = %d\n", idx, cidx, i, pose_corrs[i].idx);
+								break;
+							}
+						}
+						assert(cidx>=0);
+
+						// Voxfilter requires a source index running starting from 1.
+						int voxflt_src_idx = idx - submap_metas[sm].subsubmaps[ssm].start_idx + 1;
+
+						char fname[1024];
+						sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", idx);
+						tof_slam_set_t* tss;
+						if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
+						{
+							hw_pose_t pose0 = add_poses(tss->sets[0].pose, pose_corrs[cidx].pose);
+							hw_pose_t pose1 = add_poses(tss->sets[1].pose, pose_corrs[cidx].pose);
+							tof_to_voxfilter_and_cloud(0, 
+								tss->sets[0].ampldist, pose0,
+								voxflt_src_idx, tss->sidx, 
+								submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+								&tmp_voxfilter, &tmp_cloud, 1800, 300);
+
+							if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
+								tof_to_voxfilter_and_cloud(1, 
+									tss->sets[1].ampldist, pose1,
+									voxflt_src_idx, tss->sidx, 
+									submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+									NULL, &tmp_cloud, 1800, 3000);
+
+							if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
+								tof_to_voxfilter_and_cloud(0, 
+									tss->sets[1].ampldist, pose1,
+									voxflt_src_idx, tss->sidx, 
+									submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z,
+									NULL, &tmp_cloud, 1800, 3000);
+						}
+						else
+						{
+							printf("WARNING: Did not find tof_slam_set record from file %s\n", fname);
+						}
+
+					}
+
+					// Voxfilter was used for a small subsubmap - insert it to the larger submap cloud
+					voxfilter_to_cloud(&tmp_voxfilter, &tmp_cloud);
+				}
+
+				printf("---> n_points = %d ", tmp_cloud.n_points);
+				total_points += tmp_cloud.n_points;
+
+				static cloud_t tmp_cloud_filtered;
+
+				filter_cloud(&tmp_cloud, &tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+				printf("--> after filtering = %d\n", tmp_cloud_filtered.n_points);
+				total_after_filtering += tmp_cloud_filtered.n_points;
+
+
+				save_tmp_cloud(&tmp_cloud_filtered, sm);
+
+		//		po_coords_t po;
+		//		po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
+		//		load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+		//		cloud_to_voxmap(&tmp_cloud_filtered, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+		//		cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+			}
+			printf("Total points: %"PRIi64", after filtering %"PRIi64"\n", total_points, total_after_filtering);
+
+			/*
+			Example of voxfilter data reduction: 78836630/119061330 = 0.66215 (threshold 1500)
+						             77905961/119061330 = 0.65433 (threshold 1800)
+			*/
+
+		}
+		else
+		{
+			load_submap_metas(submap_metas, &n_submaps);
+
+			printf("\n\n      LOADED SUBMAP GROUPING OF %d SUBMAPS\n\n", n_submaps);
+
+
+			if(limit_submaps > 0 && limit_submaps < n_submaps)
+			{
+				printf("NOTE: limiting number of submaps from %d to %d, requested by user\n", n_submaps, limit_submaps);
+				n_submaps = limit_submaps;
+			}
+
+
+		}
 
 		#if 0
-		//if(create_output)
+			for(int i=0; i<10; i++)
+			{
+				static cloud_t cloud;
+				load_tmp_cloud(&cloud, i);
+				char name[1000];
+				sprintf(name, "submap%05d_x%d_y%d_z%d.xyz", i, submap_metas[i].avg_x, submap_metas[i].avg_y, submap_metas[i].avg_z);
+				cloud_to_xyz_file(&cloud, name);
+			}
+			return;
+		#endif
+
+	// idea:
+	// 01 12 23 34 45 56 67
+	//    02 13 24 35 46 57 
+
+		// Match adjacent submaps
+		if(adjacent_match)
 		{
+			int32_t running_x = 0, running_y = 0, running_z = 0;
+			double running_yaw = 0.0;
+
+			#if 0
+			//if(create_output)
+			{
+
+				{
+					int sm = 0;
+					load_tmp_cloud(&tmp_cloud, sm);
+					po_coords_t po;
+					po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+					store_all_pages();
+				}
+			}
+			#endif
+
+
+			for(int sm=0; sm<n_submaps-1; sm++)
+			{
+
+	/*			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+				if(sm < n_submaps-1)
+				{
+					printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
+				}
+				else
+					printf("                              ");
+
+				printf("  avg (%+6d %+6d %+6d) ", submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+				printf("  next (%+6d %+6d %+6d)\n", submap_metas[sm+1].avg_x, submap_metas[sm+1].avg_y, submap_metas[sm+1].avg_z);
+	*/
+
+				int dx = submap_metas[sm].avg_x - submap_metas[sm+1].avg_x;
+				int dy = submap_metas[sm].avg_y - submap_metas[sm+1].avg_y;
+				int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
+
+				result_t results[N_FINE_MATCH_RESULTS];
+
+				int n = fine_match_submaps(sm, sm+1, dx, dy, dz, results);
+
+				assert(n > 0);
+				assert(n <= N_FINE_MATCH_RESULTS);
+
+				memcpy(adjacent_matches[sm].results, results, sizeof(result_t)*n);
+				adjacent_matches[sm].n_results = n;
+
+				int32_t x_corr = -1*results[0].x;
+				int32_t y_corr = -1*results[0].y;
+				int32_t z_corr = -1*results[0].z;
+				double yaw_corr = 1.0*results[0].yaw;
+
+				running_x += x_corr;
+				running_y += y_corr;
+	//			running_z += z_corr;
+				running_yaw += yaw_corr;
+
+				running_x += (-1*dx) * cos(running_yaw) - (-1*dy) * sin(running_yaw)  - (-1*dx);
+				running_y += (-1*dx) * sin(running_yaw) + (-1*dy) * cos(running_yaw)  - (-1*dy);
+
+				int32_t new_avg_x = submap_metas[sm+1].avg_x + running_x;
+				int32_t new_avg_y = submap_metas[sm+1].avg_y + running_y;
+				int32_t new_avg_z = submap_metas[sm+1].avg_z + running_z;
+
+				printf("%4d vs %4d Winner (%+5d, %+5d, %+5d, %+6.2f), running (%+7d, %+7d, %+7d, %+8.2f), new_avg %d, %d, %d\n",
+					sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
+
+				//if(create_output)
+				#if 0
+				{
+					load_tmp_cloud(&tmp_cloud, sm+1);
+					rotate_cloud(&tmp_cloud, running_yaw);
+					po_coords_t po;
+					po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, new_avg_x, new_avg_y, new_avg_z);
+
+					store_all_pages();
+				}
+				#endif
+
+			}
+
+			save_adjacent_matches(n_submaps);
+		}
+		else if(do_closures || create_output)
+		{
+			load_adjacent_matches(n_submaps);
+
+			printf("\n\n        LOADED ADJACENT MATCHES\n\n");
+		}
+
+		// Test code for testing the joining of three adjacent submaps into ref_matchmap:
+		#if 0
+
+		for(int idx=1; idx<20; idx++)
+		{
+			printf("Line %d, sm%d:  ", idx, idx);
+
+			static cloud_t ca, cb, cc;
+			load_tmp_cloud(&ca, idx-1);
+			load_tmp_cloud(&ca, idx);
+			load_tmp_cloud(&ca, idx+1);
+
+			result_t adjab = adjacent_matches[idx-1].results[0];
+			result_t adjbc = adjacent_matches[idx].results[0];
+
+			result_t corrab = {
+				submap_metas[idx].avg_x-submap_metas[idx-1].avg_x+adjab.x,
+				submap_metas[idx].avg_y-submap_metas[idx-1].avg_y+adjab.y,
+				submap_metas[idx].avg_z-submap_metas[idx-1].avg_z+adjab.z,
+				adjab.yaw};
+
+			result_t corrbc = {
+				submap_metas[idx+1].avg_x-submap_metas[idx].avg_x+adjbc.x,
+				submap_metas[idx+1].avg_y-submap_metas[idx].avg_y+adjbc.y,
+				submap_metas[idx+1].avg_z-submap_metas[idx].avg_z+adjbc.z,
+				adjbc.yaw};
+
+			gen_save_ref_matchmap_set(&ca, &cb, &cc, corrab, corrbc);
+
+		}
+		return 0;
+		#endif
+
+		#if 1
+
+	//		int clouds[8] = {0,4,5, 11,138,146, 148, 92};
+	//		int clouds[10] = {91, 92,93,74,76,78, 100, 102, 104, 106};
+			for(int i=0; i<173; i++)
+			{
+				int idx = i; //clouds[i];
+
+				printf("Line %d, sm%d:  ", i, idx);
+
+				test_q(idx);
+	/*
+				static cloud_t tmp_cloud;
+				load_tmp_cloud(&tmp_cloud, idx);
+
+				po_coords_t po;
+				po = po_coords(0,i*-15000,0,0);
+				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+				cloud_to_voxmap(&tmp_cloud, 0,i*-15000,0);
+	*/
+	//			printf("\n");
+			}
+			free_all_pages();
+
+			return;
+
+
+		#endif
+
+
+
+	//	free_all_pages();
+
+
+
+		if(do_closures)
+		{
+			// Loop closures
+
+	//		for(int sm=100; sm<139; sm++)
+			for(int sm=0; sm<n_submaps; sm++)
+			{
+				printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+				if(sm < n_submaps-1)
+				{
+					printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
+				}
+				else
+					printf("                              ");
+
+				printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
+					submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+
+	/*
+				for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
+				{
+					printf("         Subsubmap %2d: idx %8d .. %8d (len %2d), avg (%+6d %+6d %+6d)\n", 
+						ssm, submap_metas[sm].subsubmaps[ssm].start_idx, submap_metas[sm].subsubmaps[ssm].end_idx, 
+						submap_metas[sm].subsubmaps[ssm].end_idx-submap_metas[sm].subsubmaps[ssm].start_idx,
+						submap_metas[sm].subsubmaps[ssm].avg_x, submap_metas[sm].subsubmaps[ssm].avg_y, submap_metas[sm].subsubmaps[ssm].avg_z);
+				}
+	*/
+
+				find_possible_closures(submap_metas, sm);
+	//			if(find_possible_closures(submap_metas, sm, &closures[n_closures]) == 0)
+	//			{
+	//			}
+			}
+
+			printf("\n\n        FOUND %d LOOP CLOSURES\n\n", n_closures);
+
+			save_closures(closures, n_closures);
+		}
+		else if(create_output || visualize_closures || combine_closures)
+		{
+			if(load_closures(closures, &n_closures) == 0)
+				printf("\n\n        LOADED %d LOOP CLOSURES\n\n", n_closures);
+			else
+				printf("\n\n        LOOP CLOSURE FILE NOT FOUND\n\n");
+
+		}
+
+
+		if(create_output)
+		{
+			// Generate output
+
+			int32_t running_x = 0, running_y = 0, running_z = 0;
+			double running_yaw = 0.0;
 
 			{
 				int sm = 0;
@@ -2198,465 +2424,255 @@ int main(int argc, char** argv)
 
 				store_all_pages();
 			}
-		}
-		#endif
-
-
-		for(int sm=0; sm<n_submaps-1; sm++)
-		{
-
-/*			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
-			if(sm < n_submaps-1)
+			for(int sm=0; sm<n_submaps-1; sm++)
 			{
-				printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
-			}
-			else
-				printf("                              ");
 
-			printf("  avg (%+6d %+6d %+6d) ", submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-			printf("  next (%+6d %+6d %+6d)\n", submap_metas[sm+1].avg_x, submap_metas[sm+1].avg_y, submap_metas[sm+1].avg_z);
-*/
-
-			int dx = submap_metas[sm].avg_x - submap_metas[sm+1].avg_x;
-			int dy = submap_metas[sm].avg_y - submap_metas[sm+1].avg_y;
-			int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
-
-			result_t results[N_FINE_MATCH_RESULTS];
-
-			int n = fine_match_submaps(sm, sm+1, dx, dy, dz, results);
-
-			assert(n > 0);
-			assert(n <= N_FINE_MATCH_RESULTS);
-
-			memcpy(adjacent_matches[sm].results, results, sizeof(result_t)*n);
-			adjacent_matches[sm].n_results = n;
-
-			int32_t x_corr = -1*results[0].x;
-			int32_t y_corr = -1*results[0].y;
-			int32_t z_corr = -1*results[0].z;
-			double yaw_corr = 1.0*results[0].yaw;
-
-			running_x += x_corr;
-			running_y += y_corr;
-//			running_z += z_corr;
-			running_yaw += yaw_corr;
-
-			running_x += (-1*dx) * cos(running_yaw) - (-1*dy) * sin(running_yaw)  - (-1*dx);
-			running_y += (-1*dx) * sin(running_yaw) + (-1*dy) * cos(running_yaw)  - (-1*dy);
-
-			int32_t new_avg_x = submap_metas[sm+1].avg_x + running_x;
-			int32_t new_avg_y = submap_metas[sm+1].avg_y + running_y;
-			int32_t new_avg_z = submap_metas[sm+1].avg_z + running_z;
-
-			printf("%4d vs %4d Winner (%+5d, %+5d, %+5d, %+6.2f), running (%+7d, %+7d, %+7d, %+8.2f), new_avg %d, %d, %d\n",
-				sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
-
-			//if(create_output)
-			#if 0
-			{
-				load_tmp_cloud(&tmp_cloud, sm+1);
-				rotate_cloud(&tmp_cloud, running_yaw);
-				po_coords_t po;
-				po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, new_avg_x, new_avg_y, new_avg_z);
-
-				store_all_pages();
-			}
-			#endif
-
-		}
-
-		save_adjacent_matches(n_submaps);
-	}
-	else if(do_closures || create_output)
-	{
-		load_adjacent_matches(n_submaps);
-
-		printf("\n\n        LOADED ADJACENT MATCHES\n\n");
-	}
-
-	// Test code for testing the joining of three adjacent submaps into ref_matchmap:
-	#if 0
-
-	for(int idx=1; idx<20; idx++)
-	{
-		printf("Line %d, sm%d:  ", idx, idx);
-
-		static cloud_t ca, cb, cc;
-		load_tmp_cloud(&ca, idx-1);
-		load_tmp_cloud(&ca, idx);
-		load_tmp_cloud(&ca, idx+1);
-
-		result_t adjab = adjacent_matches[idx-1].results[0];
-		result_t adjbc = adjacent_matches[idx].results[0];
-
-		result_t corrab = {
-			submap_metas[idx].avg_x-submap_metas[idx-1].avg_x+adjab.x,
-			submap_metas[idx].avg_y-submap_metas[idx-1].avg_y+adjab.y,
-			submap_metas[idx].avg_z-submap_metas[idx-1].avg_z+adjab.z,
-			adjab.yaw};
-
-		result_t corrbc = {
-			submap_metas[idx+1].avg_x-submap_metas[idx].avg_x+adjbc.x,
-			submap_metas[idx+1].avg_y-submap_metas[idx].avg_y+adjbc.y,
-			submap_metas[idx+1].avg_z-submap_metas[idx].avg_z+adjbc.z,
-			adjbc.yaw};
-
-		gen_save_ref_matchmap_set(&ca, &cb, &cc, corrab, corrbc);
-
-	}
-	return 0;
-	#endif
-
-	#if 1
-
-//		int clouds[8] = {0,4,5, 11,138,146, 148, 92};
-//		int clouds[10] = {91, 92,93,74,76,78, 100, 102, 104, 106};
-		for(int i=0; i<173; i++)
-		{
-			int idx = i; //clouds[i];
-
-			printf("Line %d, sm%d:  ", i, idx);
-
-			test_q(idx);
-/*
-			static cloud_t tmp_cloud;
-			load_tmp_cloud(&tmp_cloud, idx);
-
-			po_coords_t po;
-			po = po_coords(0,i*-15000,0,0);
-			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-			cloud_to_voxmap(&tmp_cloud, 0,i*-15000,0);
-*/
-//			printf("\n");
-		}
-		free_all_pages();
-
-		return;
-
-
-	#endif
-
-
-
-//	free_all_pages();
-
-
-
-	if(do_closures)
-	{
-		// Loop closures
-
-//		for(int sm=100; sm<139; sm++)
-		for(int sm=0; sm<n_submaps; sm++)
-		{
-			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
-			if(sm < n_submaps-1)
-			{
-				printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
-			}
-			else
-				printf("                              ");
-
-			printf("dx=%4d  dy=%4d  dz=%4d   avg (%+6d %+6d %+6d)\n", submap_metas[sm].max_x-submap_metas[sm].min_x, submap_metas[sm].max_y-submap_metas[sm].min_y,
-				submap_metas[sm].max_z-submap_metas[sm].min_z, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-/*
-			for(int ssm=0; ssm<submap_metas[sm].n_subsubmaps; ssm++)
-			{
-				printf("         Subsubmap %2d: idx %8d .. %8d (len %2d), avg (%+6d %+6d %+6d)\n", 
-					ssm, submap_metas[sm].subsubmaps[ssm].start_idx, submap_metas[sm].subsubmaps[ssm].end_idx, 
-					submap_metas[sm].subsubmaps[ssm].end_idx-submap_metas[sm].subsubmaps[ssm].start_idx,
-					submap_metas[sm].subsubmaps[ssm].avg_x, submap_metas[sm].subsubmaps[ssm].avg_y, submap_metas[sm].subsubmaps[ssm].avg_z);
-			}
-*/
-
-			find_possible_closures(submap_metas, sm);
-//			if(find_possible_closures(submap_metas, sm, &closures[n_closures]) == 0)
-//			{
-//			}
-		}
-
-		printf("\n\n        FOUND %d LOOP CLOSURES\n\n", n_closures);
-
-		save_closures(closures, n_closures);
-	}
-	else if(create_output || visualize_closures || combine_closures)
-	{
-		if(load_closures(closures, &n_closures) == 0)
-			printf("\n\n        LOADED %d LOOP CLOSURES\n\n", n_closures);
-		else
-			printf("\n\n        LOOP CLOSURE FILE NOT FOUND\n\n");
-
-	}
-
-
-	if(create_output)
-	{
-		// Generate output
-
-		int32_t running_x = 0, running_y = 0, running_z = 0;
-		double running_yaw = 0.0;
-
-		{
-			int sm = 0;
-			load_tmp_cloud(&tmp_cloud, sm);
-			po_coords_t po;
-			po = po_coords(submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z, 0);
-			load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-			cloud_to_voxmap(&tmp_cloud, submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-
-			store_all_pages();
-		}
-		for(int sm=0; sm<n_submaps-1; sm++)
-		{
-
-/*			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
-			if(sm < n_submaps-1)
-			{
-				printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
-			}
-			else
-				printf("                              ");
-
-			printf("  avg (%+6d %+6d %+6d) ", submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
-			printf("  next (%+6d %+6d %+6d)\n", submap_metas[sm+1].avg_x, submap_metas[sm+1].avg_y, submap_metas[sm+1].avg_z);
-*/
-
-			int dx = submap_metas[sm].avg_x - submap_metas[sm+1].avg_x;
-			int dy = submap_metas[sm].avg_y - submap_metas[sm+1].avg_y;
-			//int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
-
-			// Use the best adjacent match by default:
-			result_t result = adjacent_matches[sm].results[0];
-
-			for(int c=0; c<n_closures; c++)
-			{
-				if(sm >= closures[c].first && sm <= closures[c].last)
+	/*			printf("Submap %3d: idx %8d .. %8d  (len %4d)", sm, submap_metas[sm].start_idx, submap_metas[sm].end_idx, submap_metas[sm].end_idx-submap_metas[sm].start_idx);
+				if(sm < n_submaps-1)
 				{
-					int seq = sm - closures[c].first;
-					printf("submap #%3d in loop closure #%3d as %dth element, overriding adjacent default correction\n", sm, c, seq);
-					result = closures[c].corrs[seq];
-					break;
-				}
-			}
-
-			int32_t x_corr = -1*result.x;
-			int32_t y_corr = -1*result.y;
-			int32_t z_corr = -1*result.z;
-			double yaw_corr = 1.0*result.yaw;
-
-			running_x += x_corr;
-			running_y += y_corr;
-			//running_z += z_corr;
-			running_yaw += yaw_corr;
-
-			running_x += (-1*dx) * cos(running_yaw) - (-1*dy) * sin(running_yaw)  - (-1*dx);
-			running_y += (-1*dx) * sin(running_yaw) + (-1*dy) * cos(running_yaw)  - (-1*dy);
-
-			int32_t new_avg_x = submap_metas[sm+1].avg_x + running_x;
-			int32_t new_avg_y = submap_metas[sm+1].avg_y + running_y;
-			int32_t new_avg_z = submap_metas[sm+1].avg_z + running_z;
-
-			printf("%4d vs %4d Winner (%+5d, %+5d, %+5d, %+6.2f), running (%+7d, %+7d, %+7d, %+8.2f), new_avg %d, %d, %d\n",
-				sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
-
-			#if 1
-				load_tmp_cloud(&tmp_cloud, sm+1);
-				rotate_cloud(&tmp_cloud, running_yaw);
-				po_coords_t po;
-				po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, new_avg_x, new_avg_y, new_avg_z);
-
-				store_all_pages();
-			#endif
-
-		}
-	}
-
-	if(combine_closures)
-	{
-		for(int c=0; c<n_closures; c++)
-		{
-			printf("closure #%3d (%3d..%3d)\n", c, closures[c].first, closures[c].last);
-		}
-/*
-		int16_t n_overlaps[MAX_CLOSURES] = {0};
-		int16_t is_outside[MAX_CLOSURES] = {0};
-		int16_t list_overlaps[MAX_CLOSURES][MAX_CLOSURES] = {0};
-
-		for(int ca=0; ca<n_closures; ca++)
-		{
-			for(int cb=0; cb<n_closures; cb++)
-			{
-				if(ca == cb)
-					continue;
-				if((closures[cb].first > closures[ca].first && closures[cb].first < closures[ca].last) ||
-				   (closures[cb].last > closures[ca].first && closures[cb].last < closures[ca].last))
-
-				{
-					printf("#%d (%d..%d) is inside #%d (%d..%d)\n",
-						cb, closures[cb].first, closures[cb].last, ca, closures[ca].first, closures[ca].last);
-					list_overlaps[ca][n_overlaps[ca]] = cb;
-					n_overlaps[ca]++;
+					printf(" (overlaps the next by %4d)  ", -1*(submap_metas[sm+1].start_idx - submap_metas[sm].end_idx));
 				}
 				else
+					printf("                              ");
+
+				printf("  avg (%+6d %+6d %+6d) ", submap_metas[sm].avg_x, submap_metas[sm].avg_y, submap_metas[sm].avg_z);
+				printf("  next (%+6d %+6d %+6d)\n", submap_metas[sm+1].avg_x, submap_metas[sm+1].avg_y, submap_metas[sm+1].avg_z);
+	*/
+
+				int dx = submap_metas[sm].avg_x - submap_metas[sm+1].avg_x;
+				int dy = submap_metas[sm].avg_y - submap_metas[sm+1].avg_y;
+				//int dz = submap_metas[sm].avg_z - submap_metas[sm+1].avg_z;
+
+				// Use the best adjacent match by default:
+				result_t result = adjacent_matches[sm].results[0];
+
+				for(int c=0; c<n_closures; c++)
 				{
-					printf("#%d (%d..%d) is outside #%d (%d..%d)\n",
-						cb, closures[cb].first, closures[cb].last, ca, closures[ca].first, closures[ca].last);
-					is_outside[cb]++;
+					if(sm >= closures[c].first && sm <= closures[c].last)
+					{
+						int seq = sm - closures[c].first;
+						printf("submap #%3d in loop closure #%3d as %dth element, overriding adjacent default correction\n", sm, c, seq);
+						result = closures[c].corrs[seq];
+						break;
+					}
 				}
+
+				int32_t x_corr = -1*result.x;
+				int32_t y_corr = -1*result.y;
+				int32_t z_corr = -1*result.z;
+				double yaw_corr = 1.0*result.yaw;
+
+				running_x += x_corr;
+				running_y += y_corr;
+				//running_z += z_corr;
+				running_yaw += yaw_corr;
+
+				running_x += (-1*dx) * cos(running_yaw) - (-1*dy) * sin(running_yaw)  - (-1*dx);
+				running_y += (-1*dx) * sin(running_yaw) + (-1*dy) * cos(running_yaw)  - (-1*dy);
+
+				int32_t new_avg_x = submap_metas[sm+1].avg_x + running_x;
+				int32_t new_avg_y = submap_metas[sm+1].avg_y + running_y;
+				int32_t new_avg_z = submap_metas[sm+1].avg_z + running_z;
+
+				printf("%4d vs %4d Winner (%+5d, %+5d, %+5d, %+6.2f), running (%+7d, %+7d, %+7d, %+8.2f), new_avg %d, %d, %d\n",
+					sm, sm+1, x_corr, y_corr, z_corr, RADTODEG(yaw_corr), running_x, running_y, running_z, RADTODEG(running_yaw), new_avg_x, new_avg_y, new_avg_z);
+
+				#if 1
+					load_tmp_cloud(&tmp_cloud, sm+1);
+					rotate_cloud(&tmp_cloud, running_yaw);
+					po_coords_t po;
+					po = po_coords(new_avg_x, new_avg_y, new_avg_z, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, new_avg_x, new_avg_y, new_avg_z);
+
+					store_all_pages();
+				#endif
+
 			}
 		}
 
-		for(int ca=0; ca<n_closures; ca++)
+		if(combine_closures)
 		{
-			printf("closure #%3d (%3d..%3d): %d: %2d overlaps: ", ca, closures[ca].first, closures[ca].last, 
-				is_outside[ca], n_overlaps[ca]);
-			for(int i=0; i<n_overlaps[ca]; i++)
+			for(int c=0; c<n_closures; c++)
 			{
-				int cb = list_overlaps[ca][i];
-				printf("#%3d (%3d..%3d); ", cb, closures[cb].first, closures[cb].last);
+				printf("closure #%3d (%3d..%3d)\n", c, closures[c].first, closures[c].last);
+			}
+	/*
+			int16_t n_overlaps[MAX_CLOSURES] = {0};
+			int16_t is_outside[MAX_CLOSURES] = {0};
+			int16_t list_overlaps[MAX_CLOSURES][MAX_CLOSURES] = {0};
+
+			for(int ca=0; ca<n_closures; ca++)
+			{
+				for(int cb=0; cb<n_closures; cb++)
+				{
+					if(ca == cb)
+						continue;
+					if((closures[cb].first > closures[ca].first && closures[cb].first < closures[ca].last) ||
+					   (closures[cb].last > closures[ca].first && closures[cb].last < closures[ca].last))
+
+					{
+						printf("#%d (%d..%d) is inside #%d (%d..%d)\n",
+							cb, closures[cb].first, closures[cb].last, ca, closures[ca].first, closures[ca].last);
+						list_overlaps[ca][n_overlaps[ca]] = cb;
+						n_overlaps[ca]++;
+					}
+					else
+					{
+						printf("#%d (%d..%d) is outside #%d (%d..%d)\n",
+							cb, closures[cb].first, closures[cb].last, ca, closures[ca].first, closures[ca].last);
+						is_outside[cb]++;
+					}
+				}
+			}
+
+			for(int ca=0; ca<n_closures; ca++)
+			{
+				printf("closure #%3d (%3d..%3d): %d: %2d overlaps: ", ca, closures[ca].first, closures[ca].last, 
+					is_outside[ca], n_overlaps[ca]);
+				for(int i=0; i<n_overlaps[ca]; i++)
+				{
+					int cb = list_overlaps[ca][i];
+					printf("#%3d (%3d..%3d); ", cb, closures[cb].first, closures[cb].last);
+				}
+				printf("\n");
+			}
+	*/
+		}
+
+		if(visualize_closures)
+		{
+			#define STEPX 15000
+			#define STEPY 20000
+			int32_t running_x = 0, running_y = 0;
+
+			printf("VISUALIZING CLOSURES\n\n");
+
+			int col = 0;
+			//int c = 0;
+			for(int c=0; c<n_closures; c++)
+			{
+
+				int sma = closures[c].first;
+				int smb = closures[c].last;
+	//			int smc = closures[c].first + 1;
+
+				printf("y=%+6d   %3d  %3d  (%+6d,%+6d,%+6d,%+6.2f) SCORE=%d ABSCORE=%d\n", running_y, sma, smb, 
+					closures[c].match.x, closures[c].match.y, closures[c].match.z, RADTODEG(closures[c].match.yaw), closures[c].match.score, closures[c].match.abscore);
+
+	//			printf("  %3d    %3d    %3d&%3d    %3d&%3d&%3d \n", sma, smb, sma,smb,  sma,smc,smb);
+
+
+				int ax = submap_metas[sma].avg_x;
+				int ay = submap_metas[sma].avg_y;
+				int az = submap_metas[sma].avg_z;
+
+				int bx = submap_metas[smb].avg_x;
+				int by = submap_metas[smb].avg_y;
+				int bz = submap_metas[smb].avg_z;
+
+	/*
+				int cx = submap_metas[smc].avg_x;
+				int cy = submap_metas[smc].avg_y;
+				int cz = submap_metas[smc].avg_z;
+	*/
+				result_t result = closures[c].match;
+
+				int32_t x_corr = 1*result.x;
+				int32_t y_corr = 1*result.y;
+				int32_t z_corr = 1*result.z;
+				double yaw_corr = 1.0*result.yaw;
+	/*
+				result_t resultc = closures[c].corrs[0];
+
+				int32_t cx_corr = -1*resultc.x;
+				int32_t cy_corr = -1*resultc.y;
+				int32_t cz_corr = -1*resultc.z;
+				double cyaw_corr = 1.0*resultc.yaw;
+	*/
+
+				// SMA alone
+				{
+					load_tmp_cloud(&tmp_cloud, sma);
+					//rotate_cloud(&tmp_cloud, 0.0);
+					po_coords_t po;
+					po = po_coords(0+running_x,0+running_y,0, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, 0+running_x,0+running_y,0);
+				}
+
+				// SMB alone
+				{
+					load_tmp_cloud(&tmp_cloud, smb);
+					rotate_cloud(&tmp_cloud, yaw_corr);
+					po_coords_t po;
+					po = po_coords(STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
+				}
+
+				// SMA, SMB matched together
+				{
+					load_tmp_cloud(&tmp_cloud, sma);
+					//rotate_cloud(&tmp_cloud, 0.0);
+					po_coords_t po;
+					po = po_coords(2*STEPX+0+running_x,0+running_y,0, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, 2*STEPX+0+running_x,0+running_y,0);
+				}
+
+
+				{
+					load_tmp_cloud(&tmp_cloud, smb);
+					rotate_cloud(&tmp_cloud, yaw_corr);
+					po_coords_t po;
+					po = po_coords(2*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, 2*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
+				}
+
+	/*
+				// SMA, SMC, SMB matched together
+				{
+					load_tmp_cloud(&tmp_cloud, sma);
+					//rotate_cloud(&tmp_cloud, 0.0);
+					po_coords_t po;
+					po = po_coords(3*STEPX+0+running_x,0+running_y,0, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, 3*STEPX+0+running_x,0+running_y,0);
+				}
+
+				{
+					load_tmp_cloud(&tmp_cloud, smc);
+					rotate_cloud(&tmp_cloud, cyaw_corr);
+					po_coords_t po;
+					po = po_coords(3*STEPX+cx_corr+cx-ax+running_x,cy_corr+cy-ay+running_y,cz_corr+cz-az, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, 3*STEPX+cx_corr+cx-ax+running_x,cy_corr+cy-ay+running_y,+cz_corr+cz-az);
+				}
+
+				{
+					load_tmp_cloud(&tmp_cloud, smb);
+					rotate_cloud(&tmp_cloud, yaw_corr);
+					po_coords_t po;
+					po = po_coords(3*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
+					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
+					cloud_to_voxmap(&tmp_cloud, 3*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
+				}
+	*/
+				store_all_pages();
+
+				running_y -= STEPY;
+
 			}
 			printf("\n");
 		}
-*/
-	}
-
-	if(visualize_closures)
-	{
-		#define STEPX 15000
-		#define STEPY 20000
-		int32_t running_x = 0, running_y = 0;
-
-		printf("VISUALIZING CLOSURES\n\n");
-
-		int col = 0;
-		//int c = 0;
-		for(int c=0; c<n_closures; c++)
-		{
-
-			int sma = closures[c].first;
-			int smb = closures[c].last;
-//			int smc = closures[c].first + 1;
-
-			printf("y=%+6d   %3d  %3d  (%+6d,%+6d,%+6d,%+6.2f) SCORE=%d ABSCORE=%d\n", running_y, sma, smb, 
-				closures[c].match.x, closures[c].match.y, closures[c].match.z, RADTODEG(closures[c].match.yaw), closures[c].match.score, closures[c].match.abscore);
-
-//			printf("  %3d    %3d    %3d&%3d    %3d&%3d&%3d \n", sma, smb, sma,smb,  sma,smc,smb);
 
 
-			int ax = submap_metas[sma].avg_x;
-			int ay = submap_metas[sma].avg_y;
-			int az = submap_metas[sma].avg_z;
+		free_all_pages();
 
-			int bx = submap_metas[smb].avg_x;
-			int by = submap_metas[smb].avg_y;
-			int bz = submap_metas[smb].avg_z;
+	#endif
 
-/*
-			int cx = submap_metas[smc].avg_x;
-			int cy = submap_metas[smc].avg_y;
-			int cz = submap_metas[smc].avg_z;
-*/
-			result_t result = closures[c].match;
-
-			int32_t x_corr = 1*result.x;
-			int32_t y_corr = 1*result.y;
-			int32_t z_corr = 1*result.z;
-			double yaw_corr = 1.0*result.yaw;
-/*
-			result_t resultc = closures[c].corrs[0];
-
-			int32_t cx_corr = -1*resultc.x;
-			int32_t cy_corr = -1*resultc.y;
-			int32_t cz_corr = -1*resultc.z;
-			double cyaw_corr = 1.0*resultc.yaw;
-*/
-
-			// SMA alone
-			{
-				load_tmp_cloud(&tmp_cloud, sma);
-				//rotate_cloud(&tmp_cloud, 0.0);
-				po_coords_t po;
-				po = po_coords(0+running_x,0+running_y,0, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, 0+running_x,0+running_y,0);
-			}
-
-			// SMB alone
-			{
-				load_tmp_cloud(&tmp_cloud, smb);
-				rotate_cloud(&tmp_cloud, yaw_corr);
-				po_coords_t po;
-				po = po_coords(STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
-			}
-
-			// SMA, SMB matched together
-			{
-				load_tmp_cloud(&tmp_cloud, sma);
-				//rotate_cloud(&tmp_cloud, 0.0);
-				po_coords_t po;
-				po = po_coords(2*STEPX+0+running_x,0+running_y,0, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, 2*STEPX+0+running_x,0+running_y,0);
-			}
-
-
-			{
-				load_tmp_cloud(&tmp_cloud, smb);
-				rotate_cloud(&tmp_cloud, yaw_corr);
-				po_coords_t po;
-				po = po_coords(2*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, 2*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
-			}
-
-/*
-			// SMA, SMC, SMB matched together
-			{
-				load_tmp_cloud(&tmp_cloud, sma);
-				//rotate_cloud(&tmp_cloud, 0.0);
-				po_coords_t po;
-				po = po_coords(3*STEPX+0+running_x,0+running_y,0, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, 3*STEPX+0+running_x,0+running_y,0);
-			}
-
-			{
-				load_tmp_cloud(&tmp_cloud, smc);
-				rotate_cloud(&tmp_cloud, cyaw_corr);
-				po_coords_t po;
-				po = po_coords(3*STEPX+cx_corr+cx-ax+running_x,cy_corr+cy-ay+running_y,cz_corr+cz-az, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, 3*STEPX+cx_corr+cx-ax+running_x,cy_corr+cy-ay+running_y,+cz_corr+cz-az);
-			}
-
-			{
-				load_tmp_cloud(&tmp_cloud, smb);
-				rotate_cloud(&tmp_cloud, yaw_corr);
-				po_coords_t po;
-				po = po_coords(3*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az, 0);
-				load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-				cloud_to_voxmap(&tmp_cloud, 3*STEPX+x_corr+bx-ax+running_x,y_corr+by-ay+running_y,z_corr+bz-az);
-			}
-*/
-			store_all_pages();
-
-			running_y -= STEPY;
-
-		}
-		printf("\n");
-	}
-
-
-	free_all_pages();
-
+		return 0;
+	} 
 #endif
-
-	return 0;
-} 

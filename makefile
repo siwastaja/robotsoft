@@ -13,12 +13,12 @@ CC = gcc
 LD = gcc
 
 EXTRA_HEADERS = config.h api_board_to_soft.h api_soft_to_board.h api_tcp.h misc.h datatypes.h
-ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o mapping.o routing.o hwdata.o voxmap.o voxmap_memdisk.o
+ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o slam_matchers.o slam_cloud.o slam_top.o voxmap.o voxmap_memdisk.o
 BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
 CALIBRATOR_OBJ = ../robotsoft-calibrator/calibrator.o spi.o b2s_prints.o
 CALIBPROC_OBJ = ../robotsoft-calibrator/calibproc.o
 
-CFLAGS = -I. -Wall -Winline -std=c99 -DROBOTSOFT
+CFLAGS = -I. -Wall -Winline -std=c99 -DROBOTSOFT -D_XOPEN_SOURCE=700
 
 CFLAGS += -DCALIBRATOR
 
@@ -39,7 +39,7 @@ all: robotsoft
 	@rm -f $*.d.tmp
 
 robotsoft: $(ROBOTSOFT_OBJ)
-	$(LD) $(LDFLAGS) -o robotsoft $^ -lm -pthread
+	$(LD) $(LDFLAGS) -o robotsoft $^ -lm -lz -pthread
 
 boardmon: $(BOARDMON_OBJ)
 	$(LD) $(LDFLAGS) -o boardmon $^ -lm -pthread
@@ -51,7 +51,7 @@ calibproc: $(CALIBPROC_OBJ)
 	$(LD) $(LDFLAGS) -o calibproc $^ -lm -lpng
 
 cp:
-	scp *.c *.h makefile $(DEVIP):~/robotsoft_dev
+	scp *.c *.h makefile $(DEVIP):~/robotsoft
 	scp ../robotsoft-calibrator/*.c ../robotsoft-calibrator/*.h $(DEVIP):~/robotsoft-calibrator
 
 e:

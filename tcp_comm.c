@@ -99,6 +99,19 @@ int build_socket(uint16_t port)
 	return sock;
 }
 
+void tcp_comm_close()
+{
+	close(tcp_client_sock);
+	int ret;
+//	if( (ret = pthread_cancel(send_thread)) )
+//	{
+//		printf("ERROR: tcp_comm_close pthread_cancel failed, ret = %d\n", ret);
+//	}
+	tcp_client_sock = -1;
+
+	pthread_cond_signal(&newdata_cond);
+}
+
 void sigpipe_handler(int signum)
 {
 	printf("Info: Broken pipe, closing TCP connection.\n");
@@ -118,20 +131,6 @@ int init_tcp_comm()
 	}
 
 	return 0;
-}
-
-
-void tcp_comm_close()
-{
-	close(tcp_client_sock);
-	int ret;
-//	if( (ret = pthread_cancel(send_thread)) )
-//	{
-//		printf("ERROR: tcp_comm_close pthread_cancel failed, ret = %d\n", ret);
-//	}
-	tcp_client_sock = -1;
-
-	pthread_cond_signal(&newdata_cond);
 }
 
 

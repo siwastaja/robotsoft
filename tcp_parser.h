@@ -237,8 +237,6 @@ int tcp_parser(int sock);
 
 int tcp_send_msg(tcp_message_t* msg_type, void* msg);
 
-void tcp_send_lidar_lowres(lidar_scan_t* p_lid);
-void tcp_send_lidar_highres(lidar_scan_t* p_lid);
 void tcp_send_hwdbg(int32_t* dbg);
 void tcp_send_sonar(sonar_point_t* p_son);
 void tcp_send_battery();
