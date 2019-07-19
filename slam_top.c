@@ -868,6 +868,9 @@ static cloud_t* p_prev_prev_cloud;
 */
 int input_tof_slam_set(tof_slam_set_t* tss)
 {
+	if(! (tss->flags & TOF_SLAM_SET_FLAG_VALID))
+		return -1;
+
 	int ret = -1;
 	// Cloud and voxfilter data are accumulated, until a full submap is finished
 	// Cloud is then copied (for "free") by the cloud filtering function
@@ -922,6 +925,10 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 	}
 
 	//printf("sm_ref = (%d,%d,%d) ssm_ref = (%d,%d,%d)\n", sm_ref_x, sm_ref_y, sm_ref_z, ssm_ref_x, ssm_ref_y, ssm_ref_z);
+
+	if(tss->sidx == FIRST_SIDX)
+		restart_voxmap(sm_ref_x + ssm_ref_x, sm_ref_y + ssm_ref_y);
+
 
 	tof_to_voxfilter_and_cloud(0, 
 		tss->sets[0].ampldist, tss->sets[0].pose,
@@ -1852,12 +1859,17 @@ void visualize_submaps()
 
 }
 
+void init_slam()
+{
+	p_cur_cloud = &filtered_clouds[0];
+	p_prev_cloud = &filtered_clouds[1];
+	p_prev_prev_cloud = &filtered_clouds[2];
+}
+
 #ifdef SLAM_STANDALONE
 	int main(int argc, char** argv)
 	{
-		p_cur_cloud = &filtered_clouds[0];
-		p_prev_cloud = &filtered_clouds[1];
-		p_prev_prev_cloud = &filtered_clouds[2];
+		init_slam();
 
 		int start_i = 0;
 		int end_i = 27294; //12800;

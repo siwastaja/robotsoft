@@ -195,6 +195,30 @@ void tcp_send_info_state(info_state_t state)
 	}
 }
 
+#include "slam_cloud.h"
+void tcp_send_legacy_voxmap()
+{
+	static mcu_multi_voxel_map_t buf;
+
+	buf.running_cnt = 0;
+	buf.ref_x = vox_ref_x;
+	buf.ref_y = vox_ref_y;
+	buf.z_step = Z_STEP;
+	buf.base_z = BASE_Z;
+
+	for(int i=0; i<4; i++)
+	{
+		buf.first_block_id = i*3;
+
+		memcpy(buf.maps[0], voxmap.segs[i*3+0], sizeof(mcu_multi_voxel_map->maps[0]));
+		memcpy(buf.maps[1], voxmap.segs[i*3+1], sizeof(mcu_multi_voxel_map->maps[0]));
+		memcpy(buf.maps[2], voxmap.segs[i*3+2], sizeof(mcu_multi_voxel_map->maps[0]));
+
+		tcp_send(1, sizeof(mcu_multi_voxel_map_t), (uint8_t*)&buf);
+	}
+
+}
+
 void tcp_send_sync_request()
 {
 	const int size = 1;

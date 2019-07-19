@@ -159,3 +159,17 @@ typedef struct __attribute__((packed))
 
 void load_sensor_softcals();
 
+// Temporary legacy shit glued here:
+void restart_voxmap(int32_t ref_x, int32_t ref_y);
+
+typedef struct __attribute__((packed))
+{
+	uint16_t segs[12][VOX_SEG_XS*VOX_SEG_YS];
+} full_voxel_map_t;
+
+extern full_voxel_map_t voxmap;
+extern int32_t vox_ref_x;
+extern int32_t vox_ref_y;
+
+
+

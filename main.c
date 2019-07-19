@@ -19,9 +19,9 @@
 
 */
 
-float main_robot_xs = 450.0;
-float main_robot_ys = 600.0;
-float main_robot_middle_to_lidar = 120.0;
+float main_robot_xs = 600.0;
+float main_robot_ys = 450.0;
+float main_robot_middle_to_lidar = -120.0;
 
 /*
 
@@ -986,6 +986,10 @@ void save_trace(int seq, uint8_t* p_data)
 
 void* main_thread()
 {
+	init_slam();
+	load_sensor_softcals();
+
+
 	int find_charger_state = 0;
 
 	if(init_tcp_comm())
