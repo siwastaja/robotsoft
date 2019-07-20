@@ -685,7 +685,9 @@ ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter
 	// Old version to deal with the legacy not individually calibrated data:
 
 	void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
-		 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold)
+		 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
+		 realtime_cloud_t* realtime)
+
 	{
 		if(sidx < 0 || sidx >= N_SENSORS)
 		{
@@ -989,118 +991,10 @@ void load_sensor_softcals()
 	}
 }
 
-// Some code for legacy voxmap, to be removed soon
-#define VOX_SEG_XS 100
-#define VOX_SEG_YS 100
-#define VOX_HIRES_UNIT 50 // mm
-#define VOX_LORES_UNIT 100 // mm
-
-full_voxel_map_t voxmap;
-
-int32_t vox_ref_x = 0;
-int32_t vox_ref_y = 0;
-
-void restart_voxmap(int32_t ref_x, int32_t ref_y)
-{
-	extern void tcp_send_legacy_voxmap();
-
-	tcp_send_legacy_voxmap();
-
-	vox_ref_x = ref_x;
-	vox_ref_y = ref_y;
-	memset(&voxmap, 0, sizeof(voxmap));
-}
-
-
-typedef struct
-{
-	int xmin;
-	int xmax;
-	int ymin;
-	int ymax;
-	int reso;
-} seg_limits_t;
-
-const seg_limits_t seg_lims[12] =
-{
-	{	// Seg 0
-		0, VOX_SEG_XS*VOX_HIRES_UNIT-1,
-		0, VOX_SEG_YS*VOX_HIRES_UNIT-1,
-		VOX_HIRES_UNIT
-	},
-
-	{	// Seg 1
-		-VOX_SEG_XS*VOX_HIRES_UNIT, -1,
-		0, VOX_SEG_YS*VOX_HIRES_UNIT-1,
-		VOX_HIRES_UNIT
-	},
-
-	{	// Seg 2
-		-VOX_SEG_XS*VOX_HIRES_UNIT, -1,
-		-VOX_SEG_YS*VOX_HIRES_UNIT, -1,
-		VOX_HIRES_UNIT
-	},
-
-	{	// Seg 3
-		0, VOX_SEG_XS*VOX_HIRES_UNIT-1,
-		-VOX_SEG_YS*VOX_HIRES_UNIT, -1,
-		VOX_HIRES_UNIT
-	},
-
-	{	// Seg 4
-		VOX_SEG_XS*VOX_HIRES_UNIT, VOX_SEG_XS*VOX_HIRES_UNIT + VOX_SEG_XS*VOX_LORES_UNIT-1,
-		-VOX_SEG_YS*VOX_HIRES_UNIT, VOX_SEG_YS*VOX_HIRES_UNIT-1,
-		VOX_LORES_UNIT
-	},
-
-	{	// Seg 5
-		VOX_SEG_XS*VOX_HIRES_UNIT, VOX_SEG_XS*VOX_HIRES_UNIT + VOX_SEG_XS*VOX_LORES_UNIT-1,
-		VOX_SEG_YS*VOX_HIRES_UNIT, VOX_SEG_YS*VOX_HIRES_UNIT + VOX_SEG_YS*VOX_LORES_UNIT-1,
-		VOX_LORES_UNIT
-	},
-
-	{	// Seg 6
-		-VOX_SEG_XS*VOX_HIRES_UNIT, VOX_SEG_XS*VOX_HIRES_UNIT-1,
-		VOX_SEG_YS*VOX_HIRES_UNIT, VOX_SEG_YS*VOX_HIRES_UNIT + VOX_SEG_YS*VOX_LORES_UNIT-1,
-		VOX_LORES_UNIT
-	},
-
-	{	// Seg 7
-		-VOX_SEG_XS*VOX_HIRES_UNIT - VOX_SEG_XS*VOX_LORES_UNIT, -VOX_SEG_XS*VOX_HIRES_UNIT-1,
-		VOX_SEG_YS*VOX_HIRES_UNIT, VOX_SEG_YS*VOX_HIRES_UNIT + VOX_SEG_YS*VOX_LORES_UNIT-1,
-		VOX_LORES_UNIT
-	},
-
-	{	// Seg 8
-		-VOX_SEG_XS*VOX_HIRES_UNIT - VOX_SEG_XS*VOX_LORES_UNIT, -VOX_SEG_XS*VOX_HIRES_UNIT-1,
-		-VOX_SEG_YS*VOX_HIRES_UNIT, VOX_SEG_YS*VOX_HIRES_UNIT-1,
-		VOX_LORES_UNIT
-	},
-
-	{	// Seg 9
-		-VOX_SEG_XS*VOX_HIRES_UNIT - VOX_SEG_XS*VOX_LORES_UNIT, -VOX_SEG_XS*VOX_HIRES_UNIT-1,
-		-VOX_SEG_YS*VOX_HIRES_UNIT-VOX_SEG_YS*VOX_LORES_UNIT, -VOX_SEG_YS*VOX_HIRES_UNIT-1,
-		VOX_LORES_UNIT
-	},
-
-	{	// Seg 10
-		-VOX_SEG_XS*VOX_HIRES_UNIT, VOX_SEG_XS*VOX_HIRES_UNIT-1,
-		-VOX_SEG_YS*VOX_HIRES_UNIT-VOX_SEG_YS*VOX_LORES_UNIT, -VOX_SEG_YS*VOX_HIRES_UNIT-1,
-		VOX_LORES_UNIT
-	},
-
-	{	// Seg 11
-		VOX_SEG_XS*VOX_HIRES_UNIT, VOX_SEG_XS*VOX_HIRES_UNIT + VOX_SEG_XS*VOX_LORES_UNIT-1,
-		-VOX_SEG_YS*VOX_HIRES_UNIT-VOX_SEG_YS*VOX_LORES_UNIT, -VOX_SEG_YS*VOX_HIRES_UNIT-1,
-		VOX_LORES_UNIT
-	}
-
-};
-
-int insert_to_legacy_voxmap = 1;
 
 void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
-	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold)
+	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
+	 realtime_cloud_t* realtime)
 {
 	assert(sidx >= 0 && sidx < N_SENSORS);
 
@@ -1288,38 +1182,12 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 					cloud_insert_point(cloud, sx, sy, sz, x, y, z);
 
 
-				if(insert_to_legacy_voxmap)
+				if(realtime)
 				{
-					if(z > BASE_Z && z < MAX_Z)
-					{
-						x -= voxfilter_ref_x;
-						y -= voxfilter_ref_y;
-						uint16_t new_z = 1<<((z-BASE_Z)/Z_STEP);
-						
-						for(int seg=0; seg<12; seg++)
-						{
-							int xmin = seg_lims[seg].xmin;
-							int xmax = seg_lims[seg].xmax;
-							int ymin = seg_lims[seg].ymin;
-							int ymax = seg_lims[seg].ymax;
-							int reso = seg_lims[seg].reso;
-							if(x >= xmin && x <= xmax && y >= ymin && y <= ymax)
-							{
-								x -= xmin;
-								y -= ymin;
-
-								x /= reso;
-								y /= reso;
-
-								assert(x>=0 && x < VOX_SEG_XS && y>=0 && y < VOX_SEG_YS);
-
-								//printf("%d: %d %d\n", seg, x, y);
-								voxmap.segs[seg][y*VOX_SEG_XS+x] |= new_z;
-								//insertion_cnt++;
-								break;
-							}
-						}
-					}
+					assert(realtime->n_points < MAX_REALTIME_N_POINTS);
+					small_cloud_t new_point = set_small_cloud(0, sx, sy, sz, x, y, z);
+					realtime->points[realtime->n_points] = new_point;
+					realtime->n_points++;
 				}
 
 

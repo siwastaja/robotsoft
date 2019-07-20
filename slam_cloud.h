@@ -30,13 +30,6 @@ typedef struct
 } cloud_t;
 
 
-typedef struct __attribute__((packed))
-{
-	int16_t x;
-	int16_t y;
-	int16_t z;
-} small_cloud_point_t;
-
 
 
 // 24MB of memory with these, coverage 4.1x4.1x2.0 m
@@ -105,6 +98,17 @@ typedef struct
 } voxfilter_t;
 
 
+#include "small_cloud.h"
+#define MAX_REALTIME_N_POINTS (10*9600)
+typedef struct
+{
+	int32_t n_points;
+	small_cloud_t points[MAX_REALTIME_N_POINTS];
+} realtime_cloud_t;
+
+
+tcp_send_small_cloud(int32_t ref_x, int32_t ref_y, int32_t ref_z, realtime_cloud.n_points, realtime_cloud.points)
+
 
 
 int save_cloud(cloud_t* cloud, int idx);
@@ -115,7 +119,8 @@ void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z);
 
 void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
-	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold);
+	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
+	 realtime_cloud_t* realtime);
 
 void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud);
 
@@ -127,8 +132,6 @@ ALWAYS_INLINE void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, in
 		return;
 	}
 	assert(cloud->n_points >= 0);
-
-	//assert(sx != 0 || sy != 0 || sz != 0); // Would be an alarming coincidence. Remove this assert later as it's a real possibility given enough data.
 
 	cloud->points[cloud->n_points].sx = sx;
 	cloud->points[cloud->n_points].sy = sy;
@@ -158,18 +161,6 @@ typedef struct __attribute__((packed))
 } sensor_softcal_t;
 
 void load_sensor_softcals();
-
-// Temporary legacy shit glued here:
-void restart_voxmap(int32_t ref_x, int32_t ref_y);
-
-typedef struct __attribute__((packed))
-{
-	uint16_t segs[12][VOX_SEG_XS*VOX_SEG_YS];
-} full_voxel_map_t;
-
-extern full_voxel_map_t voxmap;
-extern int32_t vox_ref_x;
-extern int32_t vox_ref_y;
 
 
 

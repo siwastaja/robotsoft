@@ -216,8 +216,60 @@ void tcp_send_legacy_voxmap()
 
 		tcp_send(1, sizeof(mcu_multi_voxel_map_t), (uint8_t*)&buf);
 	}
-
 }
+
+#define TCP_ZLIB_LEVEL 2
+
+void tcp_send_small_cloud(int32_t ref_x, int32_t ref_y, int32_t ref_z, int n_points, small_cloud_t* points)
+{
+	int max_compressed_size = sizeof(small_cloud_t)*n_points + 128; // A bit extra for zlib overhead
+	int max_size = sizeof(small_cloud_header_t) + max_compressed_size; 
+	uint8_t* tcpbuf = malloc(max_size);
+
+
+	small_cloud_header_t head;
+	head.magic = 0xaa14;
+	head.api_version = 0x0420;
+	head.compression = 1;
+	head.dummy = 0;
+	head.ref_x_mm = ref_x;
+	head.ref_y_mm = ref_y;
+	head.ref_z_mm = ref_z;
+	head.n_points = n_points;
+
+	memcpy(tcpbuf, &head, sizeof(small_cloud_header_t));
+
+	z_stream strm;
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque = Z_NULL;
+	if(deflateInit(&strm, TCP_ZLIB_LEVEL) != Z_OK)
+	{
+		printf("ERROR: ZLIB initialization failed\n");
+		abort();
+	}
+	strm.avail_in = n_points * sizeof(small_cloud_t);
+	strm.next_in = (uint8_t*)points;
+
+	strm.avail_out = sizeof(small_cloud_t)*n_points + 128;
+	strm.next_out = tcpbuf + sizeof(small_cloud_header_t);
+
+	int ret = deflate(&strm, Z_FINISH);
+	assert(ret != Z_STREAM_ERROR);
+
+	int produced = max_compressed_size - strm.avail_out;
+
+	assert(strm.avail_out > 0);
+	assert(produced > 0);
+	assert(strm.avail_in == 0);
+
+	deflateEnd(&strm);
+
+	tcp_send(TCP_RC_SMALL_CLOUD_MID, sizeof(small_cloud_header_t) + produced, tcpbuf);
+
+	free(outbuf);
+}
+
 
 void tcp_send_sync_request()
 {
