@@ -686,7 +686,7 @@ ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter
 
 	void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
 		 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
-		 realtime_cloud_t* realtime)
+		 realtime_cloud_t* realtime, int rt_flag)
 
 	{
 		if(sidx < 0 || sidx >= N_SENSORS)
@@ -865,7 +865,7 @@ ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter
 						for(int ix=-1; ix<=1; ix++)
 						{
 							int32_t dist = ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK;
-							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(120>>DIST_SHIFT) && dist < refdist+(120>>DIST_SHIFT))
+							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(170>>DIST_SHIFT) && dist < refdist+(170>>DIST_SHIFT))
 							{
 								avg+=dist;
 								n_conform++;
@@ -886,7 +886,7 @@ ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter
 						for(int ix=-1; ix<=1; ix++)
 						{
 							int32_t dist = ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
-							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(120>>DIST_SHIFT) && dist < refdist+(120>>DIST_SHIFT))
+							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(170>>DIST_SHIFT) && dist < refdist+(170>>DIST_SHIFT))
 							{
 								avg+=dist;
 								n_conform++;
@@ -994,7 +994,7 @@ void load_sensor_softcals()
 
 void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
 	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
-	 realtime_cloud_t* realtime)
+	 realtime_cloud_t* realtime, int rt_flag)
 {
 	assert(sidx >= 0 && sidx < N_SENSORS);
 
@@ -1079,9 +1079,43 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 	}
 
 
-	for(int py=1; py<TOF_YS-1; py++)
+	for(int py=5; py<TOF_YS-5; py++)
 	{
-		for(int px=1; px<TOF_XS-1; px++)
+		int px_start = 10;
+		int px_end = TOF_XS-10;
+
+		if(py < 4 || py > TOF_YS-4)
+		{
+			px_start += 9;
+			px_end -= 9;
+		}
+		if(py < 8 || py > TOF_YS-8)
+		{
+			px_start += 8;
+			px_end -= 8;
+		}
+		if(py < 12 || py > TOF_YS-12)
+		{
+			px_start += 6;
+			px_end -= 6;
+		}
+		if(py < 16 || py > TOF_YS-16)
+		{
+			px_start += 4;
+			px_end -= 4;
+		}
+		if(py < 20 || py > TOF_YS-20)
+		{
+			px_start += 3;
+			px_end -= 3;
+		}
+		if(py < 24 || py > TOF_YS-24)
+		{
+			px_start += 2;
+			px_end -= 2;
+		}
+
+		for(int px=px_start; px<px_end; px++)
 		{
 			int32_t avg = 0;
 			int n_conform = 0;
@@ -1097,12 +1131,16 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				if(refdist == DIST_UNDEREXP)
 					continue;
 
+				// At refdist = zero-ish, accept everything +/-130mm
+				// At refdist = 5m, accept +/-286mm
+				// At refdist = 10m, accept +/- 442mm
+				// This gets angular walls through.
 				for(int iy=-1; iy<=1; iy++)
 				{
 					for(int ix=-1; ix<=1; ix++)
 					{
 						int32_t dist = ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK;
-						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(120>>DIST_SHIFT) && dist < refdist+(120>>DIST_SHIFT))
+						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT) && dist < refdist+(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT))
 						{
 							avg+=dist;
 							n_conform++;
@@ -1123,7 +1161,7 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 					for(int ix=-1; ix<=1; ix++)
 					{
 						int32_t dist = ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
-						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(120>>DIST_SHIFT) && dist < refdist+(120>>DIST_SHIFT))
+						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT) && dist < refdist+(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT))
 						{
 							avg+=dist;
 							n_conform++;
@@ -1133,15 +1171,12 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				}
 			}
 
-			if(n_conform >= 7)
+			if(n_conform >= 6)
 			{
 				avg <<= DIST_SHIFT;
 				avg /= n_conform;
 
 				int32_t d = avg;
-
-				if(d < dist_ignore_threshold)
-					continue;
 
 				uint16_t hor_ang, ver_ang;
 
@@ -1176,19 +1211,21 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 //				if(z > 2200)
 //					continue;
 
+				if(realtime)
+				{
+					assert(realtime->n_points < MAX_REALTIME_N_POINTS);
+					small_cloud_t new_point = set_small_cloud(rt_flag, sx, sy, sz, x, y, z);
+					realtime->points[realtime->n_points] = new_point;
+					realtime->n_points++;
+				}
+
+				if(d < dist_ignore_threshold)
+					continue;
+
 				if(voxfilter && d < voxfilter_threshold)
 					voxfilter_insert_point(cloud, voxfilter, voxfilter_ray_src_id, sx, sy, sz, x, y, z, voxfilter_ref_x, voxfilter_ref_y, voxfilter_ref_z);
 				else
 					cloud_insert_point(cloud, sx, sy, sz, x, y, z);
-
-
-				if(realtime)
-				{
-					assert(realtime->n_points < MAX_REALTIME_N_POINTS);
-					small_cloud_t new_point = set_small_cloud(0, sx, sy, sz, x, y, z);
-					realtime->points[realtime->n_points] = new_point;
-					realtime->n_points++;
-				}
 
 
 			}

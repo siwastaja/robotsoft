@@ -107,10 +107,6 @@ typedef struct
 } realtime_cloud_t;
 
 
-tcp_send_small_cloud(int32_t ref_x, int32_t ref_y, int32_t ref_z, realtime_cloud.n_points, realtime_cloud.points)
-
-
-
 int save_cloud(cloud_t* cloud, int idx);
 int load_cloud(cloud_t* cloud, int idx);
 void rotate_cloud(cloud_t* cloud, double yaw);
@@ -120,7 +116,7 @@ void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z);
 
 void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
 	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
-	 realtime_cloud_t* realtime);
+	 realtime_cloud_t* realtime, int rt_flag);
 
 void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud);
 
@@ -144,7 +140,17 @@ ALWAYS_INLINE void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, in
 	cloud->n_points++;
 }
 
-#include "../robotboard2-fw/tof_process.h" // for sensor_mount_t
+//#include "../robotboard2-fw/tof_process.h" // for sensor_mount_t
+typedef struct __attribute__((packed))
+{
+	int16_t mount_mode;             // mount position 1,2,3 or 4
+	int16_t x_rel_robot;          // zero = robot origin. Positive = robot front (forward)
+	int16_t y_rel_robot;          // zero = robot origin. Positive = to the right of the robot
+	uint16_t ang_rel_robot;        // zero = robot forward direction. positive = ccw
+	uint16_t vert_ang_rel_ground;  // zero = looks directly forward. positive = looks up. negative = looks down
+	int16_t z_rel_ground;         // sensor height from the ground	
+} sensor_mount_t;
+
 typedef struct __attribute__((packed))
 {
 	uint32_t magic;

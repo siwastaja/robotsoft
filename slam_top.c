@@ -31,6 +31,8 @@
 
 #include "misc.h"
 
+#include "tcp_parser.h"
+
 
 
 
@@ -926,16 +928,16 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 	//printf("sm_ref = (%d,%d,%d) ssm_ref = (%d,%d,%d)\n", sm_ref_x, sm_ref_y, sm_ref_z, ssm_ref_x, ssm_ref_y, ssm_ref_z);
 
-	if(tss->sidx == FIRST_SIDX)
-		restart_voxmap(sm_ref_x + ssm_ref_x, sm_ref_y + ssm_ref_y);
-
+	static realtime_cloud_t realtime_cloud;
 
 	tof_to_voxfilter_and_cloud(0, 
 		tss->sets[0].ampldist, tss->sets[0].pose,
 		tss->sidx, 
 		sm_ref_x, sm_ref_y, sm_ref_z,
 		&current_voxfilter, ssm_ref_x, ssm_ref_y, ssm_ref_z,
-		&current_cloud, 1800, 300);
+		&current_cloud, 1800, 300,
+		&realtime_cloud, 0);
+
 
 	if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
 	{
@@ -944,18 +946,27 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 			tss->sidx, 
 			sm_ref_x, sm_ref_y, sm_ref_z,
 			NULL, 0,0,0,
-			&current_cloud, 1800, 3000);
+			&current_cloud, 1800, 3000,
+			&realtime_cloud, 1);
 	}
-	else if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
+
+
+	if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
 	{
 		tof_to_voxfilter_and_cloud(0, 
 			tss->sets[1].ampldist, tss->sets[1].pose,
 			tss->sidx, 
 			sm_ref_x, sm_ref_y, sm_ref_z,
 			NULL, 0,0,0,
-			&current_cloud, 1800, 3000);
+			&current_cloud, 1800, 3000,
+			&realtime_cloud, 1);
 	}
 
+	if(tss->sidx == LAST_SIDX)
+	{
+		tcp_send_small_cloud(sm_ref_x, sm_ref_y, sm_ref_z, realtime_cloud.n_points, realtime_cloud.points);
+		realtime_cloud.n_points = 0;
+	}
 
 	if(tss->sidx == LAST_SIDX)
 	{
@@ -1058,11 +1069,11 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 				// filter_cloud makes a new cloud.
 
-				filter_cloud(&current_cloud, p_cur_cloud, transl_x, transl_y, transl_z);
-
-				ret = n_sms;
-				n_sms++;
-				printf("input_tof_slam_set: submap finished, filtered the cloud (%d -> %d points), n_sms = %d\n", current_cloud.n_points, p_cur_cloud->n_points, n_sms);
+//				filter_cloud(&current_cloud, p_cur_cloud, transl_x, transl_y, transl_z);
+		ret = -1;
+//				ret = n_sms;
+//				n_sms++;
+//				printf("input_tof_slam_set: submap finished, filtered the cloud (%d -> %d points), n_sms = %d\n", current_cloud.n_points, p_cur_cloud->n_points, n_sms);
 
 				current_cloud.n_points = 0; // this is enough to clear a cloud. Old data doesn't matter.
 

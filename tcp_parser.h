@@ -252,6 +252,7 @@ void tcp_send_robot_info();
 void tcp_send_picture(int16_t id, uint8_t bytes_per_pixel, int xs, int ys, uint8_t *pict);
 void tcp_send_statevect();
 void tcp_send_localization_result(int32_t da, int32_t dx, int32_t dy, uint8_t success_code, int32_t score);
+#include "small_cloud.h"
 void tcp_send_small_cloud(int32_t ref_x, int32_t ref_y, int32_t ref_z, int n_points, small_cloud_t* points);
 
 

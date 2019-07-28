@@ -99,6 +99,7 @@ float main_robot_middle_to_lidar = -120.0;
 #include "config.h"
 
 #include "slam_top.h"
+#include "slam_cloud.h"
 
 #define DEFAULT_SPEEDLIM 45
 #define MAX_CONFIGURABLE_SPEEDLIM 70
@@ -1760,6 +1761,7 @@ void* main_thread()
 			else
 				motor_enable_keepalive(0);
 		}
+		
 
 
 		static double prev_sync = 0;
@@ -1812,6 +1814,7 @@ void* main_thread()
 
 		}
 
+		usleep(1000);
 
 	}
 

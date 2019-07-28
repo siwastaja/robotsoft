@@ -220,7 +220,7 @@ int subscribe_to(uint64_t* subs_vector)
 	if(!p_msg)
 		return -1;
 
-	printf("vector: %016lx  %016lx\n", subs_vector[0], subs_vector[1]);
+	//printf("vector: %016lx  %016lx\n", subs_vector[0], subs_vector[1]);
 
 	memcpy(p_msg->subs_vector, subs_vector, sizeof(uint64_t)*B2S_SUBS_U64_ITEMS);
 	spi_send_queue();

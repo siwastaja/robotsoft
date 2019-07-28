@@ -53,6 +53,9 @@
 
 #pragma once
 
+#include <inttypes.h>
+#include "misc.h"
+
 // Resolutions in mm
 #define SMALL_CLOUD_SRC_RESO_X 32
 #define SMALL_CLOUD_SRC_RESO_Y 32
@@ -96,16 +99,16 @@ typedef struct
 	reliably ( http://graphics.stanford.edu/~seander/bithacks.html#FixedSignExtend )
 */
 
-ALWAYS_INLINE tmp_point_t get_small_cloud_point_native_units(small_cloud_point_t p)
+ALWAYS_INLINE tmp_point_t get_small_cloud_point_native_units(small_cloud_t p)
 {
 	tmp_point_t ret;
 
 	struct {signed int a:13;} x;
 	struct {signed int a:13;} y;
 	struct {signed int a:12;} z;
-	ret.x = x.a = (p<<25)&0x1fff;
-	ret.y = y.a = (p<<12)&0x1fff;
-	ret.z = z.a = (p<< 0)&0x0fff;
+	ret.x = x.a = (p>>25)&0x1fff;
+	ret.y = y.a = (p>>12)&0x1fff;
+	ret.z = z.a = (p>> 0)&0x0fff;
 	return ret;
 }
 
@@ -116,9 +119,9 @@ ALWAYS_INLINE tmp_point_t get_small_cloud_point(small_cloud_t p)
 	struct {signed int a:13;} x;
 	struct {signed int a:13;} y;
 	struct {signed int a:12;} z;
-	ret.x = x.a = (p<<25)&0x1fff;
-	ret.y = y.a = (p<<12)&0x1fff;
-	ret.z = z.a = (p<< 0)&0x0fff;
+	ret.x = x.a = (p>>25)&0x1fff;
+	ret.y = y.a = (p>>12)&0x1fff;
+	ret.z = z.a = (p>> 0)&0x0fff;
 
 	ret.x *= SMALL_CLOUD_POINT_RESO_X;
 	ret.y *= SMALL_CLOUD_POINT_RESO_Y;
@@ -133,9 +136,9 @@ ALWAYS_INLINE tmp_point_t get_small_cloud_source_native_units(small_cloud_t p)
 	struct {signed int a:9;} x;
 	struct {signed int a:9;} y;
 	struct {signed int a:7;} z;
-	ret.x = x.a = (p<<54)&0x1ff;
-	ret.y = y.a = (p<<45)&0x1ff;
-	ret.z = z.a = (p<<38)&0x07f;
+	ret.x = x.a = (p>>54)&0x1ff;
+	ret.y = y.a = (p>>45)&0x1ff;
+	ret.z = z.a = (p>>38)&0x07f;
 
 	return ret;
 }
@@ -148,9 +151,9 @@ ALWAYS_INLINE tmp_point_t get_small_cloud_source(small_cloud_t p)
 	struct {signed int a:9;} x;
 	struct {signed int a:9;} y;
 	struct {signed int a:7;} z;
-	ret.x = x.a = (p<<54)&0x1ff;
-	ret.y = y.a = (p<<45)&0x1ff;
-	ret.z = z.a = (p<<38)&0x07f;
+	ret.x = x.a = (p>>54)&0x1ff;
+	ret.y = y.a = (p>>45)&0x1ff;
+	ret.z = z.a = (p>>38)&0x07f;
 
 	ret.x *= SMALL_CLOUD_SRC_RESO_X;
 	ret.y *= SMALL_CLOUD_SRC_RESO_Y;
@@ -172,7 +175,7 @@ ALWAYS_INLINE small_cloud_t set_small_cloud(int flag, int32_t sx, int32_t sy, in
 	sy /= SMALL_CLOUD_SRC_RESO_Y;
 	sz /= SMALL_CLOUD_SRC_RESO_Z;
 
-	ret |=	(((uint64_t)flag&1)<<63) |
+	ret =	(((uint64_t)flag&1)<<63) |
 		(((uint64_t)sx&0x1ff)<<54) |
 		(((uint64_t)sy&0x1ff)<<45) |
 		(((uint64_t)sx&0x07f)<<38) |
