@@ -491,6 +491,10 @@ void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 		for(int i=0; i<cloud->n_points; i++)
 		{
 			po_coords_t po = po_coords(cloud->points[i].px+ref_x, cloud->points[i].py+ref_y, cloud->points[i].pz+ref_z, rl);
+
+
+			load_pages(RESOLEVELS, RESOLEVELS, po.px, po.px, po.py, po.py, po.pz, po.pz);
+
 			uint8_t* p_vox = get_p_voxel(po, rl);
 			if(((*p_vox) & 0x0f) < 15)
 				(*p_vox)++;
@@ -1124,7 +1128,7 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				int npy, npx;
 				npx=px-TOF_NARROW_X_START;
 				npy=py-TOF_NARROW_Y_START;
-				if(npx < 1 || npy < 1 || npx >= TOF_XS_NARROW-1 || npx >= TOF_YS_NARROW-1)
+				if(npx < 1 || npy < 1 || npx >= TOF_XS_NARROW-1 || npy >= TOF_YS_NARROW-1)
 					continue;
 
 				int32_t refdist = ampldist[(npy+0)*TOF_XS_NARROW+(npx+0)]&DIST_MASK;
@@ -1148,7 +1152,6 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 					
 					}
 				}
-
 			}
 			else
 			{

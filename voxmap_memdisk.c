@@ -82,7 +82,7 @@ static void store_page(int idx)
 		{
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);
 			//printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
-			write_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf), mode_compression);
+			write_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("./current_maps", px, py, pz, rl, fnamebuf), mode_compression);
 		}
 	}
 }
@@ -108,7 +108,7 @@ static int alloc_read_page_single_rl(int idx, int rl)
 		abort();
 	}
 
-	int ret = read_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("../robotui/current_maps", px, py, pz, rl, fnamebuf));
+	int ret = read_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("./current_maps", px, py, pz, rl, fnamebuf));
 
 	if(ret >= 0)
 	{

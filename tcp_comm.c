@@ -422,7 +422,7 @@ void* tcp_send_thread()
 
 			if(ret != 0)
 			{
-				printf("NOTE: tcp_send_thread wakeup by timeout! This is not serious, just interesting.\n");
+				//printf("NOTE: tcp_send_thread wakeup by timeout! This is not serious, just interesting.\n");
 			}
 
 			// Ex.: buflen=1000, rd = 900, amount_to_send = 100: over = 0

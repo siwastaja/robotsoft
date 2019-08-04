@@ -253,9 +253,10 @@ int ack_error()
 
 int spi_init_cmd_queue()
 {
+	//printf("spi_init_cmd_queue()\n");
 	if(send_pending)
 	{
-//		printf("WARN: spi_init_cmd: send is already pending.\n");
+//		printf("WARN: spi_init_cmd_queue: send is already pending.\n");
 		return -1;
 	}
 
@@ -538,9 +539,12 @@ void* spi_comm_thread()
 			int rxlen = paylen+B2S_TOTAL_OVERHEAD_WITHOUT_CRC;
 
 			int txlen = 0;
+			int will_send = 0;
 			// Do we have something to send as well? Let's do it on the same pass.
 			if(send_pending)
 			{
+				send_pending = 0;
+				//printf("ACTUALLY SENDING NOW\n");
 				txlen = cur_tx_frame_offs;
 			}
 
@@ -560,7 +564,6 @@ void* spi_comm_thread()
 					break;
 				}
 			}
-			send_pending = 0;
 			usleep((SPI_GENERATION_INTERVAL*1000*2)/3);
 		}
 		else if(avail < 0)

@@ -93,9 +93,14 @@ typedef struct __attribute__((packed))
 } ref_fine_matchmap_unit_t;
 
 
+#define MATCHMAP_UNIT 256 //mm
+
 #define MATCHMAP_XS 256
 #define MATCHMAP_YS 256
 #define MATCHMAP_ZS 64
+
+
+#define FINE_MATCHMAP_UNIT 128 //mm
 
 #define FINE_MATCHMAP_XS 384
 #define FINE_MATCHMAP_YS 384
@@ -140,7 +145,6 @@ typedef struct __attribute__((packed))
 {
 	cmp_fine_matchmap_unit_t units[FINE_MATCHMAP_YS][FINE_MATCHMAP_XS];
 } cmp_fine_matchmap_t;
-
 
 // For debug purposes only, generate a 1:1 voxmap representation of the ref_matchmap, ignoring different voxel size (1 voxel in -> 1 voxel out)
 static void ref_matchmap_to_voxmap(ref_matchmap_t* matchmap, int ref_x, int ref_y, int ref_z)
@@ -228,6 +232,64 @@ static void ref_fine_matchmap_to_voxmap(ref_fine_matchmap_t* matchmap, int ref_x
 	}
 }
 
+static void voxmap_to_ref_fine_matchmap(ref_fine_matchmap_t* matchmap, int ref_x, int ref_y, int ref_z)
+{
+	int rl = 0;
+
+	// Find the VOX_UNIT which allows direct copy
+	// Assumption: it exists.
+	// Benefit: no "aliasing" effects
+	while(VOX_UNITS[rl] < FINE_MATCHMAP_UNIT && rl < 8)
+		rl++;
+
+	// If it isn't possible, use the next better resolevel. Warning: gaps.
+	if(VOX_UNITS[rl] > FINE_MATCHMAP_UNIT && rl > 0)
+	{
+		rl--;
+		printf("WARNING: voxmap_to_ref_fine_matchmap: no compatible world and ref_fine_matchmap resolution, rl=%d\n", rl);
+	}
+
+
+	// Load multiple pages at once, but not too many - only 1 page in Y direction
+	for(int yy=0; yy<FINE_MATCHMAP_YS; yy++)
+	{
+		int iyy = yy - FINE_MATCHMAP_YS/2;
+		// x and y ranges for load
+		po_coords_t polx0 = po_coords((-FINE_MATCHMAP_XS/2-1)*VOX_UNITS[rl]+ref_x, iyy*VOX_UNITS[rl]+ref_y, 0, rl);
+		po_coords_t polx1 = po_coords((FINE_MATCHMAP_XS/2+1)*VOX_UNITS[rl]+ref_x, iyy*VOX_UNITS[rl]+ref_y, 0, rl);
+
+		// z range for load
+		po_coords_t polz0 = po_coords(0, 0, (-FINE_MATCHMAP_ZS/2-1)*VOX_UNITS[rl]+ref_z, rl);
+		po_coords_t polz1 = po_coords(0, 0, (FINE_MATCHMAP_ZS/2+1)*VOX_UNITS[rl]+ref_z, rl);
+
+		load_pages(RESOLEVELS, RESOLEVELS, polx0.px, polx1.px, polx0.py, polx1.py, polz0.pz, polz1.pz);
+
+		for(int xx=0; xx<FINE_MATCHMAP_XS; xx++)
+		{
+			int ixx = xx - FINE_MATCHMAP_XS/2;
+			for(int zz=0; zz<FINE_MATCHMAP_ZS; zz++)
+			{
+				int izz = zz - FINE_MATCHMAP_ZS/2;
+
+				po_coords_t po = po_coords(ixx*VOX_UNITS[rl]+ref_x, iyy*VOX_UNITS[rl]+ref_y, izz*VOX_UNITS[rl]+ref_z, rl);
+
+				uint8_t* p_vox = get_p_voxel(po, rl);
+
+				if((*p_vox) & 0x0f)
+				{
+					matchmap->units[yy][xx].occu |= (1ULL<<zz);
+				}
+				else if((*p_vox) & 0xf0)
+				{
+					matchmap->units[yy][xx].free |= (1ULL<<zz);
+				}
+
+			}
+		}
+	}
+
+}
+
 
 ref_matchmap_t ref_matchmap __attribute__((aligned(64)));
 cmp_matchmap_t cmp_matchmap __attribute__((aligned(64)));
@@ -283,8 +345,8 @@ static inline int count_ones_u64(uint64_t in)
 	Matchmaps are compared from 16 to MATCHMAP_XS-16
 */
 
-#define ODROID_XU4
-//#define RASPI3
+//#define ODROID_XU4
+#define RASPI3
 
 // MATCHMAP_*_RANGE includes lower bound, doesn't include upper bound, i.e., RANGE=12 scans from -12 to +11
 // FINE_MATCHMAP_*_RANGE, on the other hand, scans for example, from -8 to +8, given RANGE=8.
@@ -302,7 +364,7 @@ static inline int count_ones_u64(uint64_t in)
 #endif
 
 #define FINE_MATCHMAP_XY_RANGE 5 // 640mm
-#define FINE_MATCHMAP_Z_RANGE  1
+#define FINE_MATCHMAP_Z_RANGE  0
 
 #define MATCHMAP_XYZ_N_RESULTS 32
 
@@ -565,7 +627,8 @@ static void match_fine_matchmaps_xyz(match_xyz_result_t* p_results)
 	// result array works as binary min heap
 
 	static const int32_t xy_weights[FINE_MATCHMAP_XY_RANGE*2+1] = {55,56,57,58,59,60,59,58,57,56,55};
-	static const int32_t z_weights[FINE_MATCHMAP_Z_RANGE*2+1] = {9, 10, 9};
+//	static const int32_t z_weights[FINE_MATCHMAP_Z_RANGE*2+1] = {9, 10, 9};
+	static const int32_t z_weights[FINE_MATCHMAP_Z_RANGE*2+1] = {10};
 
 	int heap_size = 0;
 
@@ -715,10 +778,6 @@ static inline void output_voxel_ref_fine_matchmap(int x, int y, int z)
 }
 
 
-
-#define MATCHMAP_UNIT 256 //mm
-
-#define FINE_MATCHMAP_UNIT 128 //mm
 
 
 #define MATCHMAP_UNCERT_Z 1
@@ -2845,5 +2904,156 @@ int  fine_match_submaps(cloud_t* sma, cloud_t* smb,
 
 	return n_results;
 }
+
+/*
+	For simplistic, classic localization on existing map
+	Works as a SLAM in easy conditions - fast, no loop closures, just matches a submap to the existing voxmap world.
+*/
+#define CLASSIC_MATCH_YAW_STEP  DEGTORAD(0.75)
+#define CLASSIC_MATCH_YAW_START DEGTORAD(-5.25)
+
+#define CLASSIC_MATCH_YAW_STEPS 11
+static const double classic_yaws[CLASSIC_MATCH_YAW_STEPS] = 
+{
+	DEGTORAD(-7.75), DEGTORAD(-5.25), DEGTORAD(-3.25), DEGTORAD(-1.75), DEGTORAD(-0.75),
+	DEGTORAD(0),
+	DEGTORAD(0.75), DEGTORAD(1.75), DEGTORAD(3.25), DEGTORAD(5.25), DEGTORAD(7.75)
+};
+
+
+result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32_t ref_z)
+{
+	static result_t results[CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS];
+	memset(results, 0, sizeof(result_t)*CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);	
+
+	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
+	voxmap_to_ref_fine_matchmap(&ref_fine_matchmap, ref_x, ref_y, ref_z);
+
+	// TODO: These batches could run in parallel, in multiple threads
+	for(int cur_yaw_step = 0; cur_yaw_step < CLASSIC_MATCH_YAW_STEPS; cur_yaw_step++)
+	{
+		double cur_yaw_corr = classic_yaws[cur_yaw_step];
+//		double cur_yaw_corr = 0.0;
+		// This part is per-thread.
+
+		memset(&cmp_fine_matchmap, 0, sizeof(cmp_fine_matchmap));
+
+		int n_vox = cloud_to_cmp_fine_matchmap(sm, &cmp_fine_matchmap, 0, 0, 0, cur_yaw_corr);
+
+		//printf("%d active voxels in cmp_matchmap\n", n_vox);
+
+		match_xyz_result_t batch_results[MATCHMAP_XYZ_N_RESULTS];
+		memset(batch_results, 0, sizeof(batch_results));
+
+		match_fine_matchmaps_xyz(batch_results);
+
+		int result_idx = 
+			cur_yaw_step*MATCHMAP_XYZ_N_RESULTS;
+
+		for(int i=0; i<MATCHMAP_XYZ_N_RESULTS; i++)
+		{
+			int cur_rel_score = ((int64_t)batch_results[i].score*(int64_t)FINE_REL_SCORE_MULT)/((int64_t)n_vox*(int64_t)FINE_REL_SCORE_DIV);
+			//printf("i=%2d  (%+3d,%+3d,%+3d) score=%+8d, relative=%+6d\n",
+			//	i, 
+			//	batch_results[i].x_shift, batch_results[i].y_shift, batch_results[i].z_shift, batch_results[i].score, cur_rel_score);
+
+			results[result_idx + i].x = batch_results[i].x_shift * FINE_MATCHMAP_UNIT;
+			results[result_idx + i].y = batch_results[i].y_shift * FINE_MATCHMAP_UNIT;
+			results[result_idx + i].z = batch_results[i].z_shift * FINE_MATCHMAP_UNIT;
+			results[result_idx + i].yaw = cur_yaw_corr;
+			results[result_idx + i].score = cur_rel_score;
+			results[result_idx + i].abscore = (int64_t)batch_results[i].score/(int64_t)FINE_REL_SCORE_DIV;
+		}
+	}
+
+	qsort(results, CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS, sizeof(result_t), compar_scores);
+
+	#define CLASSIC_POSTFILTER_RESULTS
+
+	#ifdef CLASSIC_POSTFILTER_RESULTS
+		for(int i=0; i<CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS-1; i++)
+		{
+			for(int o=i+1; o<CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; o++)
+			{
+				double transl_dist = sqrt( sq(results[i].x-results[o].x) + sq(results[i].y-results[o].y) + sq(results[i].z-results[o].z) );
+				double rot_dist = fabs(results[i].yaw - results[o].yaw);
+
+				// dist_number: 1 degree is like 256 millimeters (0.75deg is like 192 mm)
+				double dist_number = transl_dist + RADTODEG(rot_dist)*256.0;
+
+		//		printf("i=%d, o=%d, transl_dist=%.0f  rot_dist=%.3f,  dist_number=%.0f, score[i]=%d, score[o]=%d", i, o, transl_dist, rot_dist, dist_number, results[i].score, results[o].score);
+
+				if((dist_number < 150.0) ||
+				   (dist_number < 300.0 && 105*results[o].score < 100*results[i].score) ||
+				   (dist_number < 450.0 && 110*results[o].score < 100*results[i].score) ||
+				   (dist_number < 600.0 && 115*results[o].score < 100*results[i].score) ||
+				   (dist_number < 750.0 && 120*results[o].score < 100*results[i].score))
+				{
+					results[o].score = -99999;
+		//			printf("  mash it!");
+				}
+
+		//		printf("\n");
+			}
+		}
+	#endif
+
+	int n_results = 0;
+	printf("total results (from %d pcs):\n", CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);
+	for(int i=0; i<CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; i++)
+	{
+		if(results[i].score > 0 && results[i].score > results[0].score/2)
+		{
+			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d abscore=%+5d\n",
+				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore);
+
+			//results_out[n_results] = results[i];
+			n_results++;
+			if(n_results >= N_FINE_MATCH_RESULTS)
+				break;
+		}
+	}
+
+
+	if(n_results == 0)
+	{
+		return (result_t){0};
+	}
+	else if(n_results == 1)
+	{
+		return results[0];
+	}
+	else
+	{
+		double ratio = (double)results[1].score/(double)results[0].score; // always < 1.0
+
+		double coeff0, coeff1;
+		if(ratio > 0.3)
+		{
+			ratio = ratio*ratio*ratio;
+			ratio /= 2.0; // max 0.5
+			coeff1 = ratio;
+			coeff0 = 1.0 - ratio;
+
+			return (result_t){
+				coeff0*results[0].x + coeff1*results[1].x,
+				coeff0*results[0].y + coeff1*results[1].y,
+				coeff0*results[0].z + coeff1*results[1].z,
+				coeff0*results[0].yaw + coeff1*results[1].yaw,
+				results[0].score,
+				results[0].abscore};
+
+		}
+		else
+		{
+			return results[0];
+		}
+
+	}
+
+}
+
+
+
 
 

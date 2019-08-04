@@ -794,7 +794,7 @@ void request_tof_quit(void);
 
 volatile int retval = 0;
 
-int cmd_send_to_robot;
+volatile int cmd_send_to_robot;
 
 int new_stop_movement()
 {
@@ -871,8 +871,8 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	}
 
 	memset(p_msg, 0, sizeof(*p_msg));
-	p_msg->x = x;
-	p_msg->y = y;
+	p_msg->x = x + corr_x;
+	p_msg->y = y + corr_y;
 	p_msg->id = id;
 	p_msg->backmode = backmode;
 
@@ -948,6 +948,36 @@ int new_correct_pos(int32_t da, int32_t dx, int32_t dy)
 	cmd_send_to_robot = 1;
 
 	return 0;
+}
+
+int32_t corr_x, corr_y, corr_z;
+uint32_t corr_yaw, corr_pitch, corr_roll;
+
+int sw_correct_pos(int32_t da, int32_t dx, int32_t dy)
+{
+	corr_yaw += (uint32_t)da;
+	corr_x += dx;
+	corr_y += dy;	
+}
+
+// Correct any hw_pose silently:
+void fix_pose(hw_pose_t* pose)
+{
+	pose->x += corr_x;
+	pose->y += corr_y;
+	pose->z += corr_z;
+	pose->ang += corr_yaw;
+	pose->pitch += corr_pitch;
+	pose->roll += corr_roll;
+}
+
+void fix_pose_drive_diag(drive_diag_t* d)
+{
+	d->cur_x += corr_x;
+	d->cur_y += corr_y;
+	d->target_x += corr_x;
+	d->target_y += corr_y;
+
 }
 
 int trace_ena = 0;
@@ -1083,9 +1113,12 @@ void* main_thread()
 
 						if(s==10)
 						{
-							cur_x = ((hw_pose_t*)&p_data[offs])->x;
-							cur_y = ((hw_pose_t*)&p_data[offs])->y;
-							cur_ang = ((hw_pose_t*)&p_data[offs])->ang;
+							hw_pose_t* pose = &p_data[offs];
+							fix_pose(pose);
+
+							cur_x = pose->x;
+							cur_y = pose->y;
+							cur_ang = pose->ang;
 
 							//if(state_vect.v.vacuum_on || state_vect.v.command_source)
 							//	mark_current_as_visited(&world, cur_ang, cur_x, cur_y);
@@ -1108,19 +1141,34 @@ void* main_thread()
 
 						if(s==11)
 						{
-							move_run = ((drive_diag_t*)&p_data[offs])->run; 
-							move_id = ((drive_diag_t*)&p_data[offs])->id;
-							move_remaining = ((drive_diag_t*)&p_data[offs])->remaining;
-							micronavi_stop_flags = ((drive_diag_t*)&p_data[offs])->micronavi_stop_flags;
+							drive_diag_t* dd = &p_data[offs];
+							fix_pose_drive_diag(dd);
+							move_run = dd->run; 
+							move_id = dd->id;
+							move_remaining = dd->remaining;
+							micronavi_stop_flags = dd->micronavi_stop_flags;
 					//		printf("GOT: move_id=%d, move_remaining=%d, stop_flags=%x\n", move_id, move_remaining, micronavi_stop_flags);
 						}
 
 						if(s==14)
 						{
-							slam_input_from_tss((tof_slam_set_t*)&p_data[offs]);
+							tof_slam_set_t* tss = &p_data[offs];
+							fix_pose(&tss->sets[0].pose);
+							fix_pose(&tss->sets[1].pose);
+							#include "slam_matchers.h"
+							result_t corr;
+							if(slam_input_from_tss(tss, &corr))
+							{
+								int32_t da = RADTOANGI32(corr.yaw);
+								int32_t dx = -corr.x;
+								int32_t dy = -corr.y;
+								printf("Correcting by yaw=%d, x=%d, y=%d\n", da/ANG_0_1_DEG, dx, dy);
+								sw_correct_pos(da, dx, dy);
+							}
 						}
 
 
+						// Relaying is done last: poses get fixed above!
 						if(tcp_client_sock >= 0 && tcp_is_space_for_noncritical_message())
 						{
 							static int hwmsg_decim_cnt[B2S_MAX_MSGIDS];
@@ -1753,7 +1801,7 @@ void* main_thread()
 		prev_autonomous = state_vect.v.command_source;
 
 		static int keepalive_cnt = 0;
-		if(++keepalive_cnt > 500)
+		if(++keepalive_cnt > 1000)
 		{
 			keepalive_cnt = 0;
 			if(state_vect.v.keep_position)
@@ -1801,16 +1849,24 @@ void* main_thread()
 		{
 			cmd_send_to_robot = 0;
 			spi_send_queue();
-			usleep(200000);
+			usleep(100000);
 			if(spi_init_cmd_queue() < 0)
 			{
-				usleep(300000);
+				usleep(200000);
+
+				if(spi_init_cmd_queue() < 0)
+				{
+					printf("WARNING: spi_init_cmd_queue error\n");
+					usleep(200000);
+
+					if(spi_init_cmd_queue() < 0)
+					{
+						printf("ERROR: spi_init_cmd_queue error\n");
+						abort();
+					}
+				}
 			}
 
-			if(spi_init_cmd_queue() < 0)
-			{
-				printf("ERROR: spi_init_cmd_queue error\n");
-			}
 
 		}
 

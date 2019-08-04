@@ -6,7 +6,7 @@
 #define UART_DEV "/dev/serial0"
 
 
-#define ROBOTBOARD_REV2A
+#define ROBOTBOARD_REV2B
 
 //#define MAP_DIR "/home/pulu/maps/"
 #define MAP_DIR "/home/hrst/maps/"

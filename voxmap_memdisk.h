@@ -144,7 +144,9 @@ typedef struct __attribute__ ((packed))
 #define MAX_PAGES_Y 512
 #define MAX_PAGES_Z 32
 
-#define MAX_LOADED_PAGES (7*7*5+20)
+//#define MAX_LOADED_PAGES (7*7*5+20)
+// approx. 10MB per page. We can afford. approx 500-600MB on Raspi3 (1GB)
+#define MAX_LOADED_PAGES (50)
 
 // Valid ranges of page indeces, inclusive
 #define PX_MIN (0)

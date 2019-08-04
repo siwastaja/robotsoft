@@ -141,6 +141,7 @@ ALWAYS_INLINE void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, in
 }
 
 //#include "../robotboard2-fw/tof_process.h" // for sensor_mount_t
+#if 1
 typedef struct __attribute__((packed))
 {
 	int16_t mount_mode;             // mount position 1,2,3 or 4
@@ -150,6 +151,7 @@ typedef struct __attribute__((packed))
 	uint16_t vert_ang_rel_ground;  // zero = looks directly forward. positive = looks up. negative = looks down
 	int16_t z_rel_ground;         // sensor height from the ground	
 } sensor_mount_t;
+#endif
 
 typedef struct __attribute__((packed))
 {

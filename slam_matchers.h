@@ -1,5 +1,7 @@
 #pragma once
 
+#include "slam_cloud.h"
+
 // Maximum possible number of large scale loop closure scan matching results. May return fewer.
 #define N_MATCH_RESULTS 8
 
@@ -101,6 +103,9 @@ int  fine_match_submaps(cloud_t* sma, cloud_t* smb,
                         result_t* results_out);
 
 ref_quality_t gen_save_ref_matchmap_set(int idxb, cloud_t* ca, cloud_t* cb, cloud_t* cc, result_t corrab, result_t corrbc);
+
+result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32_t ref_z);
+
 
 
 

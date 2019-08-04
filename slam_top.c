@@ -60,13 +60,13 @@
 
 // Maximum number of subsubmaps in a submap. After exceeded, a new submap is force-started
 // Number of maximum scans is SUBSUBMAP_LIMIT * VOXFILTER_N_SCANS
-#define SUBSUBMAP_LIMIT 10
+#define SUBSUBMAP_LIMIT 6
 #define SUBMAP_MAX_SCANS (SUBSUBMAP_LIMIT * VOXFILTER_N_SCANS)
 
 // Maximum difference in robot coordinates during a submap, basically the length of the robot pose range before terminating the submap. In mm
-#define DX_LIMIT 4000
-#define DY_LIMIT 4000
-#define DZ_LIMIT 2000
+#define DX_LIMIT 2000
+#define DY_LIMIT 2000
+#define DZ_LIMIT 1000
 
 // Cumulative linear travel limit; after exceeded, a new submap is started. In mm.
 // Difference to the D*_LIMITs is that this limit can force a new submap even when the robot is
@@ -874,6 +874,22 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		return -1;
 
 	int ret = -1;
+
+	/*
+	static hw_pose_t prev_pose;
+	if(abs(cur_pose.x-prev_pose.x) < 50 || abs(cur_pose.y-prev_pose.y) < 50 || abs(cur_pose.z-prev_pose.z) < 50 ||
+	   abs((int32_t)(cur_pose.ang-prev_pose.ang)) < 5*ANG_1_DEG ||
+	   abs((int32_t)(cur_pose.roll-prev_pose.roll)) < 5*ANG_1_DEG ||
+	   abs((int32_t)(cur_pose.pitch-prev_pose.pitch)) < 5*ANG_1_DEG)
+	{
+		// Don't do anything 
+		// Don't update prev_pose -> if very slow movement accumulates, take new shots every now and then
+		return -1;
+	}
+
+	prev_pose = cur_pose;
+	*/
+
 	// Cloud and voxfilter data are accumulated, until a full submap is finished
 	// Cloud is then copied (for "free") by the cloud filtering function
 
@@ -1068,24 +1084,15 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 				sm_ref_x = INT32_MIN; // Force reload of sm_ref_* at the very next sensor dataset.
 
 				// filter_cloud makes a new cloud.
-
-//				filter_cloud(&current_cloud, p_cur_cloud, transl_x, transl_y, transl_z);
-		ret = -1;
-//				ret = n_sms;
+				printf("input_tof_slam_set: submap finished, filtering the cloud (%d -> ", current_cloud.n_points); fflush(stdout);
+				filter_cloud(&current_cloud, p_cur_cloud, transl_x, transl_y, transl_z);
+				printf("%d points), n_sm = %d\n",  p_cur_cloud->n_points, n_sms);
+				ret = -1;
+				ret = n_sms;
 //				n_sms++;
-//				printf("input_tof_slam_set: submap finished, filtered the cloud (%d -> %d points), n_sms = %d\n", current_cloud.n_points, p_cur_cloud->n_points, n_sms);
+
 
 				current_cloud.n_points = 0; // this is enough to clear a cloud. Old data doesn't matter.
-
-				#if 0
-				{
-					po_coords_t po;
-					po = po_coords(submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z, 0);
-					load_pages(RESOLEVELS, RESOLEVELS, po.px-3, po.px+3, po.py-3, po.py+3, po.pz-2, po.pz+2);
-					cloud_to_voxmap(&tmp_cloud_filtered, submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z);
-					store_all_pages();
-				}
-				#endif
 
 			}
 
@@ -1097,6 +1104,29 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 	return ret;
 
 }
+
+result_t legacy_process_after_input(int ret)
+{
+	// p_cur_cloud is always fixed, only one cloud in memory at the time.
+	// Simply match the current cloud to the world voxmap each time, then add to said map.
+
+	result_t corr = match_submap_to_voxmap(p_cur_cloud, submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z);
+
+	printf("corr = %d,%d,%d , %.1f\n", corr.x, corr.y, corr.z, RADTODEG(corr.yaw));
+	rotate_cloud(p_cur_cloud, corr.yaw);
+	
+	{
+		//po_coords_t po;
+		//po = po_coords(submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z, 0);
+		//load_pages(RESOLEVELS, RESOLEVELS, po.px-1, po.px+1, po.py-1, po.py+1, po.pz-1, po.pz+1);
+		cloud_to_voxmap(p_cur_cloud, submap_metas[ret].avg_x-corr.x, submap_metas[ret].avg_y-corr.y, submap_metas[ret].avg_z-corr.z);
+		store_all_pages();
+	}
+
+	return corr;
+
+}
+
 
 void process_after_input(int ret)
 {
@@ -1182,14 +1212,20 @@ void input_from_file(int file_idx)
 	}
 }
 
-void slam_input_from_tss(tof_slam_set_t* tss)
+int slam_input_from_tss(tof_slam_set_t* tss, result_t* corr_out)
 {
+	assert(corr_out);
+
 	int ret = input_tof_slam_set(tss);
 
 	if(ret >= 0)
 	{
-		process_after_input(ret);
+		*corr_out = legacy_process_after_input(ret);
+
+		return 1;
 	}
+
+	return 0;
 }
 
 

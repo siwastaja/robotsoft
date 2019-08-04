@@ -187,32 +187,28 @@ void print_chafind_results(void* m)
 {
 	chafind_results_t *mm = m;
 
-	static const char* state_names[17] =
+	static const char* state_names[14] =
 	{
 		"IDLE",
 		"START",
-		"WAIT_DISTANCE",
 		"WAIT_FWD1",
 		"WAIT_FWD1_STOPEXTRA1",
-		"WAIT_FWD1_STOPEXTRA2",
-		"ACCUM_PREDATA",
 		"ACCUM_DATA",
 		"WAIT_BACKING",
 		"START_REBACKING",
 		"WAIT_REBACKING",
 		"WAIT_FWD2",
-		"WAIT_FWD2_STOPEXTRA1",
-		"ACCUM_FRONTAVG",
+		"WAIT_FWD2_STOPEXTRA",
 		"WAIT_PUSH",
 		"SUCCESS",
 		"FAIL"
-//		"INVALID STATE NUMBER"
+		"INVALID STATE NUMBER"
 	};
 
 	int cur_state = mm->cur_state;
-	if(mm->cur_state < 0 || mm->cur_state > 15)
+	if(mm->cur_state < 0 || mm->cur_state > 13)
 	{
-		cur_state = 16;
+		cur_state = 13;
 	}
 
 	printf("Charger mount diagnostics: cur_state=%d[%s] nearest_hit_x=%d, y=%d, z=%d, middle_bar_y=%d...%d,\naccum_cnt left=%d, mid=%d, right=%d --> backwall_ang=%.2f deg, midmark_x=%d, midmark_y=%d --> shift=%d, dist=%d,\n"

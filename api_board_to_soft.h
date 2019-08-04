@@ -266,6 +266,7 @@ typedef struct __attribute__((packed))
 	uint16_t flags;
 	uint8_t sidx;
 	uint8_t  sensor_orientation; // for diagnostics display of the image in correct orientation
+	uint32_t dummy; 
 
 	/*
 		The second set is:
