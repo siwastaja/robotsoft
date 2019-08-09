@@ -8,8 +8,8 @@
 	This module provides a simple way to handle large worlds, divided
 	into map pages.
 
-	This module fixes the map resolution and block size into a compile
-	time constant values.
+	This module fixes the map resolution and block size to compile time
+	constant values.
 
 	One map page can contain several voxmaps at different resolutions,
 	but they always have the same absolute dimensions (number of voxels
@@ -42,6 +42,66 @@
 #pragma once
 
 
+// Highest resolution block in millimeters
+#define MIN_UNIT 32
+#define MAP_PAGE_XY_W_MM 8192
+#define MAP_PAGE_Z_H_MM 4096
+
+
+#if ((MAP_PAGE_XY_W_MM % (MIN_UNIT*32)) != 0)
+#error MAP_PAGE_XY_W_MM must be evenly divisible by the highest decimation level block size
+#endif
+
+#if ((MAP_PAGE_Z_H_MM % (MIN_UNIT*32)) != 0)
+#error MAP_PAGE_Z_H_MM must be evenly divisible by the highest decimation level block size
+#endif
+
+
+#define MAX_RESOLEVELS 4  // The highest enabled resolevel index. By design, max is 8.
+#define RESOLEVELS 0b1111 // Enabled resolevels: LSb = rl0
+
+
+#if (MAX_RESOLEVELS < 1 || MAX_RESOLEVELS > 8)
+#error Invalid MAX_RESOLEVELS
+#endif
+
+static const int VOX_RELATIONS[MAX_RESOLEVELS] =
+{1, 
+ 2, 
+ 4, 
+ 8
+};
+
+
+static const int VOX_UNITS[MAX_RESOLEVELS] =
+{MIN_UNIT, 
+ MIN_UNIT*2, 
+ MIN_UNIT*4, 
+ MIN_UNIT*8
+};
+
+static const int VOX_XS[MAX_RESOLEVELS] =
+{MAP_PAGE_XY_W_MM/MIN_UNIT,
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*2),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*4),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*8)
+};
+
+static const int VOX_YS[MAX_RESOLEVELS] =
+{MAP_PAGE_XY_W_MM/MIN_UNIT,
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*2),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*4),
+ MAP_PAGE_XY_W_MM/(MIN_UNIT*8)
+};
+
+static const int VOX_ZS[MAX_RESOLEVELS] =
+{MAP_PAGE_Z_H_MM/MIN_UNIT,
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*2),
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*4),
+ MAP_PAGE_Z_H_MM/(MIN_UNIT*8)
+};
+
+
 /*
 	Only a few dozen of pages can live in the memory at once.
 	You can address this array directly with your page address to see:
@@ -60,73 +120,6 @@
 	that would waste 1024MB (compare to 64MB here).
 */
 
-
-// Highest resolution block in millimeters
-#define MIN_UNIT 32
-#define MAP_PAGE_XY_W_MM 8192
-#define MAP_PAGE_Z_H_MM 4096
-
-
-#if ((MAP_PAGE_XY_W_MM % (MIN_UNIT*32)) != 0)
-#error MAP_PAGE_XY_W_MM must be evenly divisible by the highest decimation level block size
-#endif
-
-#if ((MAP_PAGE_Z_H_MM % (MIN_UNIT*32)) != 0)
-#error MAP_PAGE_Z_H_MM must be evenly divisible by the highest decimation level block size
-#endif
-
-
-#define MAX_RESOLEVELS 6
-
-#if (MAX_RESOLEVELS < 1 || MAX_RESOLEVELS > 8)
-#error Invalid MAX_RESOLEVELS
-#endif
-
-static const int VOX_RELATIONS[MAX_RESOLEVELS] =
-{1, 
- 2, 
- 4, 
- 8, 
- 16, 
- 32};
-
-
-static const int VOX_UNITS[MAX_RESOLEVELS] =
-{MIN_UNIT, 
- MIN_UNIT*2, 
- MIN_UNIT*4, 
- MIN_UNIT*8, 
- MIN_UNIT*16, 
- MIN_UNIT*32};
-
-static const int VOX_XS[MAX_RESOLEVELS] =
-{MAP_PAGE_XY_W_MM/MIN_UNIT,
- MAP_PAGE_XY_W_MM/(MIN_UNIT*2),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*4),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*8),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*16),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*32),
-};
-
-static const int VOX_YS[MAX_RESOLEVELS] =
-{MAP_PAGE_XY_W_MM/MIN_UNIT,
- MAP_PAGE_XY_W_MM/(MIN_UNIT*2),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*4),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*8),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*16),
- MAP_PAGE_XY_W_MM/(MIN_UNIT*32),
-};
-
-static const int VOX_ZS[MAX_RESOLEVELS] =
-{MAP_PAGE_Z_H_MM/MIN_UNIT,
- MAP_PAGE_Z_H_MM/(MIN_UNIT*2),
- MAP_PAGE_Z_H_MM/(MIN_UNIT*4),
- MAP_PAGE_Z_H_MM/(MIN_UNIT*8),
- MAP_PAGE_Z_H_MM/(MIN_UNIT*16),
- MAP_PAGE_Z_H_MM/(MIN_UNIT*32),
-};
-
-
 #define PAGE_META_FLAG_CHANGED (1<<12)
 #define PAGE_META_MEM_IDX_MASK (0xfff)
 
@@ -144,8 +137,17 @@ typedef struct __attribute__ ((packed))
 #define MAX_PAGES_Y 512
 #define MAX_PAGES_Z 32
 
-//#define MAX_LOADED_PAGES (7*7*5+20)
 // approx. 10MB per page. We can afford. approx 500-600MB on Raspi3 (1GB)
+// Note:
+// The most optimized usage loads multiple pages at once, around the theoretical maximum range of usage (for example, sensor range),
+// thus avoiding separate "is loaded?" checks for every point. If MAX_LOADED_PAGES is too small to fit all the pages around
+// this range in memory at once, load_pages() call will fail, and the program aborts. To avoid problems:
+// * call load_pages() with static ranges so that this failure is not hidden; then make sure to use MAX_LOADED_PAGES large enough;
+// * don't use mass load_pages(), but load single pages for every point. Will be slower, but is guaranteed to work as long as
+//   MAX_LOADED_PAGES is at least 1.
+
+// Note that even if you call load_pages_quick for every single point, it's a fairly quick operation only if the pages tend to fit
+// memory, at least mostly. Pages are shuffled on and off disk multiple times if the value is too small.
 #define MAX_LOADED_PAGES (50)
 
 // Valid ranges of page indeces, inclusive
@@ -159,7 +161,7 @@ typedef struct __attribute__ ((packed))
 
 
 
-#if (MAX_LOADED_PAGES>4096)
+#if (MAX_LOADED_PAGES>4095)
 #error MAX_LOADED_PAGES too big, mem_idx wont fit into 12 bits
 #endif
 
@@ -254,7 +256,14 @@ static inline void mark_page_changed(int px, int py, int pz)
 void mark_page_accessed(int px, int py, int pz);
 void mem_manage_pages(int time_threshold);
 void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_end, int py_start, int py_end, int pz_start, int pz_end);
+void load_page_quick(int xx, int yy, int zz);
+void load_page_quick_and_mark_changed(int xx, int yy, int zz);
+
 void free_all_pages();
 void store_all_pages();
 char* gen_fname(char* dir, int px, int py, int pz, int resolevel, char* buf);
+
+// Iterates through all memory-loaded pages; if the page is changed, iterates through all loaded resolevels,
+// and calls the supplied function pointer.
+void do_something_to_changed_pages(void (*doer)(voxmap_t*));
 

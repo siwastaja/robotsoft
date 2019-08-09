@@ -22,7 +22,7 @@
 	The byte stream, or file generated contains:
 
 		voxmap_header_t
-		variable-length voxel data (xs*ys*zs bytes)
+		variable-length voxel data (xs*ys*zs bytes when uncompressed; typically much less when zlib-compressed)
 
 
 	The API functions handle the file access, compression/decompression, etc.

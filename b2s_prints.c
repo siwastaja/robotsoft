@@ -161,7 +161,7 @@ void print_tof_slam_set(void* m)
 {
 	tof_slam_set_t *mm = m;
 
-	printf("TOF slam set: sidx=%d %s %s %s\n", mm->sidx,
+	printf("TOF slam set: sensor_idx=%d: %s %s %s\n", mm->sidx,
 		(mm->flags&TOF_SLAM_SET_FLAG_VALID)?"VALID":"", 
 		(mm->flags&TOF_SLAM_SET_FLAG_SET1_WIDE)?"SET1_WIDE":"", 
 		(mm->flags&TOF_SLAM_SET_FLAG_SET1_NARROW)?"SET1_NARROW":"");
@@ -217,4 +217,11 @@ void print_chafind_results(void* m)
 		mm->first_movement_needed, mm->turning_passes_needed, mm->vexling_passes_needed, mm->accepted_pos, mm->dist_before_push, mm->result);
 }
 
+
+void print_gyrocal_results(void* m)
+{
+	gyrocal_results_t* mm = m;
+
+	printf("Gyro self-calibration results: state=%2d  n_rounds=%3d  avg_rate=%d\n", mm->state, mm->n_rounds, mm->avg_rate);
+}
 

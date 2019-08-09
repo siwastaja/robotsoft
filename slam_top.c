@@ -1120,7 +1120,6 @@ result_t legacy_process_after_input(int ret)
 		//po = po_coords(submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z, 0);
 		//load_pages(RESOLEVELS, RESOLEVELS, po.px-1, po.px+1, po.py-1, po.py+1, po.pz-1, po.pz+1);
 		cloud_to_voxmap(p_cur_cloud, submap_metas[ret].avg_x-corr.x, submap_metas[ret].avg_y-corr.y, submap_metas[ret].avg_z-corr.z);
-		store_all_pages();
 	}
 
 	return corr;
@@ -1193,6 +1192,79 @@ void process_after_input(int ret)
 	p_prev_cloud = p_cur_cloud;
 	p_cur_cloud = tmp;
 
+}
+
+
+// state sequence: 0 = init, 1 = input "before" or "after" data
+int input_tof_slam_set_for_gyrocal(tof_slam_set_t* tss, int state)
+{
+
+	if(! (tss->flags & TOF_SLAM_SET_FLAG_VALID))
+		return -1;
+
+	int ret = -1;
+
+	// Reuse filtered_clouds[0], [1], [2] respectively as: input, before, after.
+
+	static int32_t sm_ref_x = INT32_MIN, sm_ref_y, sm_ref_z;
+
+	if(state == 0)
+	{
+		sm_ref_x = tss->sets[0].pose.x;
+		sm_ref_y = tss->sets[0].pose.y;
+		sm_ref_z = tss->sets[0].pose.z;
+		//printf("ref is %d,%d,%d\n", sm_ref_x, sm_ref_y, sm_ref_z);
+		filtered_clouds[0].n_points = 0;
+	}
+
+	assert(sm_ref_x != INT32_MIN);
+
+	tof_to_voxfilter_and_cloud(0, 
+		tss->sets[0].ampldist, tss->sets[0].pose,
+		tss->sidx, 
+		sm_ref_x, sm_ref_y, sm_ref_z,
+		NULL, 0,0,0,
+		&filtered_clouds[0], 1800, 300,
+		NULL, 0);
+
+	if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
+	{
+		tof_to_voxfilter_and_cloud(1, 
+			tss->sets[1].ampldist, tss->sets[1].pose,
+			tss->sidx, 
+			sm_ref_x, sm_ref_y, sm_ref_z,
+			NULL, 0,0,0,
+			&filtered_clouds[0], 1800, 3000,
+			NULL, 1);
+	}
+
+
+	return 0;
+}
+
+void gyroslam_process_before()
+{
+	printf("input_tof_slam_set_for_gyrocal: \"BEFORE\" pointcloud finished, filtering the cloud (%d -> ", filtered_clouds[0].n_points); fflush(stdout);
+	filter_cloud(&filtered_clouds[0], &filtered_clouds[1], 0,0,0);
+	printf("%d points)\n", filtered_clouds[1].n_points);
+
+	filtered_clouds[0].n_points = 0; // ready to accumulate the "after" one.
+}
+
+void gyroslam_empty()
+{
+	filtered_clouds[0].n_points = 0; // ready to accumulate the "after" one.
+}
+
+double gyroslam_process_after()
+{
+	printf("input_tof_slam_set_for_gyrocal: \"AFTER\" pointcloud finished, filtering the cloud (%d -> ", filtered_clouds[0].n_points); fflush(stdout);
+	filter_cloud(&filtered_clouds[0], &filtered_clouds[2], 0,0,0);
+	printf("%d points)\n", filtered_clouds[2].n_points);
+
+	result_t res = gyrocal_match_submaps(&filtered_clouds[1], &filtered_clouds[2], 0,0,0);
+
+	return -1.0*res.yaw;
 }
 
 void input_from_file(int file_idx)

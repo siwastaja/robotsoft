@@ -14,6 +14,9 @@
 
 #define SWAP(t_, a_, b_) do{t_ tmp_ = a_; a_ = b_; b_ = tmp_;}while(0)
 
+#define LIKELY(x)   __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>

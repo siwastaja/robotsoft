@@ -832,7 +832,7 @@ int new_mount_charger()
 	return 0;
 }
 
-int new_self_calib_request()
+int new_self_calib_request(int n_turns, int speed)
 {
 	printf("SELF_CALIB_REQUEST\n");
 	s2b_self_calib_request_t *p_msg = spi_init_cmd(CMD_SELF_CALIB_REQUEST);
@@ -845,9 +845,30 @@ int new_self_calib_request()
 	}
 
 	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->n_turns = n_turns;
+	p_msg->speed = speed;
 
 	cmd_send_to_robot = 1;
 	return 0;
+}
+
+int32_t corr_x, corr_y, corr_z;
+int64_t corrcorr_x, corrcorr_y;  // x65536, accumulating (x,y) shift due to coordinate rotation from angular corrections
+uint32_t corr_yaw, corr_pitch, corr_roll;
+
+int64_t corrcorr_for_movement_x = INT64_MIN, corrcorr_for_movement_y;
+
+void calc_corrcorr_for_movement(int32_t dst_x, int32_t dst_y)
+{
+	double fcorr_yaw = ANG32TORAD(corr_yaw);
+
+	int32_t dx = dst_x - cur_x;
+	int32_t dy = dst_y - cur_y;
+
+	corrcorr_for_movement_x = corrcorr_x;
+	corrcorr_for_movement_y = corrcorr_y;
+	corrcorr_for_movement_x += 65536.0*((double)(dx) * cos(fcorr_yaw) - (double)(dy) * sin(fcorr_yaw)  - (double)(dx));
+	corrcorr_for_movement_y += 65536.0*((double)(dx) * sin(fcorr_yaw) + (double)(dy) * cos(fcorr_yaw)  - (double)(dy));
 }
 
 
@@ -861,6 +882,8 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	move_to_prev_speedlimit = speedlimit;
 	move_to_prev_accurate_turn = accurate_turn;
 
+	calc_corrcorr_for_movement(x, y);
+
 	s2b_move_abs_t *p_msg = spi_init_cmd(CMD_MOVE_ABS);
 
 	if(!p_msg)
@@ -871,14 +894,84 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	}
 
 	memset(p_msg, 0, sizeof(*p_msg));
-	p_msg->x = x + corr_x;
-	p_msg->y = y + corr_y;
+	p_msg->x = x - corr_x - (corrcorr_for_movement_x>>16);
+	p_msg->y = y - corr_y - (corrcorr_for_movement_y>>16);
+	printf("RQ: %d, %d\n", p_msg->x, p_msg->y);
 	p_msg->id = id;
 	p_msg->backmode = backmode;
 
 	cmd_send_to_robot = 1;
 	return 0;
 }
+
+int new_inject_gyrocal(gyro_cal_t* gc)
+{
+	s2b_inject_gyrocal_t *p_msg = spi_init_cmd(CMD_INJECT_GYROCAL);
+
+	if(!p_msg)
+	{
+		printf(__func__);
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+
+	memcpy(&p_msg->gyrocal, gc, sizeof(gyro_cal_t));
+
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
+void load_inject_gyrocal()
+{
+	FILE* f_olds = fopen("gyrocal.txt", "r");
+	assert(f_olds);
+	gyro_cal_t cal;
+	int ret = fscanf(f_olds, "%d %d %d %d %d %d %d %d", 
+		&cal.pos_lospeed_at,
+		&cal.pos_lospeed_mult,
+		&cal.pos_hispeed_at,
+		&cal.pos_hispeed_mult,
+		&cal.neg_lospeed_at,
+		&cal.neg_lospeed_mult,
+		&cal.neg_hispeed_at,
+		&cal.neg_hispeed_mult);
+
+	fclose(f_olds);
+	assert(ret == 8);
+
+	printf("Loaded gyro calibration:\n");
+	printf("+lo %10d @ %6d  +hi %10d @ %6d  -lo %10d @ %6d  -hi %10d @ %6d\n",
+		cal.pos_lospeed_mult, cal.pos_lospeed_at, 
+		cal.pos_hispeed_mult, cal.pos_hispeed_at, 
+		cal.neg_lospeed_mult, cal.neg_lospeed_at, 
+		cal.neg_hispeed_mult, cal.neg_hispeed_at);
+
+	new_inject_gyrocal(&cal);
+}
+
+
+
+int new_move_rel(int32_t ang, int32_t fwd)
+{
+	s2b_move_rel_t *p_msg = spi_init_cmd(CMD_MOVE_REL);
+
+	if(!p_msg)
+	{
+		printf(__func__);
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->ang = ang;
+	p_msg->fwd = fwd;
+
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
 
 int rerequest_move_to()
 {
@@ -950,33 +1043,91 @@ int new_correct_pos(int32_t da, int32_t dx, int32_t dy)
 	return 0;
 }
 
-int32_t corr_x, corr_y, corr_z;
-uint32_t corr_yaw, corr_pitch, corr_roll;
+void save_poscorr()
+{
+	FILE *f = fopen("poscorr.txt", "w");
+	assert(f);
+	fprintf(f, "%d %d %d %lld %lld %u %u %u\n", corr_x, corr_y, corr_z, corrcorr_x, corrcorr_y, corr_yaw, corr_pitch, corr_roll);
+	fclose(f);
+}
+
+
+void load_poscorr()
+{
+	FILE *f = fopen("poscorr.txt", "r");
+	if(f)
+	{
+		fscanf(f, "%d %d %d %lld %lld %u %u %u", &corr_x, &corr_y, &corr_z, &corrcorr_x, &corrcorr_y, &corr_yaw, &corr_pitch, &corr_roll);
+		printf("INFO: loaded existing pose correction %d %d %d %lld %lld %u %u %u\n", corr_x, corr_y, corr_z, corrcorr_x>>16, corrcorr_y>>16, corr_yaw, corr_pitch, corr_roll);
+		fclose(f);
+	}
+	else
+	{
+		printf("INFO: no pose correction file.\n");
+	}
+}
 
 int sw_correct_pos(int32_t da, int32_t dx, int32_t dy)
 {
 	corr_yaw += (uint32_t)da;
 	corr_x += dx;
-	corr_y += dy;	
+	corr_y += dy;
+
+
+	save_poscorr();
 }
 
 // Correct any hw_pose silently:
+// This must be called with data in-order, because it keeps track of movement deltas, to correctly rotate the vectors
 void fix_pose(hw_pose_t* pose)
 {
-	pose->x += corr_x;
-	pose->y += corr_y;
+	static int32_t prev_x = INT32_MIN;
+	static int32_t prev_y;
+	static int32_t prev_z;
+
+	if(prev_x == INT32_MIN)
+	{
+		prev_x = pose->x;
+		prev_y = pose->y;
+		prev_z = pose->z;
+	}
+
+	int32_t dx = pose->x - prev_x;
+	int32_t dy = pose->y - prev_y;
+	int32_t dz = pose->z - prev_z;
+
+	double fcorr_yaw = ANG32TORAD(corr_yaw);
+	corrcorr_x += 65536.0*((double)(dx) * cos(fcorr_yaw) - (double)(dy) * sin(fcorr_yaw)  - (double)(dx));
+	corrcorr_y += 65536.0*((double)(dx) * sin(fcorr_yaw) + (double)(dy) * cos(fcorr_yaw)  - (double)(dy));
+
+//	printf("raw pose (%d,%d,%d, %.1f deg), d (%d,%d,%d), corr is now %.1f deg, x=%d, y=%d, corrcorr x=%lld, y=%lld\n", 
+//		pose->x, pose->y, pose->z, ANG32TOFDEG(pose->ang), dx, dy, dz, 
+//		ANG32TOFDEG(corr_yaw), corr_x, corr_y, corrcorr_x>>16, corrcorr_y>>16);
+
+
+	prev_x = pose->x;
+	prev_y = pose->y;
+	prev_z = pose->z;
+
+	pose->x += corr_x + (corrcorr_x>>16);
+	pose->y += corr_y + (corrcorr_y>>16);
 	pose->z += corr_z;
 	pose->ang += corr_yaw;
 	pose->pitch += corr_pitch;
 	pose->roll += corr_roll;
 }
 
+
 void fix_pose_drive_diag(drive_diag_t* d)
 {
-	d->cur_x += corr_x;
-	d->cur_y += corr_y;
-	d->target_x += corr_x;
-	d->target_y += corr_y;
+	if(corrcorr_for_movement_x == INT64_MIN) // uninitialized; for example, movement was going on when robotsoft was started - use the best information available
+	{
+		calc_corrcorr_for_movement(d->target_x + corr_x + (corrcorr_x>>16), d->target_y + corr_y + (corrcorr_y>>16));
+	}
+	d->cur_x += corr_x + (corrcorr_x>>16);
+	d->cur_y += corr_y + (corrcorr_y>>16);
+	d->target_x += corr_x + (corrcorr_for_movement_x>>16);
+	d->target_y += corr_y + (corrcorr_for_movement_y>>16);
 
 }
 
@@ -1014,12 +1165,21 @@ void save_trace(int seq, uint8_t* p_data)
 		printf("trace_seg at %d...\n", trace_seq);
 }
 
+#include "voxmap.h"
+
+void send_voxmap_on_wire(voxmap_t* vm)
+{
+	if(tcp_client_sock >= 0 && tcp_is_space_for_noncritical_message())
+	{
+		tcp_send_voxmap(vm);
+	}
+}
 
 void* main_thread()
 {
 	init_slam();
 	load_sensor_softcals();
-
+	load_poscorr();
 
 	int find_charger_state = 0;
 
@@ -1041,6 +1201,8 @@ void* main_thread()
 //	ADD_SUB(subs, 13); // charger mount diagnostics
 //	ADD_SUB(subs, 15); // compass headings
 	ADD_SUB(subs, 14); // TOF slam set
+	ADD_SUB(subs, 16); // gyrocal results
+
 	printf("Subscribing...\n");
 	subscribe_to(subs);
 	usleep(SPI_GENERATION_INTERVAL*20*1000);
@@ -1057,34 +1219,340 @@ void* main_thread()
 //	stdout_msgids[13] = 1;
 //	stdout_msgids[15] = 1;
 //	stdout_msgids[14] = 1;
+//	stdout_msgids[16] = 1;
 
 
 	srand(time(NULL));
-
-	daiju_mode(0);
-/*	turn_and_go_rel_rel(-5*ANG_1_DEG, 0, 25, 1);
-	sleep(1);
-	send_keepalive();
-	turn_and_go_rel_rel(10*ANG_1_DEG, 0, 25, 1);
-	sleep(1);
-	send_keepalive();
-	turn_and_go_rel_rel(-5*ANG_1_DEG, 50, 25, 1);
-	sleep(1);
-	send_keepalive();
-	turn_and_go_rel_rel(0, -50, 25, 1);
-	sleep(1);
-*/
 
 	if(spi_init_cmd_queue() < 0)
 	{
 		printf("ERROR: initial spi_init_cmd_queue error\n");
 	}
 
+	load_inject_gyrocal();
+
 	printf("Run.\n");
+
 
 	double chafind_timestamp = 0.0;
 	while(1)
 	{
+		int gyrocal_slam_state = -1;
+
+		static int finished;
+		static int gyrocal_state;
+
+		// commands:
+		static const int gyrocal_turns[4]= {7, -7, 7, -7};
+		static const int gyrocal_speeds[4] = {12, 12, 4, 4};
+
+		// measurements:
+		static int32_t gyrocal_avg_rates[4];
+		static double gyrocal_ang_errs[4];
+
+		static int gyrocal_step = 0;
+
+		static gyrocal_results_t latest_gyrocal_results;
+
+		int prev_gyrocal_state = gyrocal_state;
+		static int timer;
+		timer++;
+		switch(gyrocal_state)
+		{
+			case 0:
+			{
+
+			} break;
+
+			case 1:
+			{
+				gyrocal_slam_state = 0; // Init slam to acquire the "before" scans
+
+				new_move_rel(-15*ANG_1_DEG, 0);
+				gyrocal_state++;
+				timer = 0;
+			} break;
+
+			case 2:
+			{
+				gyrocal_slam_state = 0; // Init slam to acquire the "before" scans
+				if(timer > 3000)
+				{
+					new_move_rel(+30*ANG_1_DEG, 0);
+					gyrocal_state++;
+					timer = 0;
+				}
+			} break;
+
+			case 3:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(-15*ANG_1_DEG, 400);
+					gyrocal_state++;
+					timer = 0;
+				}
+			} break;
+
+			case 4:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(-15*ANG_1_DEG, 0);
+					gyrocal_state++;
+					timer = 0;
+				}
+			} break;
+
+			case 5:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(+30*ANG_1_DEG, 0);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 6:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(-15*ANG_1_DEG, -400);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 7:
+			{
+				gyrocal_slam_state = -999;
+				gyroslam_process_before();
+				gyrocal_state++;
+			} break;
+
+			case 8:
+			{
+				gyrocal_slam_state = -999;
+				if(timer > 3000)
+				{
+					new_self_calib_request(gyrocal_turns[gyrocal_step], gyrocal_speeds[gyrocal_step]);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 9: // wait it starts
+			{
+				gyrocal_slam_state = -999;
+				assert(latest_gyrocal_results.state != 4); // failure state
+				if(latest_gyrocal_results.state == 2)
+				{
+					gyrocal_state++;
+				}
+
+			} break;
+
+			case 10:
+			{
+				gyrocal_slam_state = -999;
+				assert(latest_gyrocal_results.state != 4); // failure state
+				if(latest_gyrocal_results.state == 3)
+				{
+					assert(latest_gyrocal_results.n_rounds == abs(gyrocal_turns[gyrocal_step]));
+
+					gyrocal_avg_rates[gyrocal_step] = latest_gyrocal_results.avg_rate;
+					memset(&latest_gyrocal_results, 0, sizeof(latest_gyrocal_results));
+					gyroslam_empty();
+					new_move_rel(-15*ANG_1_DEG, 0);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 11:
+			{
+				gyrocal_slam_state = 1;  // Start acquiring "after" scans
+				if(timer > 3000)
+				{
+					new_move_rel(+30*ANG_1_DEG, 0);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 12:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(-15*ANG_1_DEG, 300);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 13:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(-15*ANG_1_DEG, 0);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 14:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(+30*ANG_1_DEG, 0);
+					gyrocal_state++;
+					timer = 0;
+
+				}
+			} break;
+
+			case 15:
+			{
+				gyrocal_slam_state = 1;
+				if(timer > 3000)
+				{
+					new_move_rel(-15*ANG_1_DEG, -300);
+					gyrocal_state++;
+				}
+			} break;
+
+			case 16:
+			{
+				gyrocal_slam_state = -999;
+
+				double err = gyroslam_process_after();
+
+				gyrocal_ang_errs[gyrocal_step] = err;
+				gyrocal_state++;
+
+				timer = 0;
+			} break;
+
+			case 17: // to consume buffered data properly
+			{
+				gyrocal_slam_state = -999;
+				if(timer > 5000)
+				{
+					gyrocal_state++;
+				}
+
+			} break;
+
+			case 18:
+			{
+				gyrocal_slam_state = -999;
+
+				if(gyrocal_step < 3)
+				{
+					motor_enable_keepalive(1);
+					gyrocal_step++;
+					gyrocal_state = 1;
+				}
+				else
+				{
+					FILE* f_olds = fopen("gyrocal.txt", "r");
+					assert(f_olds);
+					gyro_cal_t cal;
+					int ret = fscanf(f_olds, "%d %d %d %d %d %d %d %d", 
+						&cal.pos_lospeed_at,
+						&cal.pos_lospeed_mult,
+						&cal.pos_hispeed_at,
+						&cal.pos_hispeed_mult,
+						&cal.neg_lospeed_at,
+						&cal.neg_lospeed_mult,
+						&cal.neg_hispeed_at,
+						&cal.neg_hispeed_mult);
+
+					fclose(f_olds);
+					assert(ret == 8);
+
+
+					printf("FINISHED - old calibration:");
+					printf("+lo %10d @ %6d  +hi %10d @ %6d  -lo %10d @ %6d  -hi %10d @ %6d\n",
+						cal.pos_lospeed_mult, cal.pos_lospeed_at, 
+						cal.pos_hispeed_mult, cal.pos_hispeed_at, 
+						cal.neg_lospeed_mult, cal.neg_lospeed_at, 
+						cal.neg_hispeed_mult, cal.neg_hispeed_at);
+
+
+					double ratio_to_actual[4];
+
+					for(int i=0; i<4; i++)
+					{
+						ratio_to_actual[i] = 1.0 + (gyrocal_ang_errs[i] / ((double)gyrocal_turns[i]*2.0*M_PI));
+					}
+
+					printf("Ratios to actual: +lo %.5f  +hi %.5f  -lo %.5f  -hi %.5f\n", 
+						ratio_to_actual[2], ratio_to_actual[0], ratio_to_actual[3], ratio_to_actual[1]);
+
+					cal.pos_lospeed_mult = (double)cal.pos_lospeed_mult * ratio_to_actual[2];
+					cal.pos_hispeed_mult = (double)cal.pos_hispeed_mult * ratio_to_actual[0];
+					cal.neg_lospeed_mult = (double)cal.neg_lospeed_mult * ratio_to_actual[3];
+					cal.neg_hispeed_mult = (double)cal.neg_hispeed_mult * ratio_to_actual[1];
+
+					cal.pos_lospeed_at = gyrocal_avg_rates[2];
+					cal.pos_hispeed_at = gyrocal_avg_rates[0];
+					cal.neg_lospeed_at = gyrocal_avg_rates[3];
+					cal.neg_hispeed_at = gyrocal_avg_rates[1];
+
+					printf("New calibration:\n");
+					printf("+lo %10d @ %6d  +hi %10d @ %6d  -lo %10d @ %6d  -hi %10d @ %6d\n",
+						cal.pos_lospeed_mult, cal.pos_lospeed_at, 
+						cal.pos_hispeed_mult, cal.pos_hispeed_at, 
+						cal.neg_lospeed_mult, cal.neg_lospeed_at, 
+						cal.neg_hispeed_mult, cal.neg_hispeed_at);
+
+					FILE* f_news = fopen("gyrocal.txt", "w");
+					assert(f_news);
+					fprintf(f_news, "%d %d %d %d %d %d %d %d\n", 
+						cal.pos_lospeed_at,
+						cal.pos_lospeed_mult,
+						cal.pos_hispeed_at,
+						cal.pos_hispeed_mult,
+						cal.neg_lospeed_at,
+						cal.neg_lospeed_mult,
+						cal.neg_hispeed_at,
+						cal.neg_hispeed_mult);
+
+					fclose(f_news);
+					gyrocal_state = 0;
+					gyrocal_step = 0;
+
+				}
+					
+			} break;
+			
+
+			default:
+			{
+			} break;
+
+		}
+		if(prev_gyrocal_state != gyrocal_state)
+			printf("STATE---> %d\n", gyrocal_state);
+
+		finished = 0;
+
 		uint8_t* p_data = spi_rx_pop();
 		if(p_data != NULL)
 		{
@@ -1109,6 +1577,11 @@ void* main_thread()
 							printf("msgid=%u  name=%s  comment=%s\n", s, b2s_msgs[s].name, b2s_msgs[s].comment);
 							if(b2s_msgs[s].p_print)
 								b2s_msgs[s].p_print(&p_data[offs]);
+						}
+
+						if(s==16)
+						{
+							memcpy(&latest_gyrocal_results, &p_data[offs], sizeof latest_gyrocal_results);
 						}
 
 						if(s==10)
@@ -1153,17 +1626,32 @@ void* main_thread()
 						if(s==14)
 						{
 							tof_slam_set_t* tss = &p_data[offs];
-							fix_pose(&tss->sets[0].pose);
-							fix_pose(&tss->sets[1].pose);
+							if(tss->flags & TOF_SLAM_SET_FLAG_VALID)
+								fix_pose(&tss->sets[0].pose);
+							if((tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW) || (tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE))
+								fix_pose(&tss->sets[1].pose);
 							#include "slam_matchers.h"
 							result_t corr;
-							if(slam_input_from_tss(tss, &corr))
+
+
+							if(gyrocal_slam_state > -1)
 							{
-								int32_t da = RADTOANGI32(corr.yaw);
-								int32_t dx = -corr.x;
-								int32_t dy = -corr.y;
-								printf("Correcting by yaw=%d, x=%d, y=%d\n", da/ANG_0_1_DEG, dx, dy);
-								sw_correct_pos(da, dx, dy);
+								input_tof_slam_set_for_gyrocal(tss, gyrocal_slam_state);
+							}
+							else if(gyrocal_slam_state == -1)
+							{
+								if(slam_input_from_tss(tss, &corr))
+								{
+									int32_t da = RADTOANGI32(corr.yaw);
+									int32_t dx = -corr.x;
+									int32_t dy = -corr.y;
+									printf("Correcting by yaw=%d, x=%d, y=%d\n", da/ANG_0_1_DEG, dx, dy);
+									sw_correct_pos(da, dx, dy);
+
+									if(tcp_client_sock >= 0)
+										do_something_to_changed_pages(send_voxmap_on_wire);
+
+								}
 							}
 						}
 
@@ -1193,7 +1681,6 @@ void* main_thread()
 			}
 		}
 
-
 		// Calculate fd_set size (biggest fd+1)
 		int fds_size = 0;
 		if(tcp_listener_sock > fds_size) fds_size = tcp_listener_sock;
@@ -1222,6 +1709,8 @@ void* main_thread()
 			int cmd = fgetc(stdin);
 			if(cmd == 'q')
 			{
+				store_all_pages();
+
 				retval = 0;
 				break;
 			}
@@ -1231,21 +1720,11 @@ void* main_thread()
 				break;
 			}
 
-			if(cmd == 'S')
-			{
-//				save_map_pages(&world);
-//				save_robot_pos();
-			}
 			if(cmd == 's')
 			{
-//				save_map_pages(&world);
-//				retrieve_robot_pos();
+				store_all_pages();
 			}
 
-			if(cmd == 'c')
-			{
-				new_self_calib_request();
-			}
 
 			if(cmd == '0')
 			{
@@ -1304,6 +1783,16 @@ void* main_thread()
 			{
 				trace_ena = 1;
 				printf("Resumed trace at %d\n", trace_seq);
+			}
+
+			if(cmd == 'c')
+			{
+				gyrocal_state = 1;
+			}
+
+			if(cmd == '.')
+			{
+				finished = 1;
 			}
 
 			

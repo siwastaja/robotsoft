@@ -2783,7 +2783,6 @@ int match_submaps( int i_ref,  // reference submap index, to load the correct re
 #define FINE_MATCH_YAW_STEPS 13
 
 
-
 int  fine_match_submaps(cloud_t* sma, cloud_t* smb,
                         int dx, int dy, int dz, // World coordinate midpoint differences between ref and cmp
                         result_t* results_out)
@@ -2909,8 +2908,6 @@ int  fine_match_submaps(cloud_t* sma, cloud_t* smb,
 	For simplistic, classic localization on existing map
 	Works as a SLAM in easy conditions - fast, no loop closures, just matches a submap to the existing voxmap world.
 */
-#define CLASSIC_MATCH_YAW_STEP  DEGTORAD(0.75)
-#define CLASSIC_MATCH_YAW_START DEGTORAD(-5.25)
 
 #define CLASSIC_MATCH_YAW_STEPS 11
 static const double classic_yaws[CLASSIC_MATCH_YAW_STEPS] = 
@@ -3053,6 +3050,160 @@ result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32
 
 }
 
+
+#define GYROCAL_MATCH_YAW_STEP  DEGTORAD(0.5)
+#define GYROCAL_MATCH_YAW_START DEGTORAD(-45)
+#define GYROCAL_MATCH_YAW_STEPS 180
+
+
+result_t  gyrocal_match_submaps(cloud_t* sma, cloud_t* smb,
+                        int dx, int dy, int dz) // World coordinate midpoint differences between ref and cmp
+{
+	static result_t results[GYROCAL_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS];
+	memset(results, 0, sizeof(result_t)*GYROCAL_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);	
+
+	// SMA is ref_fine_matchmap
+	// SMB is cmp_fine_matchmap
+
+	// ref_fine_matchmap includes free space, so is slower to calculate
+	// cmp_fine_matchmap only includes occupied space, and is compared against ref_fine_matchmap quickly
+
+
+
+	memset(&ref_fine_matchmap, 0, sizeof(ref_fine_matchmap));
+	cloud_to_ref_fine_matchmap_free(sma, &ref_fine_matchmap, 0,0,0,0);
+	cloud_to_ref_fine_matchmap_occu(sma, &ref_fine_matchmap, 0,0,0,0);
+
+	// TODO: These batches could run in parallel, in multiple threads
+	for(int cur_yaw_step = 0; cur_yaw_step < GYROCAL_MATCH_YAW_STEPS; cur_yaw_step++)
+	{
+		double cur_yaw_corr = GYROCAL_MATCH_YAW_START + (double)cur_yaw_step*GYROCAL_MATCH_YAW_STEP;
+//		double cur_yaw_corr = 0.0;
+		// This part is per-thread.
+
+		double cx = -(double)dx;
+		double cy = -(double)dy;
+		double cz = -(double)dz;
+
+		assert(fabs(cx) < 10000.0 && fabs(cy) < 10000.0 && fabs(cz) < 2000.0);
+
+//		printf("  Fine-Matching %4d vs %4d: corr (%.0f, %.0f, %.0f, %.2f) shift (%.0f, %.0f, %.0f, %.2f)\n", 
+//			i_sma, i_smb,
+//			0.0,0.0,0.0, RADTODEG(cur_yaw_corr),
+//			cx, cy, cz, RADTODEG(cur_yaw_corr));
+
+		memset(&cmp_fine_matchmap, 0, sizeof(cmp_fine_matchmap));
+
+		int n_vox = cloud_to_cmp_fine_matchmap(smb, &cmp_fine_matchmap, cx, cy, cz, cur_yaw_corr);
+
+		//printf("%d active voxels in cmp_matchmap\n", n_vox);
+
+		match_xyz_result_t batch_results[MATCHMAP_XYZ_N_RESULTS];
+		memset(batch_results, 0, sizeof(batch_results));
+
+		match_fine_matchmaps_xyz(batch_results);
+
+		int result_idx = 
+			cur_yaw_step*MATCHMAP_XYZ_N_RESULTS;
+
+		for(int i=0; i<MATCHMAP_XYZ_N_RESULTS; i++)
+		{
+			int cur_rel_score = ((int64_t)batch_results[i].score*(int64_t)FINE_REL_SCORE_MULT)/((int64_t)n_vox*(int64_t)FINE_REL_SCORE_DIV);
+			//printf("i=%2d  (%+3d,%+3d,%+3d) score=%+8d, relative=%+6d\n",
+			//	i, 
+			//	batch_results[i].x_shift, batch_results[i].y_shift, batch_results[i].z_shift, batch_results[i].score, cur_rel_score);
+
+			results[result_idx + i].x = batch_results[i].x_shift * FINE_MATCHMAP_UNIT;
+			results[result_idx + i].y = batch_results[i].y_shift * FINE_MATCHMAP_UNIT;
+			results[result_idx + i].z = batch_results[i].z_shift * FINE_MATCHMAP_UNIT;
+			results[result_idx + i].yaw = cur_yaw_corr;
+			results[result_idx + i].score = cur_rel_score;
+			results[result_idx + i].abscore = (int64_t)batch_results[i].score/(int64_t)FINE_REL_SCORE_DIV;
+		}
+	}
+
+	qsort(results, GYROCAL_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS, sizeof(result_t), compar_scores);
+
+	#if 1
+		for(int i=0; i<GYROCAL_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS-1; i++)
+		{
+			for(int o=i+1; o<GYROCAL_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; o++)
+			{
+				double transl_dist = sqrt( sq(results[i].x-results[o].x) + sq(results[i].y-results[o].y) + sq(results[i].z-results[o].z) );
+				double rot_dist = fabs(results[i].yaw - results[o].yaw);
+
+				// dist_number: 1 degree is like 256 millimeters (0.75deg is like 192 mm)
+				double dist_number = transl_dist + RADTODEG(rot_dist)*256.0;
+
+		//		printf("i=%d, o=%d, transl_dist=%.0f  rot_dist=%.3f,  dist_number=%.0f, score[i]=%d, score[o]=%d", i, o, transl_dist, rot_dist, dist_number, results[i].score, results[o].score);
+
+				if((dist_number < 150.0) ||
+				   (dist_number < 300.0 && 105*results[o].score < 100*results[i].score) ||
+				   (dist_number < 450.0 && 110*results[o].score < 100*results[i].score) ||
+				   (dist_number < 600.0 && 115*results[o].score < 100*results[i].score) ||
+				   (dist_number < 750.0 && 120*results[o].score < 100*results[i].score))
+				{
+					results[o].score = -99999;
+		//			printf("  mash it!");
+				}
+
+		//		printf("\n");
+			}
+		}
+	#endif
+
+	int n_results = 0;
+	printf("total results (from %d pcs):\n", GYROCAL_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);
+	for(int i=0; i<GYROCAL_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; i++)
+	{
+		if(results[i].score > 0 && results[i].score > results[0].score/2)
+		{
+			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d abscore=%+5d\n",
+				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore);
+
+			n_results++;
+			if(n_results >= N_FINE_MATCH_RESULTS)
+				break;
+		}
+	}
+
+	if(n_results == 0)
+	{
+		printf("WARNING: GYROCAL FAILED. Visual clues?\n");
+		return (result_t){0};
+	}
+	else if(n_results == 1)
+	{
+		return results[0];
+	}
+	else
+	{
+		double ratio = (double)results[1].score/(double)results[0].score; // always < 1.0
+
+		double coeff0, coeff1;
+		if(ratio > 0.3)
+		{
+			ratio = ratio*ratio*ratio;
+			ratio /= 2.0; // max 0.5
+			coeff1 = ratio;
+			coeff0 = 1.0 - ratio;
+
+			return (result_t){
+				coeff0*results[0].x + coeff1*results[1].x,
+				coeff0*results[0].y + coeff1*results[1].y,
+				coeff0*results[0].z + coeff1*results[1].z,
+				coeff0*results[0].yaw + coeff1*results[1].yaw,
+				results[0].score,
+				results[0].abscore};
+
+		}
+		else
+		{
+			return results[0];
+		}
+
+	}
+}
 
 
 

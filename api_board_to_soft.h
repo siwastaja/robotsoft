@@ -298,7 +298,7 @@ typedef struct __attribute__((packed))
 void print_compass_heading(void* m);
 
 
-
+// Voxel map is for legacy reasons. Likely to be completely removed very soon. One existing machine (REV2A) uses it.
 // z_step = 100 mm
 // base_z = -250 mm
 // 0: -250 .. -150
@@ -385,6 +385,14 @@ typedef struct __attribute__((packed))
 } chafind_results_t;
 void print_chafind_results(void* m);
 
+typedef struct __attribute__((packed))
+{
+	uint8_t state; // 0 = idle, 1 = starting, 2=operating, 3 = success, 4 = failure
+	uint8_t n_rounds; // full rotation counter (almost full may count as full).
+	uint16_t dummy2;
+	int32_t avg_rate;
+} gyrocal_results_t;
+void print_gyrocal_results(void* m);
 
 /*
 	The pointers
@@ -406,6 +414,7 @@ MAYBE_EXTERN mcu_multi_voxel_map_t* mcu_multi_voxel_map;
 MAYBE_EXTERN chafind_results_t* chafind_results;
 MAYBE_EXTERN tof_slam_set_t* tof_slam_set;
 MAYBE_EXTERN compass_heading_t* compass_heading;
+MAYBE_EXTERN gyrocal_results_t* gyrocal_results;
 
 
 /*
@@ -479,6 +488,7 @@ b2s_message_t const b2s_msgs[B2S_MAX_MSGIDS] = {
 	B2S_MESSAGE_STRUCT(chafind_results, "Automatic charger mounting diagnostics"), // 13
 	B2S_MESSAGE_STRUCT(tof_slam_set, "TOF distance set for SLAM"), // 14
 	B2S_MESSAGE_STRUCT(compass_heading, "MEMS compass heading(s)"), // 15
+	B2S_MESSAGE_STRUCT(gyrocal_results, "Gyro self-calibration results"), // 16
 	{0}  
 };
 
@@ -536,42 +546,7 @@ typedef struct __attribute__((packed))
 
 
 #if 0
-
-#define TOF_FLAG_CERTAINTY_MASK 0b111
-
-typedef struct __attribute__((packed))
-{
-	uint8_t flags;
-	int16_t x;
-	int16_t y;
-	int16_t z;
-} tof_relative_point_t; // relative to robot origin
-
-
-typedef struct __attribute__((packed))
-{
-
-} b2s_tof3d_development_data_t;
-
-
-#ifdef API_MCU
-extern b2s_tof3d_development_data_t *b2s_tof3d_development_data;
-#endif
-
-typedef struct __attribute__((packed))
-{
-
-} b2s_tof3d_distance_data_t;
-
-
-typedef struct __attribute__((packed))
-{
-	uint8_t sensor_idx;
-	uint16_t n_points;
-	tof_relative_point_t
-
-} b2s_tof3d_pointcloud_data_t;
-
+// TODO: maybe implement this kind of IMU raw data format?
 typedef stuct __attribute__((packed))
 {
 	int16_t min;
@@ -579,14 +554,6 @@ typedef stuct __attribute__((packed))
 	uint16_t n;
 	int32_t acc;
 } i16_minavgmax_t;
-
-
-typedef stuct __attribute__((packed))
-{
-	int16_t x;
-	int16_t y;
-	int16_t z;
-} i16_xyz_t;
 
 // In 0.1ms
 #define FRAME_PERIOD 500 // 50ms = 20Hz

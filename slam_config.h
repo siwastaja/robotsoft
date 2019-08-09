@@ -1,6 +1,6 @@
 #pragma once
 
-#define FIRST_SIDX 0
+#define FIRST_SIDX 1
 #define LAST_SIDX 9
 
 #define VOXFILTER_N_SCANS 3

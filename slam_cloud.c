@@ -15,8 +15,6 @@
 #include "voxmap.h"
 #include "voxmap_memdisk.h"
 
-#define RESOLEVELS 0b1111
-
 
 
 /*
@@ -483,26 +481,23 @@ void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl
 
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 {
-	for(int rl=0; rl<8; rl++)
+	for(int i=0; i<cloud->n_points; i++)
 	{
-		if(!(RESOLEVELS & (1<<rl)))
-			continue;
-
-		for(int i=0; i<cloud->n_points; i++)
+		for(int rl=0; rl<MAX_RESOLEVELS; rl++)
 		{
+			if(!(RESOLEVELS & (1<<rl)))
+				continue;
+
 			po_coords_t po = po_coords(cloud->points[i].px+ref_x, cloud->points[i].py+ref_y, cloud->points[i].pz+ref_z, rl);
 
-
-			load_pages(RESOLEVELS, RESOLEVELS, po.px, po.px, po.py, po.py, po.pz, po.pz);
+			load_page_quick_and_mark_changed(po.px, po.py, po.pz);
 
 			uint8_t* p_vox = get_p_voxel(po, rl);
 			if(((*p_vox) & 0x0f) < 15)
 				(*p_vox)++;
-			mark_page_changed(po.px, po.py, po.pz);
 		}
 	}
 }
-
 
 
 

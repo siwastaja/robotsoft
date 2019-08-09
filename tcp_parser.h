@@ -233,7 +233,10 @@ extern tcp_rc_route_status_t    msg_rc_route_status;
 #define TCP_RC_LOCALIZATION_RESULT_MID 446
 
 // See small_cloud.h for definitions:
-#define TCP_RC_SMALL_CLOUD_MID       447
+#define TCP_RC_SMALL_CLOUD_MID      447
+
+// See voxmap.h for definitions:
+#define TCP_RC_VOXMAP_MID           448
 
 
 int tcp_parser(int sock);
@@ -254,6 +257,7 @@ void tcp_send_statevect();
 void tcp_send_localization_result(int32_t da, int32_t dx, int32_t dy, uint8_t success_code, int32_t score);
 #include "small_cloud.h"
 void tcp_send_small_cloud(int32_t ref_x, int32_t ref_y, int32_t ref_z, int n_points, small_cloud_t* points);
-
+#include "voxmap.h"
+void tcp_send_voxmap(voxmap_t* vm);
 
 #endif

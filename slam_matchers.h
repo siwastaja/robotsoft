@@ -106,6 +106,8 @@ ref_quality_t gen_save_ref_matchmap_set(int idxb, cloud_t* ca, cloud_t* cb, clou
 
 result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32_t ref_z);
 
+result_t  gyrocal_match_submaps(cloud_t* sma, cloud_t* smb,
+                        int dx, int dy, int dz); // World coordinate midpoint differences between ref and cmp
 
 
 

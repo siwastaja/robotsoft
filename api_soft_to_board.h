@@ -63,11 +63,8 @@ typedef struct __attribute__((packed))
 #define CMD_MOVE_REL 2
 typedef struct __attribute__((packed))
 {
-	int32_t dx;
-	int32_t dy;
-	int32_t id;
-	uint32_t backmode;
-	uint32_t reserved;
+	int32_t ang;
+	int32_t fwd;
 } s2b_move_rel_t;
 
 #define CMD_MOVE_ABS 3
@@ -141,9 +138,29 @@ typedef struct __attribute__((packed))
 #define CMD_SELF_CALIB_REQUEST 11
 typedef struct __attribute__((packed))
 {
-	uint32_t reserved;
+	int8_t   n_turns; // sign = direction
+	uint8_t  speed;
+	uint16_t reserved;
 } s2b_self_calib_request_t;
 
+typedef struct __attribute__((packed))
+{
+	int32_t pos_lospeed_at;
+	int32_t pos_lospeed_mult;
+	int32_t pos_hispeed_at;
+	int32_t pos_hispeed_mult;
+
+	int32_t neg_lospeed_at;
+	int32_t neg_lospeed_mult;
+	int32_t neg_hispeed_at;
+	int32_t neg_hispeed_mult;
+} gyro_cal_t;
+
+#define CMD_INJECT_GYROCAL 12
+typedef struct __attribute__((packed))
+{
+	gyro_cal_t gyrocal;
+} s2b_inject_gyrocal_t;
 
 typedef struct __attribute__((packed))
 {
@@ -168,6 +185,7 @@ s2b_message_t const s2b_msgs[256]  =
 	S2B_MESSAGE_STRUCT(s2b_ext_vacuum_t), // 9
 	S2B_MESSAGE_STRUCT(s2b_mount_charger_t), // 10
 	S2B_MESSAGE_STRUCT(s2b_self_calib_request_t), // 11
+	S2B_MESSAGE_STRUCT(s2b_inject_gyrocal_t), // 12
 	{0}
 };
 

@@ -27,6 +27,7 @@
 #include <string.h>
 #include <assert.h>
 
+#include "misc.h"
 #include "voxmap.h"
 #include "voxmap_memdisk.h"
 
@@ -198,7 +199,9 @@ static int alloc_empty_page_single_rl(int idx, int rl)
 
 	page_pointers[idx].p_voxmap[rl] = malloc(sizeof(voxmap_t));
 	int ret = init_empty_voxmap(page_pointers[idx].p_voxmap[rl],
-		px*VOX_UNITS[rl], py*VOX_UNITS[rl], pz*VOX_UNITS[rl],
+		px*VOX_XS[rl]*VOX_UNITS[rl]-VOX_UNITS[rl]*VOX_XS[rl]*(MAX_PAGES_X/2),
+		py*VOX_YS[rl]*VOX_UNITS[rl]-VOX_UNITS[rl]*VOX_YS[rl]*(MAX_PAGES_Y/2),
+		pz*VOX_ZS[rl]*VOX_UNITS[rl]-VOX_UNITS[rl]*VOX_ZS[rl]*(MAX_PAGES_Z/2),
 		VOX_XS[rl], VOX_YS[rl], VOX_ZS[rl], VOX_UNITS[rl], VOX_UNITS[rl]);
 	assert(ret >= 0);
 
@@ -208,10 +211,8 @@ static int alloc_empty_page_single_rl(int idx, int rl)
 	return 0;
 }
 
-
 /*
 	load_pages: call this whenever you are going to access the map buffers
-
 
 	open_files: set bits to '1' to search for and open files of the related resolevels.
 	If false, only empty maps are created, and potential files overwritten later.
@@ -223,7 +224,132 @@ static int alloc_empty_page_single_rl(int idx, int rl)
 	Safe and efficient to call even when pages in the range are already loaded.
 
 	Also safe to call even if ranges are partially outside of valid range (fully out of range does nothing)
+
+	Not recommended to call for every point in a pointcloud (tens of thousands of times). timestamp increases possibly too quickly,
+	and the function is not _that_ efficient.
 */
+
+/*
+load_page_quick, loads single page, with the following assumptions:
+ * file is opened, if it exists,
+ * empty page is created, if the file doesn't exist
+
+*/
+
+void load_page_quick(int xx, int yy, int zz)
+{
+	cur_timestamp++;
+
+	for(int rl=0; rl<MAX_RESOLEVELS; rl++)
+	{
+		if(!(RESOLEVELS&(1<<rl)))
+			continue;
+
+		if(LIKELY(page_metas[xx][yy][zz].loaded & (1<<rl)))
+		{
+			//printf("INFO: load_pages(): page (%d,%d,%d,rl%d) already loaded\n", xx, yy, zz, rl);
+			// Need to update the timestamp: otherwise this page we need could be kicked out.
+			page_pointers[page_metas[xx][yy][zz].flags_mem_idx&PAGE_META_MEM_IDX_MASK].access_timestamp = cur_timestamp;
+			continue;
+		}
+
+		int idx = find_memslot_for_page(xx, yy, zz);
+		if(idx < 0)
+			idx = create_memslot_for_page();
+		page_pointers[idx].px = xx;
+		page_pointers[idx].py = yy;
+		page_pointers[idx].pz = zz;
+		page_metas[xx][yy][zz].flags_mem_idx = idx; // Zero the flags at the same time.
+
+		int do_empty = 0;
+
+		// Try opening the file:
+		{
+			int ret = alloc_read_page_single_rl(idx, rl);
+			if(ret == ERR_MAPFILE_NOT_FOUND)
+				do_empty = 1;
+			if(ret < 0 && ret != ERR_MAPFILE_NOT_FOUND)
+			{
+				printf("WARNING: reading voxmap failed. Starting an empty one. TODO: This may be unwanted behavior.\n");
+				do_empty = 1;
+			}
+		}
+
+		if(do_empty)
+		{
+			//printf("INFO: load_pages(): allocating a new empty page (%d,%d,%d,rl%d), memslot %d\n", xx, yy, zz, rl, idx);
+			alloc_empty_page_single_rl(idx, rl);
+		}
+
+		// As a result, we must have a loaded page, and a valid pointer, leading to a valid voxmap struct. Test everything:
+		assert(page_metas[xx][yy][zz].loaded & (1<<rl));
+		int check_idx = page_metas[xx][yy][zz].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
+		//printf("PIDXES (%d, %d, %d), check_idx=%d\n", xx, yy, zz, check_idx);
+
+		assert(page_pointers[check_idx].p_voxmap[rl]);
+		assert(page_pointers[check_idx].p_voxmap[rl]->header.magic == 0xaa13);
+	}
+}
+
+
+void load_page_quick_and_mark_changed(int xx, int yy, int zz)
+{
+	cur_timestamp++;
+
+	for(int rl=0; rl<MAX_RESOLEVELS; rl++)
+	{
+		if(!(RESOLEVELS&(1<<rl)))
+			continue;
+
+		if(LIKELY(page_metas[xx][yy][zz].loaded & (1<<rl)))
+		{
+			//printf("INFO: load_pages(): page (%d,%d,%d,rl%d) already loaded\n", xx, yy, zz, rl);
+			// Need to update the timestamp: otherwise this page we need could be kicked out.
+			page_metas[xx][yy][zz].flags_mem_idx |= PAGE_META_FLAG_CHANGED;
+			page_pointers[page_metas[xx][yy][zz].flags_mem_idx&PAGE_META_MEM_IDX_MASK].access_timestamp = cur_timestamp;
+			continue;
+		}
+
+		int idx = find_memslot_for_page(xx, yy, zz);
+		if(idx < 0)
+			idx = create_memslot_for_page();
+		page_pointers[idx].px = xx;
+		page_pointers[idx].py = yy;
+		page_pointers[idx].pz = zz;
+		page_metas[xx][yy][zz].flags_mem_idx = idx | PAGE_META_FLAG_CHANGED; // Zero other flags at the same time.
+
+		int do_empty = 0;
+
+		// Try opening the file:
+		{
+			int ret = alloc_read_page_single_rl(idx, rl);
+			if(ret == ERR_MAPFILE_NOT_FOUND)
+				do_empty = 1;
+			if(ret < 0 && ret != ERR_MAPFILE_NOT_FOUND)
+			{
+				printf("WARNING: reading voxmap failed. Starting an empty one. TODO: This may be unwanted behavior.\n");
+				do_empty = 1;
+			}
+		}
+
+		if(do_empty)
+		{
+			//printf("INFO: load_pages(): allocating a new empty page (%d,%d,%d,rl%d), memslot %d\n", xx, yy, zz, rl, idx);
+			alloc_empty_page_single_rl(idx, rl);
+		}
+
+		// As a result, we must have a loaded page, and a valid pointer, leading to a valid voxmap struct. Test everything:
+		assert(page_metas[xx][yy][zz].loaded & (1<<rl));
+		int check_idx = page_metas[xx][yy][zz].flags_mem_idx&PAGE_META_MEM_IDX_MASK;
+		//printf("PIDXES (%d, %d, %d), check_idx=%d\n", xx, yy, zz, check_idx);
+
+		assert(page_pointers[check_idx].p_voxmap[rl]);
+		assert(page_pointers[check_idx].p_voxmap[rl]->header.magic == 0xaa13);
+	}
+
+}
+
+
 void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_end, int py_start, int py_end, int pz_start, int pz_end)
 {
 	assert(open_files || create_emptys); // Doesn't make any sense to do nothing
@@ -419,12 +545,29 @@ void store_all_pages()
 	{
 		if(page_metas[page_pointers[idx].px][page_pointers[idx].py][page_pointers[idx].pz].loaded)
 		{
-//			printf("free_all_pages: idx=%d, (%d,%d,%d)\n", idx, 
-//				page_pointers[idx].px, page_pointers[idx].py, page_pointers[idx].pz);
 			store_page(idx);
 		}
 	}
-
-	
 }
 
+void do_something_to_changed_pages(void (*doer)(voxmap_t*))
+{
+	for(int idx=0; idx < MAX_LOADED_PAGES; idx++)
+	{
+		int px = page_pointers[idx].px;
+		int py = page_pointers[idx].py;
+		int pz = page_pointers[idx].pz;
+		if(page_metas[px][py][pz].loaded && 
+		   (page_metas[px][py][pz].flags_mem_idx & PAGE_META_FLAG_CHANGED))
+		{
+			for(int rl=0; rl < MAX_RESOLEVELS; rl++)
+			{
+				if(page_metas[px][py][pz].loaded & (1<<rl))
+				{
+					assert(page_pointers[idx].p_voxmap[rl] != NULL);
+					doer(page_pointers[idx].p_voxmap[rl]);
+				}
+			}
+		}
+	}
+}

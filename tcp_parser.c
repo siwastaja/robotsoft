@@ -250,6 +250,76 @@ void tcp_send_small_cloud(int32_t ref_x, int32_t ref_y, int32_t ref_z, int n_poi
 	free(tcpbuf);
 }
 
+#include "voxmap.h"
+
+// Always compressed
+void tcp_send_voxmap(voxmap_t* vm)
+{
+	// Recheck to avoid ridiculous file sizes, in case someone messed up after init, or forgot to init.
+	int n_bytes = vm->header.xs*vm->header.ys*vm->header.zs;
+	if(n_bytes < 0 || n_bytes > VOXMAP_MAX_VOXELS)
+	{
+		printf("tcp_send_voxmap(): ERROR: invalid number of voxels (%d x %d x %d)\n", vm->header.xs, vm->header.ys, vm->header.zs);
+		return;
+	}
+
+	// Assume at least 1/5 compression, to save memory. 
+	// It is almost impossible to fail; if it does happen, we report an error.
+	int max_size_compressed_voxels = n_bytes/5;
+
+	int bufsize = sizeof(voxmap_header_t) + max_size_compressed_voxels;
+
+	//printf("tcp_send_voxmap(), ref (%d, %d, %d)\n", vm->header.ref_x_mm, vm->header.ref_y_mm, vm->header.ref_z_mm);
+	vm->header.compression = 1;
+
+	uint8_t* tcpbuf = malloc(bufsize);
+
+	if(!tcpbuf)
+	{
+		printf("Out of memory in tcp_send_voxmap\n");
+		abort();
+	}
+
+	memcpy(tcpbuf, &vm->header, sizeof(voxmap_header_t));
+
+	z_stream strm;
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque = Z_NULL;
+	if(deflateInit(&strm, TCP_ZLIB_LEVEL) != Z_OK)
+	{
+		printf("ERROR: ZLIB initialization failed\n");
+		abort();
+	}
+	strm.avail_in = n_bytes;
+	strm.next_in = (uint8_t*)vm->voxels;
+
+	strm.avail_out = max_size_compressed_voxels;
+	strm.next_out = tcpbuf + sizeof(voxmap_header_t);
+
+	int ret = deflate(&strm, Z_FINISH);
+	assert(ret != Z_STREAM_ERROR);
+
+	int produced = max_size_compressed_voxels - strm.avail_out;
+
+	assert(strm.avail_out > 0);
+	assert(produced > 0);
+	if(strm.avail_in != 0)
+	{
+		printf("ERROR: tcp_send_voxmap(): compressed data won't fit the buffer. Won't send.\n");
+		deflateEnd(&strm);
+		free(tcpbuf);
+		return;
+	}
+
+	deflateEnd(&strm);
+
+	tcp_send(TCP_RC_VOXMAP_MID, sizeof(voxmap_header_t) + produced, tcpbuf);
+
+	free(tcpbuf);
+}
+
+
 
 void tcp_send_sync_request()
 {
