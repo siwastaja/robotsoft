@@ -120,12 +120,12 @@ static const int VOX_ZS[MAX_RESOLEVELS] =
 	that would waste 1024MB (compare to 64MB here).
 */
 
-#define PAGE_META_FLAG_CHANGED (1<<12)
+#define PAGE_META_FLAG_CHANGED (1<<12) // Page is in memory, and has been changed. Storing is needed.
+#define PAGE_META_FLAG_STORED  (1<<13) // Page isn't in memory (anymore), but was changed, and thus was stored. You may want to read it to see changes.
 #define PAGE_META_MEM_IDX_MASK (0xfff)
 
 typedef struct __attribute__ ((packed))
 {
-//	uint8_t exists;
 	uint8_t loaded;
 
 	uint16_t flags_mem_idx; // 4 bits for flags, 12 bits for mem idx
@@ -173,7 +173,7 @@ typedef struct __attribute__ ((packed))
 //	uint8_t loaded;
 
 	uint64_t access_timestamp;
-	voxmap_t* p_voxmap[8]; // [0] = highest resolevel
+	voxmap_t* p_voxmap[MAX_RESOLEVELS]; // [0] = highest resolevel
 
 	// reference back to the meta
 	uint16_t px;
@@ -205,8 +205,8 @@ typedef struct
 	int oz;
 } po_coords_t;
 
-static inline po_coords_t po_coords(int x, int y, int z, int rl) __attribute__((always_inline));
-static inline po_coords_t po_coords(int x, int y, int z, int rl)
+// Input: millimeters. Output: page indeces and page offsets.
+static inline __attribute__((always_inline)) po_coords_t po_coords(int x, int y, int z, int rl)
 {
 	x += VOX_UNITS[rl]*VOX_XS[rl]*(MAX_PAGES_X/2);
 	y += VOX_UNITS[rl]*VOX_YS[rl]*(MAX_PAGES_Y/2);
@@ -226,8 +226,21 @@ static inline po_coords_t po_coords(int x, int y, int z, int rl)
 	return ret;
 }
 
-static inline uint8_t* get_p_voxel(po_coords_t c, int rl) __attribute__((always_inline));
-static inline uint8_t* get_p_voxel(po_coords_t c, int rl)
+// Input: Middle-biased (always positive) block units in whatever resolevel. Output: page indeces and page offsets in that same resolevel
+static inline __attribute__((always_inline)) po_coords_t po_unit_coords(int x, int y, int z, int rl)
+{
+	po_coords_t ret;
+	ret.px = x/VOX_XS[rl];
+	ret.py = y/VOX_YS[rl];
+	ret.pz = z/VOX_ZS[rl];
+	ret.ox = x%VOX_XS[rl];
+	ret.oy = y%VOX_YS[rl];
+	ret.oz = z%VOX_ZS[rl];
+	return ret;
+}
+
+
+static inline __attribute__((always_inline)) uint8_t* get_p_voxel(po_coords_t c, int rl)
 {
 	if(!(c.px >= PX_MIN && c.px <= PX_MAX && c.py >= PY_MIN && c.py <= PY_MAX && c.pz >= PZ_MIN && c.pz <= PZ_MAX) ||
 	   !(c.ox >= 0 && c.oy <= VOX_XS[rl]-1 &&  c.oy >= 0 && c.oy <= VOX_YS[rl]-1 && c.oz >= 0 && c.oz <= VOX_ZS[rl]-1))
@@ -258,6 +271,7 @@ void mem_manage_pages(int time_threshold);
 void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_end, int py_start, int py_end, int pz_start, int pz_end);
 void load_page_quick(int xx, int yy, int zz);
 void load_page_quick_and_mark_changed(int xx, int yy, int zz);
+void load_page_quick_nonew(int xx, int yy, int zz);
 
 void free_all_pages();
 void store_all_pages();
@@ -266,4 +280,10 @@ char* gen_fname(char* dir, int px, int py, int pz, int resolevel, char* buf);
 // Iterates through all memory-loaded pages; if the page is changed, iterates through all loaded resolevels,
 // and calls the supplied function pointer.
 void do_something_to_changed_pages(void (*doer)(voxmap_t*));
+
+// Iterates through the whole world range, looking for pages tagged as not-in-memory-but-stored. Loads
+// them from disk to memory, to call the supplied function, immediately releasing the memory.
+// Removes the stored flag after the operation.
+void do_something_to_stored_pages(void (*doer)(voxmap_t*));
+
 

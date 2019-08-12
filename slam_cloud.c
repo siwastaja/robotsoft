@@ -273,9 +273,9 @@ void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw)
 #define CLOUDFLT_UNIT 32 //mm
 */
 
-#define CLOUDFLT_XS 800
-#define CLOUDFLT_YS 800
-#define CLOUDFLT_ZS 256
+#define CLOUDFLT_XS 512
+#define CLOUDFLT_YS 512
+#define CLOUDFLT_ZS 128
 #define CLOUDFLT_UNIT 64 //mm
 
 static uint8_t free_cnt[CLOUDFLT_XS][CLOUDFLT_YS][CLOUDFLT_ZS];
@@ -478,9 +478,62 @@ void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl
 
 }
 
+/*
+	Use the same free space buffer as filter_cloud, but only generate said buffer; don't output any points.
+*/
+void generate_cloudflt_free(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z)
+{
+//	printf("filter_cloud ref (%d, %d, %d)\n", ref_x, ref_y, ref_z);
+	memset(free_cnt, 0, sizeof(free_cnt));
 
+	// Trace empty space:
+	for(int p=0; p<cloud->n_points; p++)
+	{
+		int sx = (cloud->points[p].sx + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int sy = (cloud->points[p].sy + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int sz = (cloud->points[p].sz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
+		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
+		//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
+		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
+	}
+
+	// Remove free space next to the points
+	for(int p=0; p<cloud->n_points; p++)
+	{
+		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
+		//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
+
+		if(px >= 2 && px < CLOUDFLT_XS-2 &&
+		   py >= 2 && py < CLOUDFLT_YS-2 &&
+		   pz >= 2 && pz < CLOUDFLT_ZS-2)
+		{
+			for(int ix=-2; ix<=+2; ix++)
+				for(int iy=-2; iy<=+2; iy++)
+					for(int iz=-2; iz<=+2; iz++)
+						free_cnt[px+ix][py+iy][pz+iz] = 0;
+		}
+	}
+
+}
+
+
+#define CLOUD_TO_VOXMAP_TRACE_FREE
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 {
+	printf("cloud_to_voxmap .."); fflush(stdout);
+	#ifdef CLOUD_TO_VOXMAP_TRACE_FREE
+		generate_cloudflt_free(cloud, 0, 0, 0);
+
+		printf(" generated free .."); fflush(stdout);
+
+	#endif
 	for(int i=0; i<cloud->n_points; i++)
 	{
 		for(int rl=0; rl<MAX_RESOLEVELS; rl++)
@@ -488,15 +541,94 @@ void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 			if(!(RESOLEVELS & (1<<rl)))
 				continue;
 
-			po_coords_t po = po_coords(cloud->points[i].px+ref_x, cloud->points[i].py+ref_y, cloud->points[i].pz+ref_z, rl);
+			po_coords_t po_p = po_coords(cloud->points[i].px+ref_x, cloud->points[i].py+ref_y, cloud->points[i].pz+ref_z, rl);
+			load_page_quick_and_mark_changed(po_p.px, po_p.py, po_p.pz);
 
-			load_page_quick_and_mark_changed(po.px, po.py, po.pz);
-
-			uint8_t* p_vox = get_p_voxel(po, rl);
+			uint8_t* p_vox = get_p_voxel(po_p, rl);
 			if(((*p_vox) & 0x0f) < 15)
 				(*p_vox)++;
 		}
 	}
+
+	printf(" added points .."); fflush(stdout);
+
+	// OPT_TODO: Page numbers are always the same for each resolevel, so one load would be enough
+
+	#ifdef CLOUD_TO_VOXMAP_TRACE_FREE
+		// Load multiple pages at once
+		for(int xx=0; xx<CLOUDFLT_XS; xx++)
+		{
+			int freemap_offs_x = (xx-(CLOUDFLT_XS/2))*CLOUDFLT_UNIT;
+
+			// x and y ranges for load. rl irrelevant, only using page numbers
+			// End ranges have +32, because rl0 is handled to produce 2*2*2 output voxels, see below
+			po_coords_t polx0 = po_coords(freemap_offs_x+ref_x, (-CLOUDFLT_YS/2-1)*CLOUDFLT_UNIT+ref_y, 0, 0);
+			po_coords_t polx1 = po_coords(freemap_offs_x+ref_x+32, ( CLOUDFLT_YS/2+1)*CLOUDFLT_UNIT+ref_y+32, 0, 0);
+
+			// z range for load
+			po_coords_t polz0 = po_coords(0, 0, (-CLOUDFLT_ZS/2-1)*CLOUDFLT_UNIT+ref_z, 0);
+			po_coords_t polz1 = po_coords(0, 0, ( CLOUDFLT_ZS/2+1)*CLOUDFLT_UNIT+ref_z+32, 0);
+
+			load_pages(RESOLEVELS, RESOLEVELS, polx0.px, polx1.px, polx0.py, polx1.py, polz0.pz, polz1.pz);
+			//printf("LOAD: %d,%d   %d,%d   %d,%d\n", polx0.px, polx1.px, polx0.py, polx1.py, polz0.pz, polz1.pz);
+
+			for(int yy=0; yy<CLOUDFLT_YS; yy++)
+			{
+				int freemap_offs_y = (yy-(CLOUDFLT_YS/2))*CLOUDFLT_UNIT;
+				for(int zz=0; zz<CLOUDFLT_ZS; zz++)
+				{
+					int freemap_offs_z = (zz-(CLOUDFLT_ZS/2))*CLOUDFLT_UNIT;
+					if(free_cnt[xx][yy][zz] > 0) // free space - mark it free, remove objects
+					{
+
+						// rl0 separately - step 32mm, freemap step 64mm, copy 2*2*2 times.
+						if(RESOLEVELS & 1)
+						{
+							for(int iy=0; iy<=1; iy++)
+							{
+								for(int ix=0; ix<=1; ix++)
+								{
+									for(int iz=0; iz<=1; iz++)
+									{
+										po_coords_t po_f = po_coords(ref_x+freemap_offs_x+ix*32, ref_y+freemap_offs_y+iy*32, ref_z+freemap_offs_z+iz*32, 0);
+										//load_page_quick_and_mark_changed(po_f.px, po_f.py, po_f.pz);
+										mark_page_changed(po_f.px, po_f.py, po_f.pz);
+										//printf("%d %d %d; ", po_f.px, po_f.py, po_f.pz);
+
+										uint8_t* p_vox = get_p_voxel(po_f, 0);
+
+										*p_vox = 0xf0; // mark free and remove objects.
+									}
+								}
+							}
+						}
+
+						for(int rl=1; rl<MAX_RESOLEVELS; rl++)
+						{
+							if(!(RESOLEVELS & (1<<rl)))
+								continue;
+
+							po_coords_t po_f = po_coords(ref_x+freemap_offs_x, ref_y+freemap_offs_y, ref_z+freemap_offs_z, rl);
+							//load_page_quick_and_mark_changed(po_f.px, po_f.py, po_f.pz);
+							mark_page_changed(po_f.px, po_f.py, po_f.pz);
+							//printf("%d %d %d; ", po_f.px, po_f.py, po_f.pz);
+
+							uint8_t* p_vox = get_p_voxel(po_f, rl);
+
+							*p_vox = 0xf0; // mark free and remove objects.
+
+						}
+					}
+
+				}
+			}
+		}
+
+		printf(" added free .."); fflush(stdout);
+
+	#endif
+
+	printf(" done\n");
 }
 
 

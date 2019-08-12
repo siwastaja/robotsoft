@@ -131,6 +131,9 @@ typedef struct  __attribute__ ((packed))
 */
 #define VOXEL(vm_, x_, y_, z_) ((vm_).voxels[((y_)*(vm_).header.xs*(vm_).header.zs) + ((x_)*(vm_).header.zs)  + (z_)])
 
+// Even faster access, prove your own fixed xs, ys, zs:
+#define VOXEL_FASTEST(vm_, x_, y_, z_, xs_, ys_, zs_) ((vm_).voxels[((y_)*(xs_)*(zs_)) + ((x_)*(zs_))  + (z_)])
+
 
 #define ERR_MAPFILE_NOT_FOUND (-10)
 

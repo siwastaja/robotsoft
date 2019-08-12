@@ -82,7 +82,8 @@ static void store_page(int idx)
 		if(page_metas[px][py][pz].loaded & (1<<rl))
 		{
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);
-			//printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
+			printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
+			page_metas[px][py][pz].flags_mem_idx |= PAGE_META_FLAG_STORED;
 			write_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("./current_maps", px, py, pz, rl, fnamebuf), mode_compression);
 		}
 	}
@@ -164,9 +165,9 @@ static int create_memslot_for_page()
 			}
 		}
 
-		//printf("INFO: Kicking out oldest page idx=%d (%d,%d,%d), timestamp %" PRIu64 "\n", oldest_i,
-		//	page_pointers[oldest_i].px, page_pointers[oldest_i].py, page_pointers[oldest_i].pz,
-		//	smallest_stamp);
+//		printf("INFO: Kicking out oldest page idx=%d (%d,%d,%d), timestamp %" PRIu64 "\n", oldest_i,
+//			page_pointers[oldest_i].px, page_pointers[oldest_i].py, page_pointers[oldest_i].pz,
+//			smallest_stamp);
 
 		store_page(oldest_i);
 		free_page(oldest_i);
@@ -211,23 +212,7 @@ static int alloc_empty_page_single_rl(int idx, int rl)
 	return 0;
 }
 
-/*
-	load_pages: call this whenever you are going to access the map buffers
 
-	open_files: set bits to '1' to search for and open files of the related resolevels.
-	If false, only empty maps are created, and potential files overwritten later.
-
-	create_emptys: set bits to '1' to create empty maps, but only when no file is found.
-
-	Both start and end indeces are inclusive.
-
-	Safe and efficient to call even when pages in the range are already loaded.
-
-	Also safe to call even if ranges are partially outside of valid range (fully out of range does nothing)
-
-	Not recommended to call for every point in a pointcloud (tens of thousands of times). timestamp increases possibly too quickly,
-	and the function is not _that_ efficient.
-*/
 
 /*
 load_page_quick, loads single page, with the following assumptions:
@@ -259,7 +244,10 @@ void load_page_quick(int xx, int yy, int zz)
 		page_pointers[idx].px = xx;
 		page_pointers[idx].py = yy;
 		page_pointers[idx].pz = zz;
-		page_metas[xx][yy][zz].flags_mem_idx = idx; // Zero the flags at the same time.
+
+		// Zero the flags at the same time, EXCEPT PAGE_META_FLAG_STORED.
+		page_metas[xx][yy][zz].flags_mem_idx = 
+			(page_metas[xx][yy][zz].flags_mem_idx & PAGE_META_FLAG_STORED) | idx;
 
 		int do_empty = 0;
 
@@ -316,7 +304,9 @@ void load_page_quick_and_mark_changed(int xx, int yy, int zz)
 		page_pointers[idx].px = xx;
 		page_pointers[idx].py = yy;
 		page_pointers[idx].pz = zz;
-		page_metas[xx][yy][zz].flags_mem_idx = idx | PAGE_META_FLAG_CHANGED; // Zero other flags at the same time.
+		// Zero the flags at the same time, EXCEPT PAGE_META_FLAG_STORED.
+		page_metas[xx][yy][zz].flags_mem_idx = 
+			(page_metas[xx][yy][zz].flags_mem_idx & PAGE_META_FLAG_STORED) | idx;
 
 		int do_empty = 0;
 
@@ -349,6 +339,24 @@ void load_page_quick_and_mark_changed(int xx, int yy, int zz)
 
 }
 
+
+/*
+	load_pages: call this whenever you are going to access the map buffers
+
+	open_files: set bits to '1' to search for and open files of the related resolevels.
+	If false, only empty maps are created, and potential files overwritten later.
+
+	create_emptys: set bits to '1' to create empty maps, but only when no file is found.
+
+	Both start and end indeces are inclusive.
+
+	Safe and efficient to call even when pages in the range are already loaded.
+
+	Also safe to call even if ranges are partially outside of valid range (fully out of range does nothing)
+
+	Not recommended to call for every point in a pointcloud (tens of thousands of times). timestamp increases possibly too quickly,
+	and the function is not _that_ efficient.
+*/
 
 void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_end, int py_start, int py_end, int pz_start, int pz_end)
 {
@@ -417,7 +425,10 @@ void load_pages(uint8_t open_files, uint8_t create_emptys, int px_start, int px_
 					page_pointers[idx].py = yy;
 					page_pointers[idx].pz = zz;
 					assert((idx&PAGE_META_MEM_IDX_MASK) == idx); // idx must fit into its bitmask.
-					page_metas[xx][yy][zz].flags_mem_idx = idx; // Zero the flags at the same time.
+
+					// Zero the flags at the same time, EXCEPT PAGE_META_FLAG_STORED.
+					page_metas[xx][yy][zz].flags_mem_idx = 
+						(page_metas[xx][yy][zz].flags_mem_idx & PAGE_META_FLAG_STORED) | idx;
 
 					int do_empty = 0;
 					if(open_files & (1<<rl))
@@ -560,14 +571,70 @@ void do_something_to_changed_pages(void (*doer)(voxmap_t*))
 		if(page_metas[px][py][pz].loaded && 
 		   (page_metas[px][py][pz].flags_mem_idx & PAGE_META_FLAG_CHANGED))
 		{
+
+			//printf("INFO: do_something_to_changed_pages: page (%d,%d,%d) changed ... ", px,py,pz); fflush(stdout);
+
 			for(int rl=0; rl < MAX_RESOLEVELS; rl++)
 			{
 				if(page_metas[px][py][pz].loaded & (1<<rl))
 				{
+					//printf("rl%d loaded -> calling doer", rl); fflush(stdout);
 					assert(page_pointers[idx].p_voxmap[rl] != NULL);
 					doer(page_pointers[idx].p_voxmap[rl]);
 				}
 			}
+			//printf("\n");
 		}
 	}
 }
+
+void do_something_to_stored_pages(void (*doer)(voxmap_t*))
+{
+	voxmap_t* tmp_voxmap = malloc(sizeof(voxmap_t));
+	for(int px=0; px<MAX_PAGES_X; px++)
+	{
+		for(int py=0; py<MAX_PAGES_Y; py++)
+		{
+			for(int pz=0; pz<MAX_PAGES_Z; pz++)
+			{
+				if((page_metas[px][py][pz].flags_mem_idx & PAGE_META_FLAG_STORED))
+				{
+					//printf("INFO: do_something_to_stored_pages: page (%d,%d,%d) stored ... ", px,py,pz); fflush(stdout);
+
+					for(int rl=0; rl < MAX_RESOLEVELS; rl++)
+					{
+						if(page_metas[px][py][pz].loaded & (1<<rl))
+						{
+							//printf(" already loaded -> calling doer... "); fflush(stdout);
+							assert(page_pointers[page_metas[px][py][pz].flags_mem_idx&PAGE_META_MEM_IDX_MASK].p_voxmap[rl]);
+							doer(page_pointers[page_metas[px][py][pz].flags_mem_idx&PAGE_META_MEM_IDX_MASK].p_voxmap[rl]);
+						}
+						else
+						{
+							int ret = read_voxmap(tmp_voxmap, gen_fname("./current_maps", px, py, pz, rl, fnamebuf));
+
+							//printf(" read rl%d ret %d ... ", rl, ret); fflush(stdout);
+							if(ret >= 0)
+							{
+								//printf(" calling doer ..."); fflush(stdout);
+								doer(tmp_voxmap);
+								deinit_voxmap(tmp_voxmap);
+							}
+						}
+					}
+					page_metas[px][py][pz].flags_mem_idx &= ~PAGE_META_FLAG_STORED;
+
+					//printf("\n");
+				}
+
+			}
+
+		}
+
+	}
+
+	free(tmp_voxmap);
+}
+
+
+

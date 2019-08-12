@@ -21,7 +21,7 @@
 
 float main_robot_xs = 600.0;
 float main_robot_ys = 450.0;
-float main_robot_middle_to_lidar = -120.0;
+float main_robot_middle_to_origin = -120.0;
 
 /*
 
@@ -101,6 +101,8 @@ float main_robot_middle_to_lidar = -120.0;
 #include "slam_top.h"
 #include "slam_cloud.h"
 
+#include "voxmap_memdisk.h"
+
 #define DEFAULT_SPEEDLIM 45
 #define MAX_CONFIGURABLE_SPEEDLIM 70
 
@@ -179,7 +181,7 @@ int partial_route = 0;
 int id_cnt = 1;
 int good_time_for_lidar_mapping = 0;
 
-int route_reverse = 1;
+int route_reverse = 0;
 
 void send_info(info_state_t state)
 {
@@ -196,11 +198,11 @@ static volatile sig_atomic_t search_thread_running;
 static volatile sig_atomic_t search_thread_retval;
 int search_instructed;
 
-#if 0
+
 pthread_t thread_search;
 void* search_thread()
 {
-	int ret = search_route(&world, &some_route, ANG32TORAD(cur_ang), cur_x, cur_y, search_thread_dest_x, search_thread_dest_y, route_reverse);
+	int ret = search_route(&some_route, ANG32TORAD(cur_ang), cur_x, cur_y, search_thread_dest_x, search_thread_dest_y, route_reverse);
 
 	search_thread_retval = ret;
 	search_thread_running = 0;
@@ -288,7 +290,7 @@ int poll_search_status(int act_as_well)
 //			printf("         ");
 
 		int x_mm, y_mm;
-		mm_from_unit_coords(rt->loc.x, rt->loc.y, &x_mm, &y_mm);					
+		mm_from_routing_unit_coords(rt->loc.x, rt->loc.y, &x_mm, &y_mm);					
 //		printf("to %d,%d\n", x_mm, y_mm);
 
 		the_route[len].x = x_mm; 
@@ -358,11 +360,8 @@ int rerun_search()
 {
 	return run_search(prev_search_dest_x, prev_search_dest_y, 0);
 }
-#endif
-int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars){}
-int poll_search_status(int act_as_well){}
-void send_route_end_status(uint8_t reason){}
-int rerun_search() {}
+
+
 
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn);
 int rerequest_move_to();
@@ -1167,12 +1166,14 @@ void save_trace(int seq, uint8_t* p_data)
 
 #include "voxmap.h"
 
-void send_voxmap_on_wire(voxmap_t* vm)
+void process_new_voxmaps(voxmap_t* vm)
 {
 	if(tcp_client_sock >= 0 && tcp_is_space_for_noncritical_message())
 	{
 		tcp_send_voxmap(vm);
 	}
+
+	voxmap_to_routing_pages(vm);
 }
 
 void* main_thread()
@@ -1180,6 +1181,8 @@ void* main_thread()
 	init_slam();
 	load_sensor_softcals();
 	load_poscorr();
+
+	load_routing_pages();
 
 	int find_charger_state = 0;
 
@@ -1648,9 +1651,8 @@ void* main_thread()
 									printf("Correcting by yaw=%d, x=%d, y=%d\n", da/ANG_0_1_DEG, dx, dy);
 									sw_correct_pos(da, dx, dy);
 
-									if(tcp_client_sock >= 0)
-										do_something_to_changed_pages(send_voxmap_on_wire);
-
+									do_something_to_changed_pages(process_new_voxmaps);
+									do_something_to_stored_pages(process_new_voxmaps);
 								}
 							}
 						}
@@ -2304,35 +2306,31 @@ void* main_thread()
 		static double prev_sync = 0;
 		double stamp;
 
-		double write_interval = 30.0;
-		if(tcp_client_sock >= 0)
-			write_interval = 7.0;
+		double write_interval = 5.0;
+//		if(tcp_client_sock >= 0)
+//			write_interval = 7.0;
 
-#if 0
+#if 1
 		if( (stamp=subsec_timestamp()) > prev_sync+write_interval)
 		{
 			prev_sync = stamp;
 
-			int idx_x, idx_y, offs_x, offs_y;
-//			page_coords(cur_x, cur_y, &idx_x, &idx_y, &offs_x, &offs_y);
+			// Writes changed routing pages, if they exist, at most only one at a time.
+			// They are small 2.5kB files.
+			manage_routing_page_saves();
 
-			// Do some "garbage collection" by disk-syncing and deallocating far-away map pages.
-//			unload_map_pages(&world, idx_x, idx_y);
-
-			// Sync all changed map pages to disk
-			if(save_map_pages(&world))
-			{
-				if(tcp_client_sock >= 0 && tcp_is_space_for_noncritical_message()) tcp_send_sync_request();
-			}
 			if(tcp_client_sock >= 0)
 			{
 				tcp_send_statevect();
 			}
 
-			fflush(stdout); // syncs log file.
-
+			fflush(stdout); // syncs log file (if you run robotsoft > log)
 		}
 #endif
+
+		
+		manage_routing_page_saves();
+
 
 		if(cmd_send_to_robot)
 		{

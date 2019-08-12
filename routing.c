@@ -1,7 +1,7 @@
 /*
-	PULUROBOT RN1-HOST Computer-on-RobotBoard main software
+	PULUROBOT Robotsoft Computer-on-RobotBoard main software
 
-	(c) 2017-2018 Pulu Robotics and other contributors
+	(c) 2017-2019 Pulu Robotics and other contributors
 	Maintainer: Antti Alhonen <antti.alhonen@iki.fi>
 
 	This program is free software; you can redistribute it and/or modify
@@ -33,7 +33,7 @@
 	A 60x speed increase has already been optimized in compared to the first dumb
 	implementation,	but I'm sure there's still a lot to do.
 
-	One "routing unit" is 50x50mm.
+	One "routing unit" is one resolevel1 unit: currently 64x64mm.
 
 */
 
@@ -45,44 +45,51 @@
 #include <stdio.h>
 #include <math.h>
 #include <inttypes.h>
+#include <errno.h>
+#include <dirent.h>
 
-#include "mapping.h"
 #include "routing.h"
 #include "uthash.h"
 #include "utlist.h"
+#include "misc.h"
+
+#include "voxmap.h"
+#include "voxmap_memdisk.h"
 
 #ifndef M_PI
 #define M_PI 3.141592653589793238
 #endif
 /*
 #ifdef PULU1
-float main_robot_xs = 300.0;
-float main_robot_ys = 330.0;
-float main_robot_middle_to_lidar = -90.0;
+float routing_robot_xs = 300.0;
+float routing_robot_ys = 330.0;
+float routing_robot_middle_to_origin = -90.0;
 
 #elif defined(DELIVERY_BOY)
-float main_robot_xs = 650.0 + 20.0;
-float main_robot_ys = 480.0 + 20.0;
-float main_robot_middle_to_lidar = -180.0;
+float routing_robot_xs = 650.0 + 20.0;
+float routing_robot_ys = 480.0 + 20.0;
+float routing_robot_middle_to_origin = -180.0;
 
 #else
-float main_robot_xs = 524.0;
-float main_robot_ys = 480.0;
-float main_robot_middle_to_lidar = -183.0;
+float routing_robot_xs = 524.0;
+float routing_robot_ys = 480.0;
+float routing_robot_middle_to_origin = -183.0;
 #endif
 */
 
-#define MARGIN (150.0)
+#define MARGIN (100.0)
 
-float main_robot_xs = 850.0+(MARGIN*2.0);
-float main_robot_ys = 600.0+(MARGIN*2.0);
-float main_robot_middle_to_lidar = -100.0;
+//static float routing_robot_xs = 850.0+(MARGIN*2.0);
+//static float routing_robot_ys = 600.0+(MARGIN*2.0);
+static float routing_robot_xs = 600.0+(MARGIN*2.0);
+static float routing_robot_ys = 450.0+(MARGIN*2.0);
+
+static float routing_robot_middle_to_origin = -100.0;
 
 static void wide_search_mode();
 static void normal_search_mode();
 static void tight_search_mode();
 
-world_t* routing_world;
 
 typedef struct search_unit_t search_unit_t;
 struct search_unit_t
@@ -97,94 +104,383 @@ struct search_unit_t
 	UT_hash_handle hh;
 };
 
-#define sq(x) ((x)*(x))
+/*
+	Routing pages are very small, because they are:
+	* 2D,
+	* 1 bit per pixel,
+	* on resolevel 1 (64mm grid, currently)
+
+	We can fit all of them in memory for most practical worlds.
+	Limiting to 65534 pages max, 159MB of memory worst case.
+	65534 pages would be enough for a continuous, gapless world of 
+	400*150 pages (3.2 * 1.2 km), for example.
+
+	16-bit index table would only take 0.5MB of memory (assuming MAX_PAGES_X
+	= MAX_PAGES_Y = 512), but using pointers directly is easier, and just takes
+	1.0 or 2.0MB.
+
+	For now, we just load pages in, with no means to kick out pages. This would work
+	up to about 3 km^2 worlds on Raspi3 with 1GB of memory.
+*/
+#define ROUTING_RL 1
+#define ROUTING_UNIT (VOX_UNITS[ROUTING_RL])
+#define ROUTING_MAP_PAGE_W 128
+
+#define MM_TO_UNIT(x) ((x)/ROUTING_UNIT + VOX_XS[ROUTING_RL]*(MAX_PAGES_X/2))
+
+
+#define ROUTING_PAGE_FLAG_SAVED (1<<1)
+typedef struct __attribute__((packed))
+{
+	uint32_t dummy1;
+	uint16_t dummy2;
+	uint8_t dummy3;
+	uint8_t flags;
+	uint32_t routing[ROUTING_MAP_PAGE_W][ROUTING_MAP_PAGE_W/32 + 1];
+} routing_page_t;
+
+routing_page_t* routing_pages[MAX_PAGES_X][MAX_PAGES_Y]; // size from voxmap_memdisk.h
+
+// Obstacle ranges in mm
+#define ROUTING_Z_MIN 128
+#define ROUTING_Z_MAX 1600
+
+
+static void save_routing_page(int px, int py)
+{
+	assert(routing_pages[px][py]);
+	// Add the flag first - that way, it's in the file, and when the file is loaded, it's already marked as saved,
+	// and won't trigger storing.
+	routing_pages[px][py]->flags |= ROUTING_PAGE_FLAG_SAVED;
+
+	char fname[4096];
+	snprintf(fname, 4096, "./current_routing/routing_%u_%u.routing", px, py);
+	FILE* f = fopen(fname, "w");
+	if(!f)
+	{
+		printf("ERROR: Opening routing page %s for write failed: %s. Routing will only survive in memory.\n", fname, strerror(errno));
+		// Keep the stored flag - trying over and over again won't help anybody. At least it will work while in memory.
+		return;
+	}
+
+	// Don't bother compressing - the files are very small.
+	// Future TODO: use larger units, and compress them, to really reduce disk IO.
+	if(fwrite(routing_pages[px][py], sizeof(routing_page_t), 1, f) != 1 || ferror(f))
+	{
+		printf("ERROR: Writing to file %s failed.\n", fname);
+	}
+
+	fclose(f);
+	return;
+}
+
+static void load_routing_page(int px, int py)
+{
+	// Only used at init: check that the page isn't allocated.
+	assert(!routing_pages[px][py]);
+
+	printf("INFO: load_routing_page: Allocating and reading new page %d,%d\n", px, py);
+	routing_pages[px][py] = malloc(sizeof(routing_page_t));
+	assert(routing_pages[px][py]);
+
+	char fname[4096];
+	snprintf(fname, 4096, "./current_routing/routing_%u_%u.routing", px, py);
+	FILE* f = fopen(fname, "r");
+	if(!f)
+	{
+		printf("ERROR: Opening routing page %s for read failed: %s. No routing available.\n", fname, strerror(errno));
+		free(routing_pages[px][py]);
+		routing_pages[px][py] = NULL;
+		return;
+	}
+
+	if(fread(routing_pages[px][py], sizeof(routing_page_t), 1, f) != 1 || ferror(f))
+	{
+		printf("ERROR: Reading file %s failed.\n", fname);
+		free(routing_pages[px][py]);
+		routing_pages[px][py] = NULL;
+	}
+
+	fclose(f);
+	return;
+}
+
+/*
+	Scan for any existing routing page, and load them all.
+
+	Only use at the init.
+*/
+void load_routing_pages()
+{
+	DIR *d;
+	struct dirent *dir;
+	d = opendir("./current_routing");
+
+	if(d)
+	{
+		while( (dir = readdir(d)) != 0)
+		{
+			uint32_t px, py;
+
+			if(sscanf(dir->d_name, "routing_%u_%u.routing", &px, &py) == 2)
+			{
+				load_routing_page(px, py);
+			}
+
+		}
+
+		closedir(d);
+	}
+	else
+	{
+		printf("ERROR: directory ./current_routing doesn't exists! Please create it.\n");
+		abort();
+	}
+}
+
+/*
+	Call whenever you have time. Saves non-saved routing pages, but not too many at once, preventing long blocking.
+*/
+void manage_routing_page_saves()
+{
+	static int xx, yy;
+
+	// Saving stops when either 1 page is saved, or when 1/5th of the page range is exhausted.
+	int rounds = MAX_PAGES_X*MAX_PAGES_Y/5;
+
+	while(rounds--)
+	{
+		if(routing_pages[xx][yy] && !(routing_pages[xx][yy]->flags & ROUTING_PAGE_FLAG_SAVED))
+		{
+			save_routing_page(xx, yy);
+			break; // One actual save is enough!
+		}
+
+		yy++;
+
+		if(yy >= MAX_PAGES_Y)
+		{
+			yy = 0;
+			xx++;
+
+			if(xx >= MAX_PAGES_X)
+			{
+				xx = 0;
+			}
+		}
+	}
+}
+
+/*
+	Convert a resolevel1 voxmap into a routing page.
+	Outputs a full routing page, plus a 32-bit wide stride into the next lower y index routing page,
+	allocating two routing pages (hence name _pages in plural)
+*/
+
+void voxmap_to_routing_pages(voxmap_t* vm)
+{
+	// Just ignore wrong resolevel voxmaps:
+	if(vm->header.xy_step_mm != VOX_UNITS[ROUTING_RL])
+	{
+		printf("INFO: voxmap_to_routing_pages: Ignoring wrong resolevel voxmap, xy_step = %d mm\n", vm->header.xy_step_mm);
+		return;
+	}
+
+	po_coords_t po = po_coords(vm->header.ref_x_mm, vm->header.ref_y_mm, vm->header.ref_z_mm, ROUTING_RL);
+
+	int z_min_p, z_min_o, z_max_p, z_max_o;
+	po_coords_t z_min = po_coords(0,0, ROUTING_Z_MIN, ROUTING_RL);
+	po_coords_t z_max = po_coords(0,0, ROUTING_Z_MAX, ROUTING_RL);
+
+	z_min_p = z_min.pz;
+	z_min_o = z_min.oz;
+	z_max_p = z_max.pz;
+	z_max_o = z_max.oz;
+
+	assert(z_min_o >= 0 && z_min_o < VOX_ZS[ROUTING_RL]);
+	assert(z_max_o >= 0 && z_max_o < VOX_ZS[ROUTING_RL]);
+
+	// Ignore completely out-of-interest pages:
+	if(   po.pz < z_min_p
+	   || po.pz > z_max_p)
+	{
+		printf("INFO: voxmap_to_routing_pages: Ignoring out of z range voxmap, pz = %d, interest [%d..%d]\n", po.pz, z_min_p, z_max_p);
+		return;
+	}
+
+	if(z_min_p != z_max_p)
+	{
+		// z_min and z_max are on different pages - adjust the offset ranges to only loop through the current page
+		// Note that the other page of interest will get to this function later.
+
+		assert(z_max_p == z_min_p+1); // Must be neighbors: True for any sane values (map page height more than robot height)
+
+		if(z_min_p != po.pz)
+		{
+			assert(z_max_p == po.pz);
+
+			// z_max_o is correct already, but z_min_o must start from 0.
+			z_min_o = 0;
+		}
+		else
+		{
+			assert(z_min_p == po.pz);
+
+			// z_min_o is correct already, but z_max_o must end at the maximum possible value.
+			z_max_o = VOX_ZS[ROUTING_RL];
+		}
+	}
+	else
+	{
+		// z_min and z_max are on the same page
+		assert(z_min_o < z_max_o);
+	}
+
+
+
+	assert(vm->header.xy_step_mm == VOX_UNITS[ROUTING_RL] && vm->header.xs == ROUTING_MAP_PAGE_W && vm->header.ys == ROUTING_MAP_PAGE_W);
+	assert(vm->header.xs == VOX_XS[ROUTING_RL] && vm->header.ys == VOX_YS[ROUTING_RL] && vm->header.zs == VOX_ZS[ROUTING_RL]);
+
+
+	if(!routing_pages[po.px][po.py])
+	{
+		printf("INFO: voxmap_to_routing_pages: Allocating new page %d,%d\n", po.px, po.py);
+		routing_pages[po.px][po.py] = calloc(1, sizeof(routing_page_t));
+		assert(routing_pages[po.px][po.py]);
+	}
+	else
+	{
+		printf("INFO: voxmap_to_routing_pages: clearing existing page %d,%d\n", po.px, po.py);
+		memset(routing_pages[po.px][po.py], 0, sizeof(routing_page_t));
+	}
+
+	if(po.py > 0)
+	{
+		if(!routing_pages[po.px][po.py-1])
+		{
+			printf("INFO: voxmap_to_routing_pages: Allocating new page %d,%d\n", po.px, po.py-1);
+			routing_pages[po.px][po.py-1] = calloc(1, sizeof(routing_page_t));
+			assert(routing_pages[po.px][po.py-1]);
+		}
+		else
+		{
+			printf("INFO: voxmap_to_routing_pages: clearing existing page slice %d,%d\n", po.px, po.py-1);
+			for(int xx=0; xx<VOX_XS[ROUTING_RL]; xx++)
+			{
+				routing_pages[po.px][po.py-1]->routing[xx][ROUTING_MAP_PAGE_W/32] = 0;
+			}
+		}
+	}
+
+
+	printf("INFO: voxmap_to_routing_pages: converting %d,%d,%d\n", po.px, po.py, po.pz);
+	for(int yy=0; yy<VOX_YS[ROUTING_RL]; yy++)
+	{
+		for(int xx=0; xx<VOX_XS[ROUTING_RL]; xx++)
+		{
+			for(int zz=z_min_o; zz<z_max_o; zz++)
+			{
+				if(VOXEL_FASTEST(*vm, xx, yy, zz, VOX_XS[ROUTING_RL], VOX_YS[ROUTING_RL], VOX_ZS[ROUTING_RL]) & 0x0f)
+				{
+					int y = yy/32;
+					int y_remain = yy%32;
+					routing_pages[po.px][po.py]->routing[xx][y] |= 1<<y_remain;
+
+					if(y == 0)
+					{
+						// Duplicated Y stride on the lower y-index routing page:
+						routing_pages[po.px][po.py-1]->routing[xx][ROUTING_MAP_PAGE_W/32] |= 1<<y_remain;
+					}
+					break; // out of z loop; one obstacle is enough to make it fully blocked, continue on next x.
+				}
+
+			}
+		}
+	}
+}
+
+
 #define MAX_F 99999999999999999.9
 
 float robot_shape_x_len;
 #define ROBOT_SHAPE_WINDOW 32
 uint32_t robot_shapes[32][ROBOT_SHAPE_WINDOW];
 
-
-static int check_hit(int x, int y, int direction)
+//static int kakka = 0;
+ALWAYS_INLINE int check_hit(int x, int y, int direction)
 {
 
-#ifdef SEARCH_DBGPRINTS
-	printf("check_hit(%d, %d, %d): ", x, y, direction);
-#endif
+//	kakka++;
+//	if(kakka > 1) abort();
+
+	#ifdef SEARCH_DBGPRINTS
+		printf("check_hit(%d, %d, %d): ", x, y, direction);
+	#endif
 	for(int chk_x=0; chk_x<ROBOT_SHAPE_WINDOW; chk_x++)
 	{
-		int pageidx_x, pageidx_y, pageoffs_x, pageoffs_y;
-		page_coords_from_unit_coords(x-ROBOT_SHAPE_WINDOW/2+chk_x, y-ROBOT_SHAPE_WINDOW/2, &pageidx_x, &pageidx_y, &pageoffs_x, &pageoffs_y);
+		po_coords_t po = po_unit_coords(x-ROBOT_SHAPE_WINDOW/2+chk_x, y-ROBOT_SHAPE_WINDOW/2, 0, ROUTING_RL);
 
-		int yoffs = pageoffs_y/32;
-		int yoffs_remain = pageoffs_y - yoffs*32;
+		int yoffs = po.oy/32;
+		int yoffs_remain = po.oy - yoffs*32;
 
-		if(!routing_world->pages[pageidx_x][pageidx_y]) // out of bounds (not allocated) - give up instantly
+		#ifdef SEARCH_DBGPRINTS
+//			printf("chk_x=%d, p(%d,%d), xoffs=%d, yoffs=%d, remain=%d: ", chk_x, po.px, po.py, po.ox, yoffs, yoffs_remain);
+		#endif
+
+		if(!routing_pages[po.px][po.py]) // out of bounds (not allocated) - assume free space
 		{
-//			printf("pages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
+//			printf("pages[%d][%d] not allocated\n", po.px, po.py);
 //			printf("x = %d  y = %d  direction = %d\n", x, y, direction);
 			//exit(1);
-			return 1;
+			#ifdef SEARCH_DBGPRINTS
+				printf("no_alloc\n");
+			#endif
+			continue;
 		}
 
 		// Now the quick comparison, which could be even faster, but we don't want to mess up the compatibility between
 		// big endian / little endian systems.
 
-		uint64_t shape = (uint64_t)robot_shapes[direction][chk_x] << (32-yoffs_remain);
+		uint64_t shape = (uint64_t)robot_shapes[direction][chk_x] << (yoffs_remain);
+		uint64_t map = (((uint64_t)routing_pages[po.px][po.py]->routing[po.ox][yoffs+1]<<32) |
+		   (uint64_t)routing_pages[po.px][po.py]->routing[po.ox][yoffs]);
 
-		if((((uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs]<<32) |
-		   (uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs+1])
-		      & shape)
+		#ifdef SEARCH_DBGPRINTS
+//			printf("\nshape: ");
+//			for(int i = 64; i>=0; i--){ if(shape&(1ULL<<i)) putchar('#'); else putchar('-');}
+			printf("\nmap  : ");
+			for(int i = 64; i>=0; i--)
+			{
+				if((map&(1ULL<<i)) && (shape&(1ULL<<i)))
+					putchar('X'); 
+				else if((map&(1ULL<<i)) && !(shape&(1ULL<<i)))
+					putchar('+');
+				else if(!(map&(1ULL<<i)) && (shape&(1ULL<<i)))
+					putchar('O');
+				else
+					putchar(' ');
+
+			}
+		#endif
+
+		if(map & shape)
 		{
-#ifdef SEARCH_DBGPRINTS
-			printf("1\n");
-#endif
+			#ifdef SEARCH_DBGPRINTS
+//				printf("   --> ### 1 ###\n");
+			#endif
 			return 1;
 		}
+
+		#ifdef SEARCH_DBGPRINTS
+//			printf("   --> 0\n");
+		#endif
+
 	}
 
-#ifdef SEARCH_DBGPRINTS
-	printf("0\n");
-#endif
+	#ifdef SEARCH_DBGPRINTS
+		printf("### 0 ###\n");
+	#endif
 	return 0;
-}
-
-static int check_hit_hitcnt(int x, int y, int direction)
-{
-//	printf("check_hit(%d, %d, %d)\n", x, y, direction);
-
-	int hit_cnt = 0;
-
-	for(int chk_x=0; chk_x<ROBOT_SHAPE_WINDOW; chk_x++)
-	{
-		int pageidx_x, pageidx_y, pageoffs_x, pageoffs_y;
-		page_coords_from_unit_coords(x-ROBOT_SHAPE_WINDOW/2+chk_x, y-ROBOT_SHAPE_WINDOW/2, &pageidx_x, &pageidx_y, &pageoffs_x, &pageoffs_y);
-
-		int yoffs = pageoffs_y/32;
-		int yoffs_remain = pageoffs_y - yoffs*32;
-
-		if(!routing_world->pages[pageidx_x][pageidx_y]) // out of bounds (not allocated) - give up instantly
-		{
-			printf("pages[%d][%d] not allocated\n", pageidx_x, pageidx_y);
-			printf("x = %d  y = %d  direction = %d\n", x, y, direction);
-			//exit(1);
-			return 999;
-		}
-
-		// Now the quick comparison, which could be even faster, but we don't want to mess up the compatibility between
-		// big endian / little endian systems.
-
-		uint64_t shape = (uint64_t)robot_shapes[direction][chk_x] << (32-yoffs_remain);
-
-		if((((uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs]<<32) |
-		   (uint64_t)routing_world->pages[pageidx_x][pageidx_y]->routing[pageoffs_x][yoffs+1])
-		      & shape)
-		{
-			hit_cnt++;
-		}
-	}
-
-	return hit_cnt;
 }
 
 
@@ -247,58 +543,13 @@ static int test_robot_turn(int x, int y, float start, float end)
 	return 1;
 }
 
-static int test_robot_turn_hitcnt(int x, int y, float start, float end)
-{
-	int cw = 0;
-
-	while(start >= 2.0*M_PI) start -= 2.0*M_PI;
-	while(start < 0.0) start += 2.0*M_PI;
-
-	while(end >= 2.0*M_PI) end -= 2.0*M_PI;
-	while(end < 0.0) end += 2.0*M_PI;
-
-	// Calc for CCW (positive angle):
-	float da = end - start;
-	while(da >= 2.0*M_PI) da -= 2.0*M_PI;
-	while(da < 0.0) da += 2.0*M_PI;
-
-	if(da > M_PI)
-	{
-		// CCW wasn't fine, turn CW
-		cw = 1;
-		da = start - end;
-		while(da >= 2.0*M_PI) da -= 2.0*M_PI;
-		while(da < 0.0) da += 2.0*M_PI;
-	}
-
-	int dir_cur = (start/(2.0*M_PI) * 32.0);
-	int dir_end = (end/(2.0*M_PI) * 32.0);
-
-	if(dir_cur < 0) dir_cur = 0; else if(dir_cur > 31) dir_cur = 31;
-	if(dir_end < 0) dir_end = 0; else if(dir_end > 31) dir_end = 31;
-
-	int hitcnt = 0;
-
-	while(dir_cur != dir_end)
-	{
-		hitcnt += check_hit_hitcnt(x, y, dir_cur);
-
-		if(cw) dir_cur--; else dir_cur++;
-
-		if(dir_cur < 0) dir_cur = 31;
-		else if(dir_cur > 31) dir_cur = 0;
-
-	}
-
-	return hitcnt;
-}
 
 static int line_of_sight(route_xy_t p1, route_xy_t p2)
 {
 	int dx = p2.x - p1.x;
 	int dy = p2.y - p1.y;
 
-	float step = ((robot_shape_x_len-10.0)/MAP_UNIT_W);
+	float step = ((robot_shape_x_len-10.0)/ROUTING_UNIT);
 
 	float len = sqrt(sq(dx) + sq(dy));
 
@@ -341,50 +592,6 @@ static int line_of_sight(route_xy_t p1, route_xy_t p2)
 	return 1;
 }
 
-static int line_of_sight_hitcnt(route_xy_t p1, route_xy_t p2)
-{
-	int dx = p2.x - p1.x;
-	int dy = p2.y - p1.y;
-
-	float step = ((robot_shape_x_len-10.0)/MAP_UNIT_W);
-
-	float len = sqrt(sq(dx) + sq(dy));
-
-	int terminate = 0;
-
-	float pos = step/2.0;
-	if(pos > len) {pos = len; terminate = 1;}
-
-	float ang = atan2(dy, dx);
-	if(ang < 0.0) ang += 2.0*M_PI;
-	int dir = (ang/(2.0*M_PI) * 32.0)+0.5;
-	if(dir < 0) dir = 0; else if(dir > 31) dir = 31;
-
-	int hit_cnt = 0;
-
-//	printf("ang = %.4f  dir = %d \n", ang, dir);
-
-	while(1)
-	{
-		int x = (cos(ang)*pos + (float)p1.x)+0.5;
-		int y = (sin(ang)*pos + (float)p1.y)+0.5;
-
-//		printf("check_hit(%d, %d, %d) = ", x, y, dir);
-
-		hit_cnt += check_hit_hitcnt(x, y, dir);
-//		printf("0\n");
-
-		if(terminate) break;
-		pos += step;
-		if(pos > len)
-		{
-			pos = len;
-			terminate = 1;
-		}
-	}
-
-	return hit_cnt;
-}
 
 
 uint32_t minimap[MINIMAP_SIZE][MINIMAP_SIZE/32 + 1];
@@ -492,7 +699,7 @@ static int minimap_line_of_sight(route_xy_t p1, route_xy_t p2, int reverse)
 	int dx = p2.x - p1.x;
 	int dy = p2.y - p1.y;
 
-	float step = ((robot_shape_x_len-10.0)/MAP_UNIT_W);
+	float step = ((robot_shape_x_len-10.0)/ROUTING_UNIT);
 
 	float len = sqrt(sq(dx) + sq(dy));
 
@@ -564,12 +771,11 @@ static int minimap_test_endpoint(route_xy_t p1, route_xy_t p2, int reverse)
 
 #define MAX_CANGOS 500
 
-int minimap_find_mapping_dir(world_t *w, float ang_now, int32_t* x, int32_t* y, int32_t desired_x, int32_t desired_y, int* back)
+int minimap_find_mapping_dir(float ang_now, int32_t* x, int32_t* y, int32_t desired_x, int32_t desired_y, int* back)
 {
 	extern int32_t cur_ang;
 	extern int cur_x, cur_y;
 
-	routing_world = w;
 
 	wide_search_mode();
 
@@ -582,13 +788,11 @@ int minimap_find_mapping_dir(world_t *w, float ang_now, int32_t* x, int32_t* y, 
 	int backs[MAX_CANGOS];
 	int disagrees = 0;
 
-	gen_all_routing_pages(w, 0);
-
 	int in_tight_spot = 0;
 
 	route_xy_t start = {0, 0};
 
-	dbg_save_minimap();
+	//dbg_save_minimap();
 	for(int tries=0; tries < 3; tries++)
 	{
 		for(float ang_to = 0; ang_to < DEGTORAD(359.9); ang_to += (tries==0)?(DEGTORAD(10.0)):(DEGTORAD(5.0)))
@@ -599,8 +803,8 @@ int minimap_find_mapping_dir(world_t *w, float ang_now, int32_t* x, int32_t* y, 
 				for(int f=0; f < NUM_FWDS; f++)
 				{
 					float fwd_len = fwds[f];
-					route_xy_t end = {(int)(cos(ang_to)*fwd_len/(float)MAP_UNIT_W),
-							  (int)(sin(ang_to)*fwd_len/(float)MAP_UNIT_W)};
+					route_xy_t end = {(int)(cos(ang_to)*fwd_len/(float)ROUTING_UNIT),
+							  (int)(sin(ang_to)*fwd_len/(float)ROUTING_UNIT)};
 
 					if(minimap_line_of_sight(start, end, fwd_len<0.0))
 					{
@@ -722,7 +926,7 @@ int minimap_find_mapping_dir(world_t *w, float ang_now, int32_t* x, int32_t* y, 
 
 
 
-#define SHAPE_PIXEL(shape, x, y) { robot_shapes[shape][(x)] |= 1UL<<(31-y);}
+#define SHAPE_PIXEL(shape, x, y) { robot_shapes[shape][(x)] |= 1UL<<(y);}
 int limits_x[ROBOT_SHAPE_WINDOW][2];
 #define ABS(x) ((x >= 0) ? x : -x)
 static void triangle_scanline(int x1, int y1, int x2, int y2)
@@ -821,36 +1025,36 @@ static void draw_robot_shape(int a_idx, float ang)
 //	if(reverse_shapes)
 //		ang += M_PI;
 
-	float o_x = (ROBOT_SHAPE_WINDOW/2.0)*(float)MAP_UNIT_W;
-	float o_y = (ROBOT_SHAPE_WINDOW/2.0)*(float)MAP_UNIT_W;
+	float o_x = (ROBOT_SHAPE_WINDOW/2.0)*(float)ROUTING_UNIT;
+	float o_y = (ROBOT_SHAPE_WINDOW/2.0)*(float)ROUTING_UNIT;
 
 	float robot_xs, robot_ys;
 
 	float middle_xoffs; // from o_x, o_y to the robot middle point.
 	float middle_yoffs = -0.0;
-	middle_xoffs = main_robot_middle_to_lidar;
+	middle_xoffs = routing_robot_middle_to_origin;
 
 	const float extra_x = 0.0, extra_y = 0.0;
 
 	if(tight_shapes == 2)
 	{
-		robot_xs = (main_robot_xs - 20.0 + extra_x);
-		robot_ys = (main_robot_ys - 20.0 + extra_y);
+		robot_xs = (routing_robot_xs - 20.0 + extra_x);
+		robot_ys = (routing_robot_ys - 20.0 + extra_y);
 	}
 	else if(tight_shapes == 1)
 	{
-		robot_xs = (main_robot_xs + 85.0 + extra_x);
-		robot_ys = (main_robot_ys + 50.0 + extra_y);
+		robot_xs = (routing_robot_xs + 85.0 + extra_x);
+		robot_ys = (routing_robot_ys + 50.0 + extra_y);
 	}
 	else if(tight_shapes == 0)
 	{
-		robot_xs = (main_robot_xs + 100.0 + extra_x);
-		robot_ys = (main_robot_ys + 100.0 + extra_y);
+		robot_xs = (routing_robot_xs + 100.0 + extra_x);
+		robot_ys = (routing_robot_ys + 100.0 + extra_y);
 	}
 	else // wide
 	{
-		robot_xs = (main_robot_xs + 200.0 + extra_x);
-		robot_ys = (main_robot_ys + 200.0 + extra_y);
+		robot_xs = (routing_robot_xs + 200.0 + extra_x);
+		robot_ys = (routing_robot_ys + 200.0 + extra_y);
 	}
 
 	robot_shape_x_len = robot_xs;
@@ -915,9 +1119,9 @@ static void draw_robot_shape(int a_idx, float ang)
 	// "Draw" the robot in two triangles:
 
 	// First, triangle 1-2-3
-	draw_triangle(a_idx, x1/(float)MAP_UNIT_W, y1/(float)MAP_UNIT_W, x2/(float)MAP_UNIT_W, y2/(float)MAP_UNIT_W, x3/(float)MAP_UNIT_W, y3/(float)MAP_UNIT_W);
+	draw_triangle(a_idx, x1/(float)ROUTING_UNIT, y1/(float)ROUTING_UNIT, x2/(float)ROUTING_UNIT, y2/(float)ROUTING_UNIT, x3/(float)ROUTING_UNIT, y3/(float)ROUTING_UNIT);
 	// Second, triangle 1-3-4
-	draw_triangle(a_idx, x1/(float)MAP_UNIT_W, y1/(float)MAP_UNIT_W, x3/(float)MAP_UNIT_W, y3/(float)MAP_UNIT_W, x4/(float)MAP_UNIT_W, y4/(float)MAP_UNIT_W);
+	draw_triangle(a_idx, x1/(float)ROUTING_UNIT, y1/(float)ROUTING_UNIT, x3/(float)ROUTING_UNIT, y3/(float)ROUTING_UNIT, x4/(float)ROUTING_UNIT, y4/(float)ROUTING_UNIT);
 }
 
 
@@ -992,6 +1196,27 @@ void clear_route(route_unit_t **route)
 	*route = NULL;
 }
 
+void routing_unit_coords(int mm_x, int mm_y, int* unit_x, int* unit_y)
+{
+	int unit_x_t = mm_x / ROUTING_UNIT;
+	int unit_y_t = mm_y / ROUTING_UNIT;
+	unit_x_t += VOX_XS[ROUTING_RL]*(MAX_PAGES_X/2);
+	unit_y_t += VOX_YS[ROUTING_RL]*(MAX_PAGES_Y/2);
+
+	*unit_x = unit_x_t;
+	*unit_y = unit_y_t;
+}
+
+void mm_from_routing_unit_coords(int unit_x, int unit_y, int* mm_x, int* mm_y)
+{
+	unit_x -= VOX_XS[ROUTING_RL]*(MAX_PAGES_X/2);
+	unit_y -= VOX_XS[ROUTING_RL]*(MAX_PAGES_X/2);
+
+	*mm_x = unit_x * ROUTING_UNIT;
+	*mm_y = unit_y * ROUTING_UNIT;
+}
+
+
 static int search(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int change_to_normal, int accept_dist_blocks)
 {
 	search_unit_t* closed_set = NULL;
@@ -1000,8 +1225,8 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 	clear_route(route);
 
 	int s_x, s_y, e_x, e_y;
-	unit_coords(start_x_mm, start_y_mm, &s_x, &s_y);
-	unit_coords(end_x_mm, end_y_mm, &e_x, &e_y);
+	routing_unit_coords(start_x_mm, start_y_mm, &s_x, &s_y);
+	routing_unit_coords(end_x_mm, end_y_mm, &e_x, &e_y);
 
 	while(start_ang >= 2.0*M_PI) start_ang -= 2.0*M_PI;
 	while(start_ang < 0.0) start_ang += 2.0*M_PI;
@@ -1369,7 +1594,7 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 				if(dir < 0) dir = 0; else if(dir > 31) dir = 31;
 
 				int new_x_units, new_y_units;
-				unit_coords(new_x, new_y, &new_x_units, &new_y_units);
+				routing_unit_coords(new_x, new_y, &new_x_units, &new_y_units);
 
 				//printf("Back off ang=%.2f deg, mm = %d  -> new start = (%d, %d) --> ", TODEG(new_ang), b_s[back_idx], new_x_units, new_y_units);
 
@@ -1407,80 +1632,19 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 
 }
 
-#define ROUTING_MASK 0b1111111111100000
-//#define ROUTING_MASK 0b1111111111111000
-//#define ROUTING_MASK 0
-
-void gen_routing_page(world_t *w, int xpage, int ypage, int forgiveness)
-{
-	if(!w->pages[xpage][ypage])
-	{
-		return;
-	}
-
-//	printf("Generating routing page %d,%d\n", xpage, ypage);
-
-	for(int xx=0; xx < MAP_PAGE_W; xx++)
-	{
-		for(int yy=0; yy < MAP_PAGE_W/32; yy++)
-		{
-			uint32_t tmp = 0;
-			for(int i = 0; i < 32; i++)
-			{
-				tmp<<=1;
-				uint32_t mapval = w->pages[xpage][ypage]->voxmap[(yy*32+i)*MAP_PAGE_W + xx];
-				uint8_t cons = w->pages[xpage][ypage]->meta[((yy*32+i)/2)*(MAP_PAGE_W/2) + (xx/2)].constraints;
-				tmp |= (cons & CONSTRAINT_FORBIDDEN) || (mapval & ROUTING_MASK);
-			}
-			w->pages[xpage][ypage]->routing[xx][yy] = tmp;
-		}
-		if(w->pages[xpage][ypage+1])
-		{
-			uint32_t tmp = 0;
-			for(int i = 0; i < 32; i++)
-			{
-				tmp<<=1;
-				uint32_t mapval = w->pages[xpage][ypage+1]->voxmap[(0*32+i)*MAP_PAGE_W + xx];
-				uint8_t cons = w->pages[xpage][ypage+1]->meta[((0*32+i)/2)*(MAP_PAGE_W/2) + (xx/2)].constraints;
-				tmp |= (cons & CONSTRAINT_FORBIDDEN) || (mapval & ROUTING_MASK);
-			}
-			w->pages[xpage][ypage]->routing[xx][MAP_PAGE_W/32] = tmp;
-		}
-		else
-		{
-			w->pages[xpage][ypage]->routing[xx][MAP_PAGE_W/32] = 0xffffffff;
-		}
-	}
-}
-
-void gen_all_routing_pages(world_t *w, int forgiveness)
-{
-	for(int xpage = 0; xpage < MAP_W; xpage++)
-	{
-		for(int ypage = 0; ypage < MAP_W; ypage++)
-		{
-			gen_routing_page(w, xpage, ypage, forgiveness);
-		}
-	}
-}
-
 // Reverse: search running in opposite direction, i.e., "initial back-off" goes forward, otherwise we go backwards.
 // Note: You need to manually invert the resulting backmode bytes.
-int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int reverse)
+int search_route(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int reverse)
 {
-	routing_world = w;
-
 	reverse_shapes = reverse;
 
 	int retval = 0;
 
-//	printf("Generating routing pages... "); fflush(stdout);
-	gen_all_routing_pages(w, 0);
-//	printf("done.\n");
 
 	printf("Searching with wide limits...\n");
 
-	wide_search_mode();
+	//wide_search_mode();
+	normal_search_mode();
 	if(search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 0, 0))
 	{
 		normal_search_mode();
@@ -1496,7 +1660,7 @@ int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_
 				printf("Tight search failed - trying to get halfway\n");
 				double direct_len = sqrt(sq(end_x_mm-start_x_mm)+sq(end_y_mm-start_y_mm));
 				direct_len = direct_len*2.0/3.0;
-				int acceptance = direct_len/MAP_UNIT_W;
+				int acceptance = direct_len/ROUTING_UNIT;
 
 				if( (ret = search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 1, acceptance)) ) 
 				{
@@ -1525,42 +1689,6 @@ int search_route(world_t *w, route_unit_t **route, float start_ang, int start_x_
 	return retval;
 }
 
-int32_t temp_lidar_map_mid_x, temp_lidar_map_mid_y;
-uint8_t temp_lidar_map[256][256];
-
-void clear_lidar_map(uint8_t *p_map)
-{
-	memset(p_map, 0, 256*256*sizeof(uint8_t));
-}
-
-int lidar_to_map(uint8_t *p_map, int32_t *mid_x, int32_t *mid_y, lidar_scan_t* p_lid)
-{
-	int mx = p_lid->robot_pos.x;
-	int my = p_lid->robot_pos.y;
-	*mid_x = mx; *mid_y = my;
-	for(int i = 0; i < 360; i++)
-	{
-		if(!p_lid->scan[i].valid) continue;
-		int x = (p_lid->scan[i].x - mx) / MAP_UNIT_W;
-		int y = (p_lid->scan[i].y - my) / MAP_UNIT_W;
-		x += 128; y+= 128;
-
-		if(x < 0 || y < 0 || x > 255 || y > 255)
-		{
-			printf("WARNING: lidar_to_map(), ignoring out-of-range coords (%d, %d)\n", x, y);
-			continue;
-		}
-
-		temp_lidar_map[x][y] = 1;
-	}
-	return 0;
-}
-
-void routing_set_world(world_t *w)
-{
-	routing_world = w;
-}
-
 int check_direct_route(int32_t start_ang, int start_x, int start_y, int end_x, int end_y)
 {
 	int dx = end_x - start_x;
@@ -1586,26 +1714,6 @@ int check_direct_route(int32_t start_ang, int start_x, int start_y, int end_x, i
 	return 0;
 }
 
-int check_direct_route_hitcnt(int32_t start_ang, int start_x, int start_y, int end_x, int end_y)
-{
-	int dx = end_x - start_x;
-	int dy = end_y - start_y;
-
-	float end_ang = atan2(dy, dx);
-	if(end_ang < 0.0) end_ang += 2.0*M_PI;
-
-	int hitcnt = 0;
-
-	hitcnt += test_robot_turn_hitcnt(start_x, start_y, ANG32TORAD(start_ang), end_ang);
-
-	route_xy_t start = {start_x, start_y};
-	route_xy_t end = {end_x, end_y};
-	hitcnt += line_of_sight_hitcnt(start, end);
-
-	return hitcnt;
-}
-
-
 int check_direct_route_non_turning(int start_x, int start_y, int end_x, int end_y)
 {
 	route_xy_t start = {start_x, start_y};
@@ -1618,14 +1726,6 @@ int check_direct_route_non_turning(int start_x, int start_y, int end_x, int end_
 	}
 	return 0;
 }
-
-int check_direct_route_non_turning_hitcnt(int start_x, int start_y, int end_x, int end_y)
-{
-	route_xy_t start = {start_x, start_y};
-	route_xy_t end = {end_x, end_y};
-	return line_of_sight_hitcnt(start, end);
-}
-
 
 int check_turn(int32_t start_ang, int start_x, int start_y, int end_x, int end_y)
 {
@@ -1654,16 +1754,6 @@ int check_direct_route_non_turning_mm(int start_x, int start_y, int end_x, int e
 	return check_direct_route_non_turning(MM_TO_UNIT(start_x), MM_TO_UNIT(start_y), MM_TO_UNIT(end_x), MM_TO_UNIT(end_y));
 }
 
-int check_direct_route_hitcnt_mm(int32_t start_ang, int start_x, int start_y, int end_x, int end_y)
-{
-	return check_direct_route_hitcnt(start_ang, MM_TO_UNIT(start_x), MM_TO_UNIT(start_y), MM_TO_UNIT(end_x), MM_TO_UNIT(end_y));
-}
-
-
-int check_direct_route_non_turning_hitcnt_mm(int start_x, int start_y, int end_x, int end_y)
-{
-	return check_direct_route_non_turning_hitcnt(MM_TO_UNIT(start_x), MM_TO_UNIT(start_y), MM_TO_UNIT(end_x), MM_TO_UNIT(end_y));
-}
 
 int check_turn_mm(int32_t start_ang, int start_x, int start_y, int end_x, int end_y)
 {

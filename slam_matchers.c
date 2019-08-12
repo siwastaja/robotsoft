@@ -246,7 +246,7 @@ static void voxmap_to_ref_fine_matchmap(ref_fine_matchmap_t* matchmap, int ref_x
 	if(VOX_UNITS[rl] > FINE_MATCHMAP_UNIT && rl > 0)
 	{
 		rl--;
-		printf("WARNING: voxmap_to_ref_fine_matchmap: no compatible world and ref_fine_matchmap resolution, rl=%d\n", rl);
+		printf("WARNING: voxmap_to_ref_fine_matchmap: no compatible world and ref_fine_matchmap resolution, rl=%d. Gaps may degrade matching result.\n", rl);
 	}
 
 
@@ -2965,7 +2965,7 @@ result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32
 
 	qsort(results, CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS, sizeof(result_t), compar_scores);
 
-	#define CLASSIC_POSTFILTER_RESULTS
+//	#define CLASSIC_POSTFILTER_RESULTS
 
 	#ifdef CLASSIC_POSTFILTER_RESULTS
 		for(int i=0; i<CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS-1; i++)
@@ -2995,16 +2995,18 @@ result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32
 		}
 	#endif
 
+	result_t results_out[N_FINE_MATCH_RESULTS] = {0};
+
 	int n_results = 0;
 	printf("total results (from %d pcs):\n", CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS);
 	for(int i=0; i<CLASSIC_MATCH_YAW_STEPS*MATCHMAP_XYZ_N_RESULTS; i++)
 	{
-		if(results[i].score > 0 && results[i].score > results[0].score/2)
+		if(results[i].score > 3000 && results[i].score > results[0].score/2)
 		{
 			printf("i=%5d  (%+6d,%+6d,%+6d,%+6.2f) relscore=%+5d abscore=%+5d\n",
 				i, results[i].x, results[i].y, results[i].z, RADTODEG(results[i].yaw), results[i].score, results[i].abscore);
 
-			//results_out[n_results] = results[i];
+			results_out[n_results] = results[i];
 			n_results++;
 			if(n_results >= N_FINE_MATCH_RESULTS)
 				break;
@@ -3018,11 +3020,11 @@ result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32
 	}
 	else if(n_results == 1)
 	{
-		return results[0];
+		return results_out[0];
 	}
 	else
 	{
-		double ratio = (double)results[1].score/(double)results[0].score; // always < 1.0
+		double ratio = (double)results_out[1].score/(double)results_out[0].score; // always < 1.0
 
 		double coeff0, coeff1;
 		if(ratio > 0.3)
@@ -3033,17 +3035,17 @@ result_t match_submap_to_voxmap(cloud_t* sm, int32_t ref_x, int32_t ref_y, int32
 			coeff0 = 1.0 - ratio;
 
 			return (result_t){
-				coeff0*results[0].x + coeff1*results[1].x,
-				coeff0*results[0].y + coeff1*results[1].y,
-				coeff0*results[0].z + coeff1*results[1].z,
-				coeff0*results[0].yaw + coeff1*results[1].yaw,
-				results[0].score,
-				results[0].abscore};
+				coeff0*results_out[0].x + coeff1*results_out[1].x,
+				coeff0*results_out[0].y + coeff1*results_out[1].y,
+				coeff0*results_out[0].z + coeff1*results_out[1].z,
+				coeff0*results_out[0].yaw + coeff1*results_out[1].yaw,
+				results_out[0].score,
+				results_out[0].abscore};
 
 		}
 		else
 		{
-			return results[0];
+			return results_out[0];
 		}
 
 	}

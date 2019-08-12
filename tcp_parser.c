@@ -456,10 +456,10 @@ void tcp_send_robot_info()
 
 	extern float main_robot_xs;
 	extern float main_robot_ys;
-	extern float main_robot_middle_to_lidar;
+	extern float main_robot_middle_to_origin;
 	int16_t rx = main_robot_xs;
 	int16_t ry = main_robot_ys;
-	int16_t lid_xoffs = -1.0*main_robot_middle_to_lidar;
+	int16_t lid_xoffs = -1.0*main_robot_middle_to_origin;
 	int16_t lid_yoffs = 0;
 
 	I16TOBUF(rx, buf, 0);
