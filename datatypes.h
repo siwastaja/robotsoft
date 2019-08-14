@@ -156,14 +156,11 @@ typedef union __attribute__((packed))
 {
 	struct __attribute__((packed))
 	{
-		uint8_t loca_2d;
+		uint8_t keep_position;
 		uint8_t loca_3d;
-		uint8_t mapping_2d;
 		uint8_t mapping_3d;
 		uint8_t mapping_collisions;
-		uint8_t keep_position;
 		uint8_t command_source;
-		uint8_t localize_with_big_search_area;
 		uint8_t vacuum_on;
 		uint8_t reserved3;
 		uint8_t reserved4;
@@ -172,6 +169,9 @@ typedef union __attribute__((packed))
 		uint8_t reserved7;
 		uint8_t reserved8;
 		uint8_t reserved9;
+		uint8_t reserved10;
+		uint8_t reserved11;
+		uint8_t reserved12;
 	} v;
 
 	uint8_t table[STATE_VECT_LEN];
@@ -179,15 +179,15 @@ typedef union __attribute__((packed))
 
 static const char* state_vect_names[STATE_VECT_LEN] =
 {
-	"2D localization",
+	"motors on",
 	"3D localization",
-	"2D mapping",
 	"3D mapping",
 	"collision mapping",
-	"motors on",
 	"autonomous exploration",
-	"big localization area",
 	"vacuum app",
+	"reserved",
+	"reserved",
+	"reserved",
 	"reserved",
 	"reserved",
 	"reserved",

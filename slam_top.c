@@ -980,7 +980,10 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 	if(tss->sidx == LAST_SIDX)
 	{
-		tcp_send_small_cloud(sm_ref_x, sm_ref_y, sm_ref_z, realtime_cloud.n_points, realtime_cloud.points);
+		#include "tcp_comm.h"
+		if(tcp_client_sock >= 0 && tcp_is_space_for_noncritical_message())
+			tcp_send_small_cloud(sm_ref_x, sm_ref_y, sm_ref_z, realtime_cloud.n_points, realtime_cloud.points);
+
 		realtime_cloud.n_points = 0;
 	}
 
@@ -1110,16 +1113,32 @@ result_t legacy_process_after_input(int ret)
 	// p_cur_cloud is always fixed, only one cloud in memory at the time.
 	// Simply match the current cloud to the world voxmap each time, then add to said map.
 
-	result_t corr = match_submap_to_voxmap(p_cur_cloud, submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z);
+	result_t corr = {0};
+
+	if(state_vect.v.loca_3d)
+	{
+		corr = match_submap_to_voxmap(p_cur_cloud, submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z);
+	}
+	else
+	{
+		printf("Localization turned off - zero correction applied.\n");
+	}
 
 	printf("corr = %d,%d,%d , %.1f\n", corr.x, corr.y, corr.z, RADTODEG(corr.yaw));
-	rotate_cloud(p_cur_cloud, corr.yaw);
-	
+
+	if(fabs(corr.yaw) > DEGTORAD(0.1))
 	{
-		//po_coords_t po;
-		//po = po_coords(submap_metas[ret].avg_x, submap_metas[ret].avg_y, submap_metas[ret].avg_z, 0);
-		//load_pages(RESOLEVELS, RESOLEVELS, po.px-1, po.px+1, po.py-1, po.py+1, po.pz-1, po.pz+1);
+		rotate_cloud(p_cur_cloud, corr.yaw);
+	}
+	
+
+	if(state_vect.v.mapping_3d)
+	{
 		cloud_to_voxmap(p_cur_cloud, submap_metas[ret].avg_x-corr.x, submap_metas[ret].avg_y-corr.y, submap_metas[ret].avg_z-corr.z);
+	}
+	else
+	{
+		printf("Mapping turned off - not inserting.\n");
 	}
 
 	return corr;

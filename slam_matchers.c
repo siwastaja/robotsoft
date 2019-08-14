@@ -102,8 +102,8 @@ typedef struct __attribute__((packed))
 
 #define FINE_MATCHMAP_UNIT 128 //mm
 
-#define FINE_MATCHMAP_XS 384
-#define FINE_MATCHMAP_YS 384
+#define FINE_MATCHMAP_XS 256
+#define FINE_MATCHMAP_YS 256
 #define FINE_MATCHMAP_ZS 64
 
 /*
@@ -370,7 +370,7 @@ static inline int count_ones_u64(uint64_t in)
 
 // 100% match with no occu_on_free will be score=10000 (OCCU_MATCH_COEFF*REL_SCORE_MULT)
 #define OCCU_MATCH_COEFF 1 // 1 is good for efficiency
-#define OCCU_ON_FREE_COEFF -8 //-8
+#define OCCU_ON_FREE_COEFF -4 //-8
 #define REL_SCORE_MULT 10000
 
 #define FINE_REL_SCORE_MULT 10000
@@ -1198,7 +1198,7 @@ static int cloud_to_cmp_fine_matchmap(cloud_t* cloud, cmp_fine_matchmap_t* match
 
 	if(oor > cloud->n_points/20)
 	{
-		printf("cloud_to_cmp_fine_matchmap: WARN: over 5%% OOR points\n");
+		printf("cloud_to_cmp_fine_matchmap: WARN: %d%% OOR points\n", (100*oor)/cloud->n_points);
 	}
 	return vox_cnt;
 }

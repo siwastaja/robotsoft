@@ -43,7 +43,7 @@
 #include <stdint.h>
 
 extern int tcp_listener_sock;
-extern int tcp_client_sock; // One client at the time is allowed.
+extern volatile int tcp_client_sock; // One client at the time is allowed.
 
 int init_tcp_comm();
 int handle_tcp_client();
@@ -53,8 +53,6 @@ int tcp_query_sendbuf_space();
 int tcp_is_space_for_noncritical_message();
 
 void tcp_comm_close();
-
-
 
 
 #endif

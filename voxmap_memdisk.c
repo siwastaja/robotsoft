@@ -82,7 +82,7 @@ static void store_page(int idx)
 		if(page_metas[px][py][pz].loaded & (1<<rl))
 		{
 			assert(page_pointers[idx].p_voxmap[rl] != NULL);
-			printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
+			//printf("INFO: Storing page (%d,%d,%d,rl%d)\n", px, py, pz, rl);
 			page_metas[px][py][pz].flags_mem_idx |= PAGE_META_FLAG_STORED;
 			write_voxmap(page_pointers[idx].p_voxmap[rl], gen_fname("./current_maps", px, py, pz, rl, fnamebuf), mode_compression);
 		}

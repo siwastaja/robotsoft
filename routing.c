@@ -282,7 +282,7 @@ void voxmap_to_routing_pages(voxmap_t* vm)
 	// Just ignore wrong resolevel voxmaps:
 	if(vm->header.xy_step_mm != VOX_UNITS[ROUTING_RL])
 	{
-		printf("INFO: voxmap_to_routing_pages: Ignoring wrong resolevel voxmap, xy_step = %d mm\n", vm->header.xy_step_mm);
+		//printf("INFO: voxmap_to_routing_pages: Ignoring wrong resolevel voxmap, xy_step = %d mm\n", vm->header.xy_step_mm);
 		return;
 	}
 
@@ -304,7 +304,7 @@ void voxmap_to_routing_pages(voxmap_t* vm)
 	if(   po.pz < z_min_p
 	   || po.pz > z_max_p)
 	{
-		printf("INFO: voxmap_to_routing_pages: Ignoring out of z range voxmap, pz = %d, interest [%d..%d]\n", po.pz, z_min_p, z_max_p);
+		//printf("INFO: voxmap_to_routing_pages: Ignoring out of z range voxmap, pz = %d, interest [%d..%d]\n", po.pz, z_min_p, z_max_p);
 		return;
 	}
 
@@ -344,13 +344,13 @@ void voxmap_to_routing_pages(voxmap_t* vm)
 
 	if(!routing_pages[po.px][po.py])
 	{
-		printf("INFO: voxmap_to_routing_pages: Allocating new page %d,%d\n", po.px, po.py);
+		//printf("INFO: voxmap_to_routing_pages: Allocating new page %d,%d\n", po.px, po.py);
 		routing_pages[po.px][po.py] = calloc(1, sizeof(routing_page_t));
 		assert(routing_pages[po.px][po.py]);
 	}
 	else
 	{
-		printf("INFO: voxmap_to_routing_pages: clearing existing page %d,%d\n", po.px, po.py);
+		//printf("INFO: voxmap_to_routing_pages: clearing existing page %d,%d\n", po.px, po.py);
 		memset(routing_pages[po.px][po.py], 0, sizeof(routing_page_t));
 	}
 
@@ -358,13 +358,13 @@ void voxmap_to_routing_pages(voxmap_t* vm)
 	{
 		if(!routing_pages[po.px][po.py-1])
 		{
-			printf("INFO: voxmap_to_routing_pages: Allocating new page %d,%d\n", po.px, po.py-1);
+			//printf("INFO: voxmap_to_routing_pages: Allocating new page %d,%d\n", po.px, po.py-1);
 			routing_pages[po.px][po.py-1] = calloc(1, sizeof(routing_page_t));
 			assert(routing_pages[po.px][po.py-1]);
 		}
 		else
 		{
-			printf("INFO: voxmap_to_routing_pages: clearing existing page slice %d,%d\n", po.px, po.py-1);
+			//printf("INFO: voxmap_to_routing_pages: clearing existing page slice %d,%d\n", po.px, po.py-1);
 			for(int xx=0; xx<VOX_XS[ROUTING_RL]; xx++)
 			{
 				routing_pages[po.px][po.py-1]->routing[xx][ROUTING_MAP_PAGE_W/32] = 0;
@@ -373,7 +373,7 @@ void voxmap_to_routing_pages(voxmap_t* vm)
 	}
 
 
-	printf("INFO: voxmap_to_routing_pages: converting %d,%d,%d\n", po.px, po.py, po.pz);
+	//printf("INFO: voxmap_to_routing_pages: converting %d,%d,%d\n", po.px, po.py, po.pz);
 	for(int yy=0; yy<VOX_YS[ROUTING_RL]; yy++)
 	{
 		for(int xx=0; xx<VOX_XS[ROUTING_RL]; xx++)

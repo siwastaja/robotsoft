@@ -49,7 +49,7 @@ typedef struct
 	int ret;
 } tcp_message_t;
 
-
+// Dest: go directly (no routing)
 #define TCP_CR_DEST_MID    355
 typedef struct __attribute__ ((packed))
 {
@@ -60,6 +60,7 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_dest_t   msg_cr_dest;
 
+// Route: Robot plans a route to the given coordinates
 #define TCP_CR_ROUTE_MID    356
 typedef struct __attribute__ ((packed))
 {

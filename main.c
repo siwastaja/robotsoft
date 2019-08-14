@@ -125,14 +125,11 @@ pwr_status_t latest_pwr_status;
 state_vect_t state_vect =
 {
 	.v = {
-	.loca_2d = 1,
-	.loca_3d = 0,
-	.mapping_2d = 1,
-	.mapping_3d = 0,
+	.loca_3d = 1,
+	.mapping_3d = 1,
 	.mapping_collisions = 1,
 	.keep_position = 1,
-	.command_source = USER_IN_COMMAND,
-	.localize_with_big_search_area = 0
+	.command_source = USER_IN_COMMAND
 	}
 };
 
@@ -181,7 +178,7 @@ int partial_route = 0;
 int id_cnt = 1;
 int good_time_for_lidar_mapping = 0;
 
-int route_reverse = 0;
+int route_reverse = 1;
 
 void send_info(info_state_t state)
 {
@@ -375,11 +372,9 @@ void daiju_mode(int x)
 {
 }
 
-void do_live_obstacle_checking(){}
-void route_fsm(){}
 
-#if 0
 static int maneuver_cnt = 0; // to prevent too many successive maneuver operations
+#if 0
 void do_live_obstacle_checking()
 {
 	if(the_route[route_pos].backmode == 0)
@@ -409,7 +404,7 @@ void do_live_obstacle_checking()
 			target_y = cur_y + max_dist_to_next*sin(ang_to_target);
 		}
 
-		int hitcnt = check_direct_route_non_turning_hitcnt_mm(cur_x, cur_y, target_x, target_y);
+		int hitcnt = check_direct_route_non_turning_mm(cur_x, cur_y, target_x, target_y);
 
 		//printf("    HITCNT = %d, dist_to_next=%d\n", hitcnt, dist_to_next);
 
@@ -510,8 +505,8 @@ void do_live_obstacle_checking()
 #endif
 	}
 }
+#endif
 
-static int route_finished_for_charger;
 void route_fsm()
 {
 	static int micronavi_stops = 0;
@@ -689,7 +684,7 @@ void route_fsm()
 	}
 
 }
-#endif
+
 
 int32_t charger_ang;
 int charger_fwd;
@@ -1732,11 +1727,6 @@ void* main_thread()
 			{
 				//set_robot_pos(0,0,0);
 			}
-			if(cmd == 'M')
-			{
-				printf("Requesting massive search.\n");
-				state_vect.v.localize_with_big_search_area = 2;
-			}
 			if(cmd == 'L')
 			{
 				conf_charger_pos();
@@ -1885,7 +1875,7 @@ void* main_thread()
 						state_vect.v.keep_position = 1;
 						daiju_mode(0);
 						//stop_automapping();
-						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 0;
+						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 0;
 					} break;
 
 					case 1:
@@ -1896,7 +1886,7 @@ void* main_thread()
 						find_charger_state = 0;
 						do_follow_route = 0;
 						send_info(INFO_STATE_IDLE);
-						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
+						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 1;
 
 					} break;
 
@@ -1906,7 +1896,7 @@ void* main_thread()
 						daiju_mode(0);
 //						routing_set_world(&world);
 						//start_automapping_skip_compass();
-						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
+						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 1;
 					} break;
 
 					case 3:
@@ -1915,7 +1905,7 @@ void* main_thread()
 						daiju_mode(0);
 //						routing_set_world(&world);
 						//start_automapping_from_compass();
-						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
+						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 1;
 					} break;
 
 					case 4:
@@ -1926,7 +1916,7 @@ void* main_thread()
 						state_vect.v.keep_position = 1;
 						send_info(INFO_STATE_DAIJUING);
 						daiju_mode(1);
-						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 0;
+						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 0;
 					} break;
 
 					case 5:
@@ -1936,7 +1926,7 @@ void* main_thread()
 						do_follow_route = 0;
 						send_info(INFO_STATE_IDLE);
 						state_vect.v.keep_position = 0;
-						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
+						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 1;
 					} break;
 
 					case 6:
@@ -1946,7 +1936,7 @@ void* main_thread()
 						send_info(INFO_STATE_IDLE);
 						do_follow_route = 0;
 						state_vect.v.keep_position = 0;
-						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 0;
+						state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 0;
 					} break;
 
 					case 7:
@@ -2232,7 +2222,7 @@ void* main_thread()
 			}
 		}
 
-		//route_fsm();
+		route_fsm();
 		//autofsm();
 
 
@@ -2283,7 +2273,7 @@ void* main_thread()
 			daiju_mode(0);
 //			routing_set_world(&world);
 //			start_automapping_skip_compass();
-			state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.mapping_2d = state_vect.v.loca_3d = state_vect.v.loca_2d = 1;
+			state_vect.v.mapping_collisions = state_vect.v.mapping_3d = state_vect.v.loca_3d = 1;
 		}
 		if(!state_vect.v.command_source && prev_autonomous)
 		{
@@ -2300,6 +2290,14 @@ void* main_thread()
 			else
 				motor_enable_keepalive(0);
 		}
+
+		static int prev_keeppos;
+		if(!state_vect.v.keep_position && prev_keeppos)
+		{
+			// quick turn-off:
+			motor_enable_keepalive(0);
+		}
+		prev_keeppos = state_vect.v.keep_position;
 		
 
 

@@ -273,9 +273,9 @@ void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw)
 #define CLOUDFLT_UNIT 32 //mm
 */
 
-#define CLOUDFLT_XS 512
-#define CLOUDFLT_YS 512
-#define CLOUDFLT_ZS 128
+#define CLOUDFLT_XS 448
+#define CLOUDFLT_YS 448
+#define CLOUDFLT_ZS 96
 #define CLOUDFLT_UNIT 64 //mm
 
 static uint8_t free_cnt[CLOUDFLT_XS][CLOUDFLT_YS][CLOUDFLT_ZS];
@@ -562,16 +562,15 @@ void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 
 			// x and y ranges for load. rl irrelevant, only using page numbers
 			// End ranges have +32, because rl0 is handled to produce 2*2*2 output voxels, see below
-			po_coords_t polx0 = po_coords(freemap_offs_x+ref_x, (-CLOUDFLT_YS/2-1)*CLOUDFLT_UNIT+ref_y, 0, 0);
-			po_coords_t polx1 = po_coords(freemap_offs_x+ref_x+32, ( CLOUDFLT_YS/2+1)*CLOUDFLT_UNIT+ref_y+32, 0, 0);
+			po_coords_t polx0 = po_coords(freemap_offs_x+ref_x, (-CLOUDFLT_YS/2)*CLOUDFLT_UNIT+ref_y, 0, 0);
+			po_coords_t polx1 = po_coords(freemap_offs_x+ref_x+32, ( CLOUDFLT_YS/2-1)*CLOUDFLT_UNIT+ref_y+32, 0, 0);
 
 			// z range for load
-			po_coords_t polz0 = po_coords(0, 0, (-CLOUDFLT_ZS/2-1)*CLOUDFLT_UNIT+ref_z, 0);
-			po_coords_t polz1 = po_coords(0, 0, ( CLOUDFLT_ZS/2+1)*CLOUDFLT_UNIT+ref_z+32, 0);
+			po_coords_t polz0 = po_coords(0, 0, (-CLOUDFLT_ZS/2)*CLOUDFLT_UNIT+ref_z, 0);
+			po_coords_t polz1 = po_coords(0, 0, ( CLOUDFLT_ZS/2-1)*CLOUDFLT_UNIT+ref_z+32, 0);
 
 			load_pages(RESOLEVELS, RESOLEVELS, polx0.px, polx1.px, polx0.py, polx1.py, polz0.pz, polz1.pz);
 			//printf("LOAD: %d,%d   %d,%d   %d,%d\n", polx0.px, polx1.px, polx0.py, polx1.py, polz0.pz, polz1.pz);
-
 			for(int yy=0; yy<CLOUDFLT_YS; yy++)
 			{
 				int freemap_offs_y = (yy-(CLOUDFLT_YS/2))*CLOUDFLT_UNIT;
