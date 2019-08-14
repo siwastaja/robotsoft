@@ -19,11 +19,11 @@ do
 
 	case "$HOSTRET" in
 	135)	echo "Rebooting the computer..."
-		shutdown -r now
+		sudo shutdown -r now
 		;;
 
 	136)	echo "Shutting down the computer..."
-		shutdown -h now
+		sudo shutdown -h now
 		;;
 
 	5)	echo "Quitting..."
