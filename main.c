@@ -274,8 +274,10 @@ int poll_search_status(int act_as_well)
 	else
 		partial_route = 0;
 
-	route_unit_t *rt;
 	int len = 0;
+
+
+	route_unit_t *rt;
 	DL_FOREACH(some_route, rt)
 	{
 		if(route_reverse)
@@ -299,6 +301,8 @@ int poll_search_status(int act_as_well)
 			break;
 	}
 
+
+
 	for(int i = 1; i < len; i++)
 	{
 		float dist = sqrt(sq(the_route[i-1].x-the_route[i].x) + sq(the_route[i-1].y-the_route[i].y));
@@ -309,7 +313,8 @@ int poll_search_status(int act_as_well)
 		the_route[i].take_next_early = new_early;
 	}
 
-	the_route[len-1].take_next_early = 20;
+	if(len >= 1)
+		the_route[len-1].take_next_early = 20;
 
 	msg_rc_route_status.num_reroutes++;
 
@@ -1233,6 +1238,7 @@ void* main_thread()
 
 
 	double chafind_timestamp = 0.0;
+	double latest_action_timestamp = subsec_timestamp();
 	while(1)
 	{
 		int gyrocal_slam_state = -1;
@@ -1797,6 +1803,8 @@ void* main_thread()
 			cmd_state = ret;
 			if(ret == TCP_CR_DEST_MID)
 			{
+				latest_action_timestamp = subsec_timestamp();
+
 				state_vect.v.keep_position = 1;
 				daiju_mode(0);
 
@@ -1827,6 +1835,7 @@ void* main_thread()
 			}
 			else if(ret == TCP_CR_ROUTE_MID)
 			{
+				latest_action_timestamp = subsec_timestamp();
 
 				printf("  ---> ROUTE params: X=%d Y=%d dummy=%d\n", msg_cr_route.x, msg_cr_route.y, msg_cr_route.dummy);
 
@@ -1846,6 +1855,8 @@ void* main_thread()
 			}
 			else if(ret == TCP_CR_CHARGE_MID)
 			{
+				latest_action_timestamp = subsec_timestamp();
+
 				read_charger_pos();
 				find_charger_state = 1;
 			}
@@ -1867,6 +1878,8 @@ void* main_thread()
 			}
 			else if(ret == TCP_CR_MODE_MID)	// Most mode messages deprecated, here for backward-compatibility, will be removed soon.
 			{
+				latest_action_timestamp = subsec_timestamp();
+
 				printf("Request for MODE %d\n", msg_cr_mode.mode);
 				switch(msg_cr_mode.mode)
 				{
@@ -1969,6 +1982,8 @@ void* main_thread()
 			}
 			else if(ret == TCP_CR_MANU_MID)
 			{
+				latest_action_timestamp = subsec_timestamp();
+
 				#define MANU_FWD   10
 				#define MANU_BACK  11
 				#define MANU_LEFT  12
@@ -1997,6 +2012,8 @@ void* main_thread()
 			}		
 			else if(ret == TCP_CR_MAINTENANCE_MID)
 			{
+				latest_action_timestamp = subsec_timestamp();
+
 				if(msg_cr_maintenance.magic == 0x12345678)
 				{
 					retval = msg_cr_maintenance.retval;
@@ -2098,6 +2115,20 @@ void* main_thread()
 
 
 
+		//latest_action_timestamp = subsec_timestamp();
+
+		{
+			double cur_ts = subsec_timestamp();
+
+			if(
+				(latest_pwr_status.bat_percent < 70 && cur_ts > latest_action_timestamp + 60*60) ||
+				(latest_pwr_status.bat_percent < 50 && cur_ts > latest_action_timestamp + 30*60) ||
+				(latest_pwr_status.bat_percent < 40 && cur_ts > latest_action_timestamp + 5*60) ||
+				(latest_pwr_status.bat_percent < 35))
+			{
+				// do something
+			}
+		}
 
 		if(cmd_state == TCP_CR_DEST_MID && tcp_client_sock >= 0)
 		{

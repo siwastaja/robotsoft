@@ -372,6 +372,7 @@ typedef struct __attribute__((packed))
 	int32_t backwall_ang;
 	int32_t midmark_x;
 	int32_t midmark_y;
+	int32_t midmark_y_oldway;
 	int32_t shift;
 	int32_t dist;
 

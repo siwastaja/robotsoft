@@ -7,10 +7,7 @@
 # and run:
 # ./robotsoft
 
-#DEVIP = 10.3.0.6
-#DEVIP = 192.168.43.59
-DEVIP = 10.42.0.100
-#DEVIP = 192.168.1.6
+DEVIP = 192.168.1.101
 
 CC = arm-linux-gnueabihf-gcc
 LD = arm-linux-gnueabihf-gcc
@@ -21,12 +18,12 @@ BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
 SPIPROG_OBJ = spiprog.o
 CALIBRATOR_OBJ = ../robotsoft-calibrator/calibrator.o spi.o b2s_prints.o
 
-CFLAGS = -I. -I../raspilibs/usr/include -Wall -Winline -std=c99 -DROBOTSOFT -D_XOPEN_SOURCE=700
+CFLAGS = -I. -I../raspilibs/usr/include -I/home/hrst/pulu/raspilibs/usr/include/arm-linux-gnueabihf -Wall -Winline -std=c99 -DROBOTSOFT -D_XOPEN_SOURCE=700
 
 CFLAGS += -g
 CFLAGS += -O3 -march=armv8-a -mfloat-abi=hard -mfpu=neon-fp-armv8
 
-LDFLAGS = -L/home/hrst/cross-pi-gcc-9.1.0-2/arm-linux-gnueabihf/libc/lib -L../raspilibs/lib/arm-linux-gnueabihf -L../raspilibs/usr/lib/arm-linux-gnueabihf
+LDFLAGS = -L/home/hrst/cross-pi-gcc-9.2.0-2/arm-linux-gnueabihf/libc/lib -L../raspilibs/lib/arm-linux-gnueabihf -L../raspilibs/usr/lib/arm-linux-gnueabihf -L/home/hrst/pulu/raspilibs/usr/lib/arm-linux-gnueabihf
 
 all: robotsoft
 
@@ -53,11 +50,11 @@ $(CALIBRATOR_OBJ): %.o: %.c
 #	@rm -f $*.d.tmp
 
 robotsoft: $(ROBOTSOFT_OBJ)
-	$(LD) $(LDFLAGS) -o robotsoft $^ -lm -lz -pthread
+	$(LD) $(LDFLAGS) -o robotsoft $^ -ldl -lm -lz -pthread
 	scp robotsoft pulu@$(DEVIP):~/robotsoft
 
 boardmon: $(BOARDMON_OBJ)
-	$(LD) $(LDFLAGS) -o boardmon $^ -lm -pthread
+	$(LD) $(LDFLAGS) -o boardmon $^ -ldl -lm -pthread
 	scp boardmon pulu@$(DEVIP):~/robotsoft
 
 spiprog: $(SPIPROG_OBJ)
@@ -65,7 +62,7 @@ spiprog: $(SPIPROG_OBJ)
 	scp spiprog pulu@$(DEVIP):~/robotsoft
 
 calibrator: $(CALIBRATOR_OBJ)
-	$(LD) $(LDFLAGS) -o calibrator $^ -lm -pthread
+	$(LD) $(LDFLAGS) -o calibrator $^ -ldl -lm -pthread
 	scp calibrator pulu@$(DEVIP):~/robotsoft
 
 e:
