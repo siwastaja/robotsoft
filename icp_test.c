@@ -46,6 +46,7 @@ typedef struct
 #define ICP_BLOCK_TIGHT_ALLOC
 
 typedef uint16_t icp_point_t;
+#define DELETED_POINT 0xffff
 
 #define ICP_POINT_X_OFFS   0
 #define ICP_POINT_X_BITS   ICP_BLOCK_SIZE_BITS
@@ -81,6 +82,7 @@ typedef struct
 
 icp_block_t blocks_a[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 icp_block_t blocks_b[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
+icp_block_t blocks_b_copy[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 
 
 void free_and_zero_blocks(icp_block_t* blocks)
@@ -411,6 +413,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		transform_cloud_copy(cloud_b_in, &cloud_b, x_corr, y_corr, z_corr, yaw_corr);
 
 		build_blocks(&cloud_b, blocks_b, 0);
+		build_blocks(&cloud_b, blocks_b_copy, 0);
 		int n_associations = 0;
 
 		// Loop over all blocks of a;
@@ -435,6 +438,8 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 						unsigned int nearest_bz;
 
 						int min_sqdist = 999999999;
+						int nearest_b_bidx;
+						int nearest_b_bi;
 						for(unsigned int b_bx = a_bx-ICP_N_SEARCH_BLOCKS_X; b_bx <= a_bx+ICP_N_SEARCH_BLOCKS_X; b_bx++)
 						{
 							for(unsigned int b_by = a_by-ICP_N_SEARCH_BLOCKS_Y; b_by <= a_by+ICP_N_SEARCH_BLOCKS_Y; b_by++)
@@ -457,6 +462,8 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 											nearest_bx = bx;
 											nearest_by = by;
 											nearest_bz = bz;
+											nearest_b_bidx = b_bidx;
+											nearest_b_bi = bi;
 										}
 									}
 								}
@@ -465,7 +472,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 						}
 
 
-						if(min_sqdist > sq(4)) // no close association found - copy A to output as is
+						if(min_sqdist > sq(8)) // no close association found - copy A to output as is
 						{
 							combined_cloud_out->points[combined_cloud_out->n_points++] =
 								(cloud_point_t){0,0,0,
@@ -480,6 +487,26 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 							// TODO: Calculate average of matched points, insert that, remove the matched point from B
 							// so it won't be added again
 							// For now, don't do anything; B will be used.
+							// DIDTHAT: looks clumpy, not good.
+
+							int cx = (ax+nearest_bx)>>1;
+							int cy = (ay+nearest_by)>>1;
+							int cz = (az+nearest_bz)>>1;
+
+							//int cx = nearest_bx;
+							//int cy = nearest_by;
+							//int cz = nearest_bz;
+
+							combined_cloud_out->points[combined_cloud_out->n_points++] =
+								(cloud_point_t){0,0,0,
+								cx - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS,
+								cy - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS,
+								cz - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS};
+
+							assert(combined_cloud_out->n_points <= MAX_POINTS);
+
+							blocks_b_copy[nearest_b_bidx].points[nearest_b_bi] = DELETED_POINT;
+
 						}
 	
 
@@ -490,7 +517,8 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		}
 
 		// Copy all transformed B points
-
+		// The two code snippets have the same result.
+/*
 		for(int i=0; i<cloud_b.n_points; i++)
 		{
 			combined_cloud_out->points[combined_cloud_out->n_points++] = 
@@ -498,6 +526,39 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 
 			assert(combined_cloud_out->n_points <= MAX_POINTS);
 		}
+*/
+
+
+		for(unsigned int b_bx = ICP_N_SEARCH_BLOCKS_X; b_bx < N_ICP_BLOCKS_X-ICP_N_SEARCH_BLOCKS_X; b_bx++)
+		{
+			for(unsigned int b_by = ICP_N_SEARCH_BLOCKS_Y; b_by < N_ICP_BLOCKS_Y-ICP_N_SEARCH_BLOCKS_Y; b_by++)
+			{
+				for(unsigned int b_bz = ICP_N_SEARCH_BLOCKS_Z; b_bz < N_ICP_BLOCKS_Z-ICP_N_SEARCH_BLOCKS_Z; b_bz++)
+				{
+					unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
+
+					for(int bi=0; bi<blocks_b_copy[b_bidx].n_points; bi++)
+					{
+						if(blocks_b_copy[b_bidx].points[bi] != DELETED_POINT)
+						{
+							unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b_copy[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+							unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b_copy[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+							unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b_copy[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+
+							combined_cloud_out->points[combined_cloud_out->n_points++] =
+								(cloud_point_t){0,0,0,
+								bx - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS,
+								by - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS,
+								bz - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS};
+
+							assert(combined_cloud_out->n_points <= MAX_POINTS);
+						}
+					}
+				}
+			}
+		}
+
+
 	}
 
 
