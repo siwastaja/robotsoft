@@ -82,7 +82,6 @@ typedef struct
 
 icp_block_t blocks_a[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 icp_block_t blocks_b[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
-icp_block_t blocks_b_copy[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 
 
 void free_and_zero_blocks(icp_block_t* blocks)
@@ -261,9 +260,10 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		double ts;
 		double t_transform, t_build, t_search, t_free, t_total;
 
-		doublepoint_t mean_a = {0,0,0};
-		doublepoint_t mean_b = {0,0,0};
 		doublepoint_t mean_diff = {0,0,0};
+
+		int_fast64_t dot_accum = 0;
+		int_fast64_t det_accum = 0;
 
 		static cloud_t cloud_b;
 
@@ -339,17 +339,22 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 
 						n_associations++;
 
-						mean_a.x += ax;
-						mean_a.y += ay;
-						mean_a.z += az;
-
-						mean_b.x += nearest_bx;
-						mean_b.y += nearest_by;
-						mean_b.z += nearest_bz;
-
 						mean_diff.x += (signed int)nearest_bx - (signed int)ax;
 						mean_diff.y += (signed int)nearest_by - (signed int)ay;
 						mean_diff.z += (signed int)nearest_bz - (signed int)az;
+
+						int sax = (signed int)ax - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS;
+						int say = (signed int)ay - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS;
+						int saz = (signed int)az - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS;
+						int sbx = (signed int)nearest_bx - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS;
+						int sby = (signed int)nearest_by - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS;
+						int sbz = (signed int)nearest_bz - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS;
+
+						int_fast64_t dot = sax*sbx + say*sby;
+						int_fast64_t det = sax*sby - say*sbx;
+
+						dot_accum += dot;
+						det_accum += det;
 					}
 				}
 			}
@@ -362,32 +367,23 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		free_and_zero_blocks(blocks_b);
 		t_free = subsec_timestamp() - ts;
 
-
-		mean_a.x /= (double)n_associations;
-		mean_a.y /= (double)n_associations;
-		mean_a.z /= (double)n_associations;
-
-		mean_b.x /= (double)n_associations;
-		mean_b.y /= (double)n_associations;
-		mean_b.z /= (double)n_associations;
-
-		//doublepoint_t mean_diff = {mean_b.x-mean_a.x, mean_b.y-mean_a.y, mean_b.z-mean_a.z};
-
 		mean_diff.x /= (double)n_associations;
 		mean_diff.y /= (double)n_associations;
 		mean_diff.z /= (double)n_associations;
 
+		double yaw = atan2(det_accum, dot_accum);
 
 		x_corr -= mean_diff.x;
 		y_corr -= mean_diff.y;
 		z_corr -= mean_diff.z;
+		yaw_corr -= yaw;
 
 		t_total = subsec_timestamp() - ts_initial;
 
-		printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%), mean_a=(%+6.0f,%+6.0f,%+6.0f), mean_b=(%+6.0f,%+6.0f,%+6.0f), diff=(%+6.0f,%+6.0f,%+6.0f), corr=(%+6.0f,%+6.0f,%+6.0f)\n",
+		printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%), transl=(%+6.0f,%+6.0f,%+6.0f), yaw=%.2f deg, corr=(%+6.0f,%+6.0f,%+6.0f; %.2f deg)\n",
 			iter, cloud_a->n_points, cloud_b.n_points, n_associations,
 			100.0*(double)n_associations/(double)cloud_a->n_points, 100.0*(double)n_associations/(double)cloud_b.n_points,
-			mean_a.x, mean_a.y, mean_a.z, mean_b.x, mean_b.y, mean_b.z, mean_diff.x, mean_diff.y, mean_diff.z, x_corr, y_corr, z_corr);
+			mean_diff.x, mean_diff.y, mean_diff.z, RADTODEG(yaw), x_corr, y_corr, z_corr, RADTODEG(yaw_corr));
 
 
 		printf("Performance: transform %.2f ms  build %.2f ms  search %.2f ms  free %.2f ms  total %.2f ms\n\n",
@@ -404,16 +400,11 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	combined_cloud_out->n_points = 0;
 	// PRODUCE THE OUTPUT
 	{
-		doublepoint_t mean_a = {0,0,0};
-		doublepoint_t mean_b = {0,0,0};
-		doublepoint_t mean_diff = {0,0,0};
-
 		static cloud_t cloud_b;
 
 		transform_cloud_copy(cloud_b_in, &cloud_b, x_corr, y_corr, z_corr, yaw_corr);
 
 		build_blocks(&cloud_b, blocks_b, 0);
-		build_blocks(&cloud_b, blocks_b_copy, 0);
 		int n_associations = 0;
 
 		// Loop over all blocks of a;
@@ -472,7 +463,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 						}
 
 
-						if(min_sqdist > sq(8)) // no close association found - copy A to output as is
+						if(min_sqdist > sq(3)) // no close association found - copy A to output as is
 						{
 							combined_cloud_out->points[combined_cloud_out->n_points++] =
 								(cloud_point_t){0,0,0,
@@ -484,29 +475,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 						}
 						else
 						{
-							// TODO: Calculate average of matched points, insert that, remove the matched point from B
-							// so it won't be added again
-							// For now, don't do anything; B will be used.
-							// DIDTHAT: looks clumpy, not good.
-
-							int cx = (ax+nearest_bx)>>1;
-							int cy = (ay+nearest_by)>>1;
-							int cz = (az+nearest_bz)>>1;
-
-							//int cx = nearest_bx;
-							//int cy = nearest_by;
-							//int cz = nearest_bz;
-
-							combined_cloud_out->points[combined_cloud_out->n_points++] =
-								(cloud_point_t){0,0,0,
-								cx - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS,
-								cy - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS,
-								cz - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS};
-
-							assert(combined_cloud_out->n_points <= MAX_POINTS);
-
-							blocks_b_copy[nearest_b_bidx].points[nearest_b_bi] = DELETED_POINT;
-
+							// Let 
 						}
 	
 
@@ -518,7 +487,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 
 		// Copy all transformed B points
 		// The two code snippets have the same result.
-/*
+
 		for(int i=0; i<cloud_b.n_points; i++)
 		{
 			combined_cloud_out->points[combined_cloud_out->n_points++] = 
@@ -526,9 +495,9 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 
 			assert(combined_cloud_out->n_points <= MAX_POINTS);
 		}
-*/
 
 
+/*
 		for(unsigned int b_bx = ICP_N_SEARCH_BLOCKS_X; b_bx < N_ICP_BLOCKS_X-ICP_N_SEARCH_BLOCKS_X; b_bx++)
 		{
 			for(unsigned int b_by = ICP_N_SEARCH_BLOCKS_Y; b_by < N_ICP_BLOCKS_Y-ICP_N_SEARCH_BLOCKS_Y; b_by++)
@@ -537,13 +506,13 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 				{
 					unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
-					for(int bi=0; bi<blocks_b_copy[b_bidx].n_points; bi++)
+					for(int bi=0; bi<blocks_b[b_bidx].n_points; bi++)
 					{
-						if(blocks_b_copy[b_bidx].points[bi] != DELETED_POINT)
+						if(blocks_b[b_bidx].points[bi] != DELETED_POINT)
 						{
-							unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b_copy[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-							unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b_copy[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-							unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b_copy[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+							unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+							unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+							unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
 
 							combined_cloud_out->points[combined_cloud_out->n_points++] =
 								(cloud_point_t){0,0,0,
@@ -557,10 +526,10 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 				}
 			}
 		}
+*/
 
 
 	}
-
 
 
 
@@ -569,7 +538,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	*x_corr_out = x_corr;
 	*y_corr_out = y_corr;
 	*z_corr_out = z_corr;
-	*yaw_corr_out = 0.0;
+	*yaw_corr_out = yaw_corr;
 
 
 	return 0;
@@ -607,7 +576,7 @@ int main()
 	}
 
 
-	transform_cloud(&clb, 3200/SMALL_CLOUD_POINT_RESO_X, 3500/SMALL_CLOUD_POINT_RESO_Y, 0, 0.0);	
+	transform_cloud(&clb, 3200/SMALL_CLOUD_POINT_RESO_X, 3500/SMALL_CLOUD_POINT_RESO_Y, 0, DEGTORAD(0.0));	
 
 	static cloud_t clab;
 
