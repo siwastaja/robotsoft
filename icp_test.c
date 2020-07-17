@@ -4,6 +4,8 @@
 #include <assert.h>
 #include "slam_cloud.h"
 
+#include "misc.h"
+
 #define CML_PRIVATE
 #define CML_NO_DEPENDENCIES
 #include "cml.h"
@@ -23,7 +25,7 @@ typedef struct
 } doublepoint_t;
 
 #define ICP_BLOCK_SIZE_BITS (4)
-#define ICP_BLOCK_SIZE_MASK (0b1111)
+#define ICP_BLOCK_SIZE_MASK ((1<<ICP_BLOCK_SIZE_BITS)-1)
 
 #define ICP_BLOCK_XS  (1<<ICP_BLOCK_SIZE_BITS)
 #define ICP_BLOCK_YS  (1<<ICP_BLOCK_SIZE_BITS)
@@ -41,17 +43,19 @@ typedef struct
 // out, the block is realloc()'d with double the points, each time.
 #define ICP_BLOCK_INIT_ALLOC_POINTS 16
 
+#define ICP_BLOCK_TIGHT_ALLOC
+
 typedef uint16_t icp_point_t;
 
 #define ICP_POINT_X_OFFS   0
-#define ICP_POINT_X_BITS   4
-#define ICP_POINT_X_MASK   (0b1111)
-#define ICP_POINT_Y_OFFS   4
-#define ICP_POINT_Y_BITS   4
-#define ICP_POINT_Y_MASK   (0b1111)
-#define ICP_POINT_Z_OFFS   8
-#define ICP_POINT_Z_BITS   4
-#define ICP_POINT_Z_MASK   (0b1111)
+#define ICP_POINT_X_BITS   ICP_BLOCK_SIZE_BITS
+#define ICP_POINT_X_MASK   ICP_BLOCK_SIZE_MASK
+#define ICP_POINT_Y_OFFS   ICP_BLOCK_SIZE_BITS
+#define ICP_POINT_Y_BITS   ICP_BLOCK_SIZE_BITS
+#define ICP_POINT_Y_MASK   ICP_BLOCK_SIZE_MASK
+#define ICP_POINT_Z_OFFS   (2*ICP_BLOCK_SIZE_BITS)
+#define ICP_POINT_Z_BITS   ICP_BLOCK_SIZE_BITS
+#define ICP_POINT_Z_MASK   ICP_BLOCK_SIZE_MASK
 
 typedef struct
 {
@@ -60,16 +64,20 @@ typedef struct
 	icp_point_t* points;
 } icp_block_t;
 
-#define N_ICP_BLOCKS_X 256
-#define N_ICP_BLOCKS_Y 256
-#define N_ICP_BLOCKS_Z 64
+
+#define ICP_BLOCK_ADDR_X_BITS 8  // 8
+#define ICP_BLOCK_ADDR_Y_BITS 8  // 8
+#define ICP_BLOCK_ADDR_Z_BITS 6  // 6
 
 #define ICP_BLOCK_ADDR_X_OFFS 0
-#define ICP_BLOCK_ADDR_X_BITS 8
-#define ICP_BLOCK_ADDR_Y_OFFS 8
-#define ICP_BLOCK_ADDR_Y_BITS 8
-#define ICP_BLOCK_ADDR_Z_OFFS 16
-#define ICP_BLOCK_ADDR_Z_BITS 6
+#define ICP_BLOCK_ADDR_Y_OFFS (ICP_BLOCK_ADDR_X_BITS)
+#define ICP_BLOCK_ADDR_Z_OFFS (ICP_BLOCK_ADDR_X_BITS+ICP_BLOCK_ADDR_Y_BITS)
+
+
+#define N_ICP_BLOCKS_X (1<<ICP_BLOCK_ADDR_X_BITS)
+#define N_ICP_BLOCKS_Y (1<<ICP_BLOCK_ADDR_Y_BITS)
+#define N_ICP_BLOCKS_Z (1<<ICP_BLOCK_ADDR_Z_BITS)
+
 
 icp_block_t blocks_a[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 icp_block_t blocks_b[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
@@ -86,9 +94,23 @@ void free_and_zero_blocks(icp_block_t* blocks)
 	memset(blocks, 0, N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z * sizeof blocks[0]);
 }
 
-void build_blocks(cloud_t* cloud, icp_block_t* blocks)
+#define BUILD_BLOCKS_STATS
+
+void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 {
+	#ifdef BUILD_BLOCKS_STATS
+
 	int oor_ignored = 0;
+	int n_reduced = 0;
+	int n_over_256 = 0;
+	int n_over_128 = 0;
+	int n_over_64 = 0;
+	int n_over_32 = 0;
+	int n_over_16 = 0;
+	int n_over_8 = 0;
+
+	#endif
+
 	for(int pi=0; pi<cloud->n_points; pi++)
 	{
 		int x = cloud->points[pi].px;
@@ -102,7 +124,9 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks)
 		if(x < 0 || y < 0 || z < 0 ||
 		   x >= N_ICP_BLOCKS_X*ICP_BLOCK_XS || y >= N_ICP_BLOCKS_Y*ICP_BLOCK_YS || z >= N_ICP_BLOCKS_Z*ICP_BLOCK_ZS)
 		{
-			oor_ignored++;
+			#ifdef BUILD_BLOCKS_STATS
+				oor_ignored++;
+			#endif
 			continue;
 		}
 
@@ -121,19 +145,53 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks)
 
 		unsigned int block_idx = (bx<<ICP_BLOCK_ADDR_X_OFFS) | (by<<ICP_BLOCK_ADDR_Y_OFFS) | (bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
-		if(blocks[block_idx].n_alloc <= blocks[block_idx].n_points)
+		if(reduce)
 		{
-			// Out of room for points, reallocate more space
-			if(blocks[block_idx].n_alloc == 0)
-				blocks[block_idx].n_alloc = ICP_BLOCK_INIT_ALLOC_POINTS;
-			else
-				blocks[block_idx].n_alloc *= 2;
+			int_fast32_t sqdist_closest = INT_FAST32_MAX;
+			//int closest_idx;
+			for(int i = 0; i < blocks[block_idx].n_points; i++)
+			{
+				int earlier_ox = (blocks[block_idx].points[i]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK;
+				int earlier_oy = (blocks[block_idx].points[i]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK;
+				int earlier_oz = (blocks[block_idx].points[i]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK;
 
-			// realloc works like malloc when the pointer is NULL, the initial case.
-			blocks[block_idx].points = realloc(blocks[block_idx].points, blocks[block_idx].n_alloc * sizeof blocks[block_idx].points[0]);
+				int_fast32_t sqdist = sq(earlier_ox - (int)ox) + sq(earlier_oy - (int)oy) + sq(earlier_oz - (int)oz);
 
-			assert(blocks[block_idx].points);
+				if(sqdist < sqdist_closest)
+				{
+					sqdist_closest = sqdist;
+					//closest_idx = i;
+				}
+			}
+
+			if(sqdist_closest < sq(ICP_BLOCK_XS/4))
+			{
+				#ifdef BUILD_BLOCKS_STATS
+					n_reduced++;
+				#endif
+				continue;
+			}
 		}
+
+		#ifndef ICP_BLOCK_TIGHT_ALLOC
+			if(blocks[block_idx].n_alloc <= blocks[block_idx].n_points)
+			{
+				// Out of room for points, reallocate more space
+				if(blocks[block_idx].n_alloc == 0)
+					blocks[block_idx].n_alloc = ICP_BLOCK_INIT_ALLOC_POINTS;
+				else
+					blocks[block_idx].n_alloc *= 2;
+
+				// realloc works like malloc when the pointer is NULL, the initial case.
+				blocks[block_idx].points = realloc(blocks[block_idx].points, blocks[block_idx].n_alloc * sizeof blocks[block_idx].points[0]);
+
+				assert(blocks[block_idx].points);
+			}
+		#else
+			blocks[block_idx].n_alloc++;
+			blocks[block_idx].points = realloc(blocks[block_idx].points, blocks[block_idx].n_alloc * sizeof blocks[block_idx].points[0]);
+			assert(blocks[block_idx].points);
+		#endif
 
 		// Insert the point:
 
@@ -143,51 +201,80 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks)
 		blocks[block_idx].n_points++;
 	}
 
-	int64_t total_points = 0;
-	int64_t total_allocd = 0;
+	#ifdef BUILD_BLOCKS_STATS
+		int64_t total_points = 0;
+		int64_t total_allocd = 0;
 
-	int nonnull_a = 0, nonnull_b = 0;
+		int nonnull_a = 0, nonnull_b = 0;
 
-	for(int i=0; i<N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
-	{
-		total_points += blocks[i].n_points;
-		total_allocd += blocks[i].n_alloc;
+		for(int i=0; i<N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
+		{
+			total_points += blocks[i].n_points;
+			total_allocd += blocks[i].n_alloc;
 
-		if(blocks[i].points != NULL)
-			nonnull_a++;
+			if(blocks[i].points != NULL)
+				nonnull_a++;
 
-		if(blocks[i].n_points > 0)
-			nonnull_b++;
-	}
+			if(blocks[i].n_points > 0)
+				nonnull_b++;
 
-	assert(nonnull_a == nonnull_b);
+			if(blocks[i].n_points > 8)
+				n_over_8++;
+			if(blocks[i].n_points > 16)
+				n_over_16++;
+			if(blocks[i].n_points > 32)
+				n_over_32++;
+			if(blocks[i].n_points > 64)
+				n_over_64++;
+			if(blocks[i].n_points > 128)
+				n_over_128++;
+			if(blocks[i].n_points > 256)
+				n_over_256++;
+		}
 
-	printf("build_blocks(): cloud->n_points = %d, oor_ignored=%d, active blocks = %d, points in blocks = %ld, allocated points = %ld (mem %ld KB)\n", 
-		cloud->n_points, oor_ignored, nonnull_a, total_points, total_allocd, total_allocd * sizeof blocks[0].points[0] / 1024);
+		assert(nonnull_a == nonnull_b);
+
+		printf("build_blocks(): cloud->n_points = %d, oor_ignored=%d, reduced = %d, active blocks = %d, points in blocks = %ld, allocated points = %ld (mem %ld KB)\n", 
+			cloud->n_points, oor_ignored, n_reduced, nonnull_a, total_points, total_allocd, total_allocd * sizeof blocks[0].points[0] / 1024);
+		printf("    over8: %d,  over16: %d,  over32: %d,  over64: %d,  over128: %d,  over256: %d\n", n_over_8, n_over_16, n_over_32, n_over_64, n_over_128, n_over_256);
+
+	#endif
 }
 
 
 static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	double x_corr, double y_corr, double z_corr, double yaw_corr,
 	int threshold,
-	double* x_corr_out, double* y_corr_out, double* z_corr_out, double* yaw_corr_out)
+	double* x_corr_out, double* y_corr_out, double* z_corr_out, double* yaw_corr_out,
+	cloud_t* combined_cloud_out)
 {
 	float mat_rota[9];
 	float mat_transl[3];
 
-	build_blocks(cloud_a, blocks_a);
+	build_blocks(cloud_a, blocks_a, 1);
 
-	for(int iter=0; iter<30; iter++)
+	for(int iter=0; iter<20; iter++)
 	{
+		double ts_initial;
+		double ts;
+		double t_transform, t_build, t_search, t_free, t_total;
+
 		doublepoint_t mean_a = {0,0,0};
 		doublepoint_t mean_b = {0,0,0};
+		doublepoint_t mean_diff = {0,0,0};
 
 		static cloud_t cloud_b;
 
+		ts_initial = ts = subsec_timestamp();
 		transform_cloud_copy(cloud_b_in, &cloud_b, x_corr, y_corr, z_corr, yaw_corr);
+		t_transform = subsec_timestamp() - ts;
 
-		build_blocks(&cloud_b, blocks_b);
+		ts = subsec_timestamp();
+		build_blocks(&cloud_b, blocks_b, 0);
+		t_build = subsec_timestamp() - ts;
 
+
+		ts = subsec_timestamp();
 
 		int n_associations = 0;
 
@@ -199,7 +286,6 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 			{
 				for(unsigned int a_bz = ICP_N_SEARCH_BLOCKS_Z; a_bz < N_ICP_BLOCKS_Z-ICP_N_SEARCH_BLOCKS_Z; a_bz++)
 				{
-
 					unsigned int a_bidx = (a_bx<<ICP_BLOCK_ADDR_X_OFFS) | (a_by<<ICP_BLOCK_ADDR_Y_OFFS) | (a_bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
 					for(int ai=0; ai<blocks_a[a_bidx].n_points; ai++)
@@ -228,7 +314,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
 										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
 
-										int sqdist = sq(bx-ax) + sq(by-ay) + sq(bz-az);
+										int sqdist = sq(bx-ax) + sq(by-ay) + 2*sq(bz-az);
 
 										if(sqdist < min_sqdist)
 										{
@@ -258,11 +344,21 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 						mean_b.x += nearest_bx;
 						mean_b.y += nearest_by;
 						mean_b.z += nearest_bz;
+
+						mean_diff.x += (signed int)nearest_bx - (signed int)ax;
+						mean_diff.y += (signed int)nearest_by - (signed int)ay;
+						mean_diff.z += (signed int)nearest_bz - (signed int)az;
 					}
 				}
 			}
 
 		}
+
+		t_search = subsec_timestamp() - ts;
+
+		ts = subsec_timestamp();
+		free_and_zero_blocks(blocks_b);
+		t_free = subsec_timestamp() - ts;
 
 
 		mean_a.x /= (double)n_associations;
@@ -273,19 +369,138 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		mean_b.y /= (double)n_associations;
 		mean_b.z /= (double)n_associations;
 
-		doublepoint_t mean_diff = {mean_b.x-mean_a.x, mean_b.y-mean_a.y, mean_b.z-mean_a.z};
+		//doublepoint_t mean_diff = {mean_b.x-mean_a.x, mean_b.y-mean_a.y, mean_b.z-mean_a.z};
+
+		mean_diff.x /= (double)n_associations;
+		mean_diff.y /= (double)n_associations;
+		mean_diff.z /= (double)n_associations;
+
 
 		x_corr -= mean_diff.x;
 		y_corr -= mean_diff.y;
 		z_corr -= mean_diff.z;
+
+		t_total = subsec_timestamp() - ts_initial;
 
 		printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%), mean_a=(%+6.0f,%+6.0f,%+6.0f), mean_b=(%+6.0f,%+6.0f,%+6.0f), diff=(%+6.0f,%+6.0f,%+6.0f), corr=(%+6.0f,%+6.0f,%+6.0f)\n",
 			iter, cloud_a->n_points, cloud_b.n_points, n_associations,
 			100.0*(double)n_associations/(double)cloud_a->n_points, 100.0*(double)n_associations/(double)cloud_b.n_points,
 			mean_a.x, mean_a.y, mean_a.z, mean_b.x, mean_b.y, mean_b.z, mean_diff.x, mean_diff.y, mean_diff.z, x_corr, y_corr, z_corr);
 
-		free_and_zero_blocks(blocks_b);
+
+		printf("Performance: transform %.2f ms  build %.2f ms  search %.2f ms  free %.2f ms  total %.2f ms\n\n",
+			t_transform*1000.0, t_build*1000.0, t_search*1000.0, t_free*1000.0, t_total*1000.0);
+
 	}
+
+
+
+	free_and_zero_blocks(blocks_a);
+
+	build_blocks(cloud_a, blocks_a, 0);
+
+	combined_cloud_out->n_points = 0;
+	// PRODUCE THE OUTPUT
+	{
+		doublepoint_t mean_a = {0,0,0};
+		doublepoint_t mean_b = {0,0,0};
+		doublepoint_t mean_diff = {0,0,0};
+
+		static cloud_t cloud_b;
+
+		transform_cloud_copy(cloud_b_in, &cloud_b, x_corr, y_corr, z_corr, yaw_corr);
+
+		build_blocks(&cloud_b, blocks_b, 0);
+		int n_associations = 0;
+
+		// Loop over all blocks of a;
+		// for each point within the a block, loop over the points of the few adjacent blocks in b
+		for(unsigned int a_bx = ICP_N_SEARCH_BLOCKS_X; a_bx < N_ICP_BLOCKS_X-ICP_N_SEARCH_BLOCKS_X; a_bx++)
+		{
+			for(unsigned int a_by = ICP_N_SEARCH_BLOCKS_Y; a_by < N_ICP_BLOCKS_Y-ICP_N_SEARCH_BLOCKS_Y; a_by++)
+			{
+				for(unsigned int a_bz = ICP_N_SEARCH_BLOCKS_Z; a_bz < N_ICP_BLOCKS_Z-ICP_N_SEARCH_BLOCKS_Z; a_bz++)
+				{
+					unsigned int a_bidx = (a_bx<<ICP_BLOCK_ADDR_X_OFFS) | (a_by<<ICP_BLOCK_ADDR_Y_OFFS) | (a_bz<<ICP_BLOCK_ADDR_Z_OFFS);
+
+					for(int ai=0; ai<blocks_a[a_bidx].n_points; ai++)
+					{
+						unsigned int ax = (a_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+						unsigned int ay = (a_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+						unsigned int az = (a_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+
+
+						unsigned int nearest_bx;
+						unsigned int nearest_by;
+						unsigned int nearest_bz;
+
+						int min_sqdist = 999999999;
+						for(unsigned int b_bx = a_bx-ICP_N_SEARCH_BLOCKS_X; b_bx <= a_bx+ICP_N_SEARCH_BLOCKS_X; b_bx++)
+						{
+							for(unsigned int b_by = a_by-ICP_N_SEARCH_BLOCKS_Y; b_by <= a_by+ICP_N_SEARCH_BLOCKS_Y; b_by++)
+							{
+								for(unsigned int b_bz = a_bz-ICP_N_SEARCH_BLOCKS_Z; b_bz <= a_bz+ICP_N_SEARCH_BLOCKS_Z; b_bz++)
+								{
+									unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
+
+									for(int bi=0; bi<blocks_b[b_bidx].n_points; bi++)
+									{
+										unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+
+										int sqdist = sq(bx-ax) + sq(by-ay) + 2*sq(bz-az);
+
+										if(sqdist < min_sqdist)
+										{
+											min_sqdist = sqdist;
+											nearest_bx = bx;
+											nearest_by = by;
+											nearest_bz = bz;
+										}
+									}
+								}
+							}
+
+						}
+
+
+						if(min_sqdist > sq(4)) // no close association found - copy A to output as is
+						{
+							combined_cloud_out->points[combined_cloud_out->n_points++] =
+								(cloud_point_t){0,0,0,
+								ax - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS,
+								ay - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS,
+								az - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS};
+
+							assert(combined_cloud_out->n_points <= MAX_POINTS);
+						}
+						else
+						{
+							// TODO: Calculate average of matched points, insert that, remove the matched point from B
+							// so it won't be added again
+							// For now, don't do anything; B will be used.
+						}
+	
+
+					}
+				}
+			}
+
+		}
+
+		// Copy all transformed B points
+
+		for(int i=0; i<cloud_b.n_points; i++)
+		{
+			combined_cloud_out->points[combined_cloud_out->n_points++] = 
+				cloud_b.points[i];
+
+			assert(combined_cloud_out->n_points <= MAX_POINTS);
+		}
+	}
+
+
 
 
 	free_and_zero_blocks(blocks_a);
@@ -341,33 +556,40 @@ int main()
 
 	double xc, yc, zc, yawc;
 
+	static cloud_t clad;
+
 	match_by_closest_points(&cla, &clb,
 		0.0, 0.0, 0.0, 0.0,
 		500,
-		&xc, &yc, &zc, &yawc);
+		&xc, &yc, &zc, &yawc, &clad);
 
 	static cloud_t cld;
 	transform_cloud_copy(&clb, &cld, xc, yc, zc, yawc);	
 
-	static cloud_t clad;
 
-	clad.n_points = cla.n_points + cld.n_points;
-	memcpy(clad.points, cla.points, sizeof cla.points[0] * cla.n_points);
-	memcpy(&clad.points[cla.n_points], cld.points, sizeof cld.points[0] * cld.n_points);
+	static cloud_t cle;
+	cle.n_points = cla.n_points + cld.n_points;
+	memcpy(cle.points, cla.points, sizeof cla.points[0] * cla.n_points);
+	memcpy(&cle.points[cla.n_points], cld.points, sizeof cld.points[0] * cld.n_points);
 
 
 	small_cloud_t* scla = convert_cloud_to_small_cloud(&cla);
 	small_cloud_t* sclb = convert_cloud_to_small_cloud(&clb);
 	small_cloud_t* sclab = convert_cloud_to_small_cloud(&clab);
 	small_cloud_t* sclad = convert_cloud_to_small_cloud(&clad);
+	small_cloud_t* scle = convert_cloud_to_small_cloud(&cle);
 	save_small_cloud("cla.smallcloud", 0,0,0, cla.n_points, scla);
 	save_small_cloud("clb.smallcloud", 0,0,0, clb.n_points, sclb);
 	save_small_cloud("clc.smallcloud", 0,0,0, clab.n_points, sclab);
 	save_small_cloud("cld.smallcloud", 0,0,0, clad.n_points, sclad);
+	save_small_cloud("cle.smallcloud", 0,0,0, cle.n_points, scle);
 	free(scla);
 	free(sclb);
 	free(sclab);
 	free(sclad);
+	free(scle);
+
+	printf("%d   %d   %d   %d\n", cla.n_points, clb.n_points, clad.n_points, cle.n_points);
 
 	return 0;
 }
