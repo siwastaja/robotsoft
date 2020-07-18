@@ -97,6 +97,7 @@ void free_and_zero_blocks(icp_block_t* blocks)
 
 #define BUILD_BLOCKS_STATS
 
+// reduce: 0 to 100
 void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 {
 	#ifdef BUILD_BLOCKS_STATS
@@ -111,6 +112,10 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 	int n_over_8 = 0;
 
 	#endif
+
+	int reduce_lim = 0;
+	if(reduce > 0)
+		reduce_lim = (sq(reduce*ICP_BLOCK_XS))/(sq(100));
 
 	for(int pi=0; pi<cloud->n_points; pi++)
 	{
@@ -146,7 +151,7 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 
 		unsigned int block_idx = (bx<<ICP_BLOCK_ADDR_X_OFFS) | (by<<ICP_BLOCK_ADDR_Y_OFFS) | (bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
-		if(reduce)
+		if(reduce_lim > 0)
 		{
 			int_fast32_t sqdist_closest = INT_FAST32_MAX;
 			//int closest_idx;
@@ -165,7 +170,7 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 				}
 			}
 
-			if(sqdist_closest < sq(ICP_BLOCK_XS/4))
+			if(sqdist_closest < reduce_lim)
 			{
 				#ifdef BUILD_BLOCKS_STATS
 					n_reduced++;
@@ -252,7 +257,9 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	float mat_rota[9];
 	float mat_transl[3];
 
-	build_blocks(cloud_a, blocks_a, 1);
+	build_blocks(cloud_a, blocks_a, 40);
+
+	double t_total_total = 0.0;
 
 	for(int iter=0; iter<20; iter++)
 	{
@@ -272,7 +279,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		t_transform = subsec_timestamp() - ts;
 
 		ts = subsec_timestamp();
-		build_blocks(&cloud_b, blocks_b, 0);
+		build_blocks(&cloud_b, blocks_b, 30);
 		t_build = subsec_timestamp() - ts;
 
 
@@ -389,8 +396,10 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		printf("Performance: transform %.2f ms  build %.2f ms  search %.2f ms  free %.2f ms  total %.2f ms\n\n",
 			t_transform*1000.0, t_build*1000.0, t_search*1000.0, t_free*1000.0, t_total*1000.0);
 
+		t_total_total += t_total;
 	}
 
+	printf("total time = %.1f ms\n", t_total_total*1000.0);
 
 
 	free_and_zero_blocks(blocks_a);
