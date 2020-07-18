@@ -46,7 +46,8 @@ typedef struct
 #define ICP_BLOCK_TIGHT_ALLOC
 
 typedef uint16_t icp_point_t;
-#define DELETED_POINT 0xffff
+#define DELETED_POINT  0xffff
+#define LAST_POINT     0x8000
 
 #define ICP_POINT_X_OFFS   0
 #define ICP_POINT_X_BITS   ICP_BLOCK_SIZE_BITS
@@ -58,11 +59,13 @@ typedef uint16_t icp_point_t;
 #define ICP_POINT_Z_BITS   ICP_BLOCK_SIZE_BITS
 #define ICP_POINT_Z_MASK   ICP_BLOCK_SIZE_MASK
 
+
+#define N_ICP_POINTS 8
+
 typedef struct
 {
 	int n_points;
-	int n_alloc;
-	icp_point_t* points;
+	icp_point_t points[N_ICP_POINTS];
 } icp_block_t;
 
 
@@ -86,12 +89,6 @@ icp_block_t blocks_b[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 
 void free_and_zero_blocks(icp_block_t* blocks)
 {
-	for(int i=0; i<N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
-	{
-		if(blocks[i].points != NULL)
-			free(blocks[i].points);
-	}
-
 	memset(blocks, 0, N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z * sizeof blocks[0]);
 }
 
@@ -100,6 +97,9 @@ void free_and_zero_blocks(icp_block_t* blocks)
 // reduce: 0 to 100
 void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 {
+//	static int n_points[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
+//	memset(n_points, 0, sizeof n_points);
+
 	#ifdef BUILD_BLOCKS_STATS
 
 	int oor_ignored = 0;
@@ -155,6 +155,8 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 		{
 			int_fast32_t sqdist_closest = INT_FAST32_MAX;
 			//int closest_idx;
+			
+//			for(int i = 0; i < n_points[block_idx]; i++)
 			for(int i = 0; i < blocks[block_idx].n_points; i++)
 			{
 				int earlier_ox = (blocks[block_idx].points[i]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK;
@@ -179,50 +181,28 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 			}
 		}
 
-		#ifndef ICP_BLOCK_TIGHT_ALLOC
-			if(blocks[block_idx].n_alloc <= blocks[block_idx].n_points)
-			{
-				// Out of room for points, reallocate more space
-				if(blocks[block_idx].n_alloc == 0)
-					blocks[block_idx].n_alloc = ICP_BLOCK_INIT_ALLOC_POINTS;
-				else
-					blocks[block_idx].n_alloc *= 2;
-
-				// realloc works like malloc when the pointer is NULL, the initial case.
-				blocks[block_idx].points = realloc(blocks[block_idx].points, blocks[block_idx].n_alloc * sizeof blocks[block_idx].points[0]);
-
-				assert(blocks[block_idx].points);
-			}
-		#else
-			blocks[block_idx].n_alloc++;
-			blocks[block_idx].points = realloc(blocks[block_idx].points, blocks[block_idx].n_alloc * sizeof blocks[block_idx].points[0]);
-			assert(blocks[block_idx].points);
-		#endif
-
 		// Insert the point:
 
-		blocks[block_idx].points[blocks[block_idx].n_points] = 
-			(ox<<ICP_POINT_X_OFFS) | (oy<<ICP_POINT_Y_OFFS) | (oz<<ICP_POINT_Z_OFFS);
+		if(blocks[block_idx].n_points < N_ICP_POINTS)
+		{
+			blocks[block_idx].points[blocks[block_idx].n_points] = 
+				(ox<<ICP_POINT_X_OFFS) | (oy<<ICP_POINT_Y_OFFS) | (oz<<ICP_POINT_Z_OFFS);
 
-		blocks[block_idx].n_points++;
+			blocks[block_idx].n_points++;
+		}
 	}
 
 	#ifdef BUILD_BLOCKS_STATS
 		int64_t total_points = 0;
-		int64_t total_allocd = 0;
 
-		int nonnull_a = 0, nonnull_b = 0;
+		int nonnull = 0;
 
 		for(int i=0; i<N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
 		{
 			total_points += blocks[i].n_points;
-			total_allocd += blocks[i].n_alloc;
-
-			if(blocks[i].points != NULL)
-				nonnull_a++;
 
 			if(blocks[i].n_points > 0)
-				nonnull_b++;
+				nonnull++;
 
 			if(blocks[i].n_points > 8)
 				n_over_8++;
@@ -238,10 +218,8 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 				n_over_256++;
 		}
 
-		assert(nonnull_a == nonnull_b);
-
-		printf("build_blocks(): cloud->n_points = %d, oor_ignored=%d, reduced = %d, active blocks = %d, points in blocks = %ld, allocated points = %ld (mem %ld KB)\n", 
-			cloud->n_points, oor_ignored, n_reduced, nonnull_a, total_points, total_allocd, total_allocd * sizeof blocks[0].points[0] / 1024);
+		printf("build_blocks(): cloud->n_points = %d, oor_ignored=%d, reduced = %d, active blocks = %d, points in blocks = %ld\n", 
+			cloud->n_points, oor_ignored, n_reduced, nonnull, total_points);
 		printf("    over8: %d,  over16: %d,  over32: %d,  over64: %d,  over128: %d,  over256: %d\n", n_over_8, n_over_16, n_over_32, n_over_64, n_over_128, n_over_256);
 
 	#endif
@@ -567,6 +545,7 @@ small_cloud_t* convert_cloud_to_small_cloud(cloud_t* in)
 
 int main()
 {
+	printf("sizeof icp_block_t = %u\n", sizeof (icp_block_t));
 	static cloud_t cla, clb;
 
 	load_cloud(&cla, 10);
