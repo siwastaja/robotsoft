@@ -60,11 +60,10 @@ typedef uint16_t icp_point_t;
 #define ICP_POINT_Z_MASK   ICP_BLOCK_SIZE_MASK
 
 
-#define N_ICP_POINTS 8
+#define N_ICP_POINTS 16
 
 typedef struct
 {
-	int n_points;
 	icp_point_t points[N_ICP_POINTS];
 } icp_block_t;
 
@@ -87,9 +86,12 @@ icp_block_t blocks_a[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 icp_block_t blocks_b[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
 
 
-void free_and_zero_blocks(icp_block_t* blocks)
+static void free_and_zero_blocks(icp_block_t* blocks)
 {
-	memset(blocks, 0, N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z * sizeof blocks[0]);
+	for(int i=0; i < N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
+		for(int o=0; o<N_ICP_POINTS; o++)
+			blocks[i].points[o] = LAST_POINT;
+//	memset(blocks, 0, N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z * sizeof blocks[0]);
 }
 
 #define BUILD_BLOCKS_STATS
@@ -97,8 +99,8 @@ void free_and_zero_blocks(icp_block_t* blocks)
 // reduce: 0 to 100
 void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 {
-//	static int n_points[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
-//	memset(n_points, 0, sizeof n_points);
+	static int n_points[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
+	memset(n_points, 0, sizeof n_points);
 
 	#ifdef BUILD_BLOCKS_STATS
 
@@ -116,6 +118,8 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 	int reduce_lim = 0;
 	if(reduce > 0)
 		reduce_lim = (sq(reduce*ICP_BLOCK_XS))/(sq(100));
+
+	free_and_zero_blocks(blocks);
 
 	for(int pi=0; pi<cloud->n_points; pi++)
 	{
@@ -156,8 +160,8 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 			int_fast32_t sqdist_closest = INT_FAST32_MAX;
 			//int closest_idx;
 			
-//			for(int i = 0; i < n_points[block_idx]; i++)
-			for(int i = 0; i < blocks[block_idx].n_points; i++)
+			for(int i = 0; i < n_points[block_idx]; i++)
+//			for(int i = 0; i < blocks[block_idx].n_points; i++)
 			{
 				int earlier_ox = (blocks[block_idx].points[i]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK;
 				int earlier_oy = (blocks[block_idx].points[i]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK;
@@ -183,12 +187,12 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 
 		// Insert the point:
 
-		if(blocks[block_idx].n_points < N_ICP_POINTS)
+		if(n_points[block_idx] < N_ICP_POINTS-1)
 		{
-			blocks[block_idx].points[blocks[block_idx].n_points] = 
+			blocks[block_idx].points[n_points[block_idx]] = 
 				(ox<<ICP_POINT_X_OFFS) | (oy<<ICP_POINT_Y_OFFS) | (oz<<ICP_POINT_Z_OFFS);
 
-			blocks[block_idx].n_points++;
+			n_points[block_idx]++;
 		}
 	}
 
@@ -199,22 +203,22 @@ void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
 
 		for(int i=0; i<N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
 		{
-			total_points += blocks[i].n_points;
+			total_points += n_points[i];
 
-			if(blocks[i].n_points > 0)
+			if(n_points[i] > 0)
 				nonnull++;
 
-			if(blocks[i].n_points > 8)
+			if(n_points[i] > 8)
 				n_over_8++;
-			if(blocks[i].n_points > 16)
+			if(n_points[i] > 16)
 				n_over_16++;
-			if(blocks[i].n_points > 32)
+			if(n_points[i] > 32)
 				n_over_32++;
-			if(blocks[i].n_points > 64)
+			if(n_points[i] > 64)
 				n_over_64++;
-			if(blocks[i].n_points > 128)
+			if(n_points[i] > 128)
 				n_over_128++;
-			if(blocks[i].n_points > 256)
+			if(n_points[i] > 256)
 				n_over_256++;
 		}
 
@@ -275,12 +279,17 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 				{
 					unsigned int a_bidx = (a_bx<<ICP_BLOCK_ADDR_X_OFFS) | (a_by<<ICP_BLOCK_ADDR_Y_OFFS) | (a_bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
-					for(int ai=0; ai<blocks_a[a_bidx].n_points; ai++)
+					icp_point_t* pa = blocks_a[a_bidx].points;
+					while(1)
 					{
-						unsigned int ax = (a_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-						unsigned int ay = (a_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-						unsigned int az = (a_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+						if(*pa == LAST_POINT)
+							break;
 
+						unsigned int ax = (a_bx<<ICP_BLOCK_SIZE_BITS) | (((*pa)>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+						unsigned int ay = (a_by<<ICP_BLOCK_SIZE_BITS) | (((*pa)>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+						unsigned int az = (a_bz<<ICP_BLOCK_SIZE_BITS) | (((*pa)>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+
+						pa++;
 
 						unsigned int nearest_bx;
 						unsigned int nearest_by;
@@ -295,11 +304,17 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 								{
 									unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
-									for(int bi=0; bi<blocks_b[b_bidx].n_points; bi++)
+									icp_point_t* pb = blocks_b[b_bidx].points;
+									while(1)
 									{
-										unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+										if(*pb == LAST_POINT)
+											break;
+
+										unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | (((*pb)>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | (((*pb)>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | (((*pb)>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+
+										pb++;
 
 										int sqdist = sq(bx-ax) + sq(by-ay) + 2*sq(bz-az);
 
@@ -349,7 +364,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		t_search = subsec_timestamp() - ts;
 
 		ts = subsec_timestamp();
-		free_and_zero_blocks(blocks_b);
+//		free_and_zero_blocks(blocks_b);
 		t_free = subsec_timestamp() - ts;
 
 		mean_diff.x /= (double)n_associations;
@@ -380,7 +395,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	printf("total time = %.1f ms\n", t_total_total*1000.0);
 
 
-	free_and_zero_blocks(blocks_a);
+//	free_and_zero_blocks(blocks_a);
 
 	build_blocks(cloud_a, blocks_a, 0);
 
@@ -404,20 +419,24 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 				{
 					unsigned int a_bidx = (a_bx<<ICP_BLOCK_ADDR_X_OFFS) | (a_by<<ICP_BLOCK_ADDR_Y_OFFS) | (a_bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
-					for(int ai=0; ai<blocks_a[a_bidx].n_points; ai++)
-					{
-						unsigned int ax = (a_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-						unsigned int ay = (a_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-						unsigned int az = (a_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
 
+					icp_point_t* pa = blocks_a[a_bidx].points;
+					while(1)
+					{
+						if(*pa == LAST_POINT)
+							break;
+
+						unsigned int ax = (a_bx<<ICP_BLOCK_SIZE_BITS) | (((*pa)>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+						unsigned int ay = (a_by<<ICP_BLOCK_SIZE_BITS) | (((*pa)>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+						unsigned int az = (a_bz<<ICP_BLOCK_SIZE_BITS) | (((*pa)>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+
+						pa++;
 
 						unsigned int nearest_bx;
 						unsigned int nearest_by;
 						unsigned int nearest_bz;
 
 						int min_sqdist = 999999999;
-						int nearest_b_bidx;
-						int nearest_b_bi;
 						for(unsigned int b_bx = a_bx-ICP_N_SEARCH_BLOCKS_X; b_bx <= a_bx+ICP_N_SEARCH_BLOCKS_X; b_bx++)
 						{
 							for(unsigned int b_by = a_by-ICP_N_SEARCH_BLOCKS_Y; b_by <= a_by+ICP_N_SEARCH_BLOCKS_Y; b_by++)
@@ -426,11 +445,17 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 								{
 									unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
 
-									for(int bi=0; bi<blocks_b[b_bidx].n_points; bi++)
+									icp_point_t* pb = blocks_b[b_bidx].points;
+									while(1)
 									{
-										unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+										if(*pb == LAST_POINT)
+											break;
+
+										unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | (((*pb)>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
+										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | (((*pb)>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
+										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | (((*pb)>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+
+										pb++;
 
 										int sqdist = sq(bx-ax) + sq(by-ay) + 2*sq(bz-az);
 
@@ -440,8 +465,6 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 											nearest_bx = bx;
 											nearest_by = by;
 											nearest_bz = bz;
-											nearest_b_bidx = b_bidx;
-											nearest_b_bi = bi;
 										}
 									}
 								}
@@ -520,7 +543,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 
 
 
-	free_and_zero_blocks(blocks_a);
+//	free_and_zero_blocks(blocks_a);
 
 	*x_corr_out = x_corr;
 	*y_corr_out = y_corr;
