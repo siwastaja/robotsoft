@@ -153,10 +153,28 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_setpos_t msg_cr_setpos;
 
+
 // Manual drive control, basically a "joystick" like command, which will be directly relayed to the firmware, which decides
 // how to move the motors according to the buttons.
 // Each button is one bit, active high.
 // (fast<<4) | (up<<3) | (down<<2) | (left<<1) | (right<<0), rest reserved for future buttons
+/*
+	control field description:
+	bit	function
+	0 (LSb)	right (turn right)
+	1 	left (turn left)
+	2	down (backwards)
+	3	up (forward)
+	4	shift/fast (go fast)
+
+	Send this message regularly, i.e. about 2-3 times a second, no more than that.
+
+	Sending the message makes the robot go to manual control mode
+	Just stopping resending messages makes the robot go back to normal operation in about a second
+	When timeouting, robot first starts ignoring the latest FAST command (goes slow by default),
+	if further messages still not detected, the robot slows down to stop
+	
+*/
 
 #define TCP_CR_MANCTRL_MID    366
 
