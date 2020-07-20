@@ -19,247 +19,229 @@
 
 typedef struct
 {
-	double x;
-	double y;
-	double z;
-} doublepoint_t;
-
-#define ICP_BLOCK_SIZE_BITS (4)
-#define ICP_BLOCK_SIZE_MASK ((1<<ICP_BLOCK_SIZE_BITS)-1)
-
-#define ICP_BLOCK_XS  (1<<ICP_BLOCK_SIZE_BITS)
-#define ICP_BLOCK_YS  (1<<ICP_BLOCK_SIZE_BITS)
-#define ICP_BLOCK_ZS  (1<<ICP_BLOCK_SIZE_BITS)
-
-
-
-#define ICP_N_SEARCH_BLOCKS_X 1
-#define ICP_N_SEARCH_BLOCKS_Y 1
-#define ICP_N_SEARCH_BLOCKS_Z 1
-
-// Initially, ICP blocks have no allocated memory, and zero points.
-// When the first point belonging to a block is found, memory is allocated
-// for ICP_BLOCK_INIT_ALLOC_POINTS points at once. Whenever the memory runs
-// out, the block is realloc()'d with double the points, each time.
-#define ICP_BLOCK_INIT_ALLOC_POINTS 16
-
-#define ICP_BLOCK_TIGHT_ALLOC
-
-typedef uint16_t icp_point_t;
-#define DELETED_POINT 0xffff
-
-#define ICP_POINT_X_OFFS   0
-#define ICP_POINT_X_BITS   ICP_BLOCK_SIZE_BITS
-#define ICP_POINT_X_MASK   ICP_BLOCK_SIZE_MASK
-#define ICP_POINT_Y_OFFS   ICP_BLOCK_SIZE_BITS
-#define ICP_POINT_Y_BITS   ICP_BLOCK_SIZE_BITS
-#define ICP_POINT_Y_MASK   ICP_BLOCK_SIZE_MASK
-#define ICP_POINT_Z_OFFS   (2*ICP_BLOCK_SIZE_BITS)
-#define ICP_POINT_Z_BITS   ICP_BLOCK_SIZE_BITS
-#define ICP_POINT_Z_MASK   ICP_BLOCK_SIZE_MASK
-
+	float x;
+	float y;
+	float z;
+} floatpoint_t;
+/*
 typedef struct
 {
-	int n_points;
-	int n_alloc;
-	icp_point_t* points;
-} icp_block_t;
+	int32_t x;
+	int32_t y;
+	int32_t z;
+	int32_t dummy;
+} point_t;
+*/
 
 
-#define ICP_BLOCK_ADDR_X_BITS 8  // 8
-#define ICP_BLOCK_ADDR_Y_BITS 8  // 8
-#define ICP_BLOCK_ADDR_Z_BITS 6  // 6
+typedef int32_t kd_unit_t;
+typedef int32_t kd_unit_tmpsq_t;
 
-#define ICP_BLOCK_ADDR_X_OFFS 0
-#define ICP_BLOCK_ADDR_Y_OFFS (ICP_BLOCK_ADDR_X_BITS)
-#define ICP_BLOCK_ADDR_Z_OFFS (ICP_BLOCK_ADDR_X_BITS+ICP_BLOCK_ADDR_Y_BITS)
-
-
-#define N_ICP_BLOCKS_X (1<<ICP_BLOCK_ADDR_X_BITS)
-#define N_ICP_BLOCKS_Y (1<<ICP_BLOCK_ADDR_Y_BITS)
-#define N_ICP_BLOCKS_Z (1<<ICP_BLOCK_ADDR_Z_BITS)
-
-
-icp_block_t blocks_a[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
-icp_block_t blocks_b[N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z];
-
-
-void free_and_zero_blocks(icp_block_t* blocks)
+typedef struct kd_node_struct
 {
-	for(int i=0; i<N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
-	{
-		if(blocks[i].points != NULL)
-			free(blocks[i].points);
-	}
-
-	memset(blocks, 0, N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z * sizeof blocks[0]);
+	kd_unit_t coords[3];
+	struct kd_node_struct *left;
+	struct kd_node_struct *right;
+} kd_node_t;
+ 
+static inline kd_unit_tmpsq_t dist(kd_node_t *a, kd_node_t *b)
+{
+	return 
+		sq((kd_unit_tmpsq_t)a->coords[0]-(kd_unit_tmpsq_t)b->coords[0]) +
+		sq((kd_unit_tmpsq_t)a->coords[1]-(kd_unit_tmpsq_t)b->coords[1]) +
+		sq((kd_unit_tmpsq_t)a->coords[2]-(kd_unit_tmpsq_t)b->coords[2]);
 }
 
-#define BUILD_BLOCKS_STATS
-
-// reduce: 0 to 100
-void build_blocks(cloud_t* cloud, icp_block_t* blocks, int reduce)
+static inline void swap(kd_node_t *a, kd_node_t *b)
 {
-	#ifdef BUILD_BLOCKS_STATS
-
-	int oor_ignored = 0;
-	int n_reduced = 0;
-	int n_over_256 = 0;
-	int n_over_128 = 0;
-	int n_over_64 = 0;
-	int n_over_32 = 0;
-	int n_over_16 = 0;
-	int n_over_8 = 0;
-
-	#endif
-
-	int reduce_lim = 0;
-	if(reduce > 0)
-		reduce_lim = (sq(reduce*ICP_BLOCK_XS))/(sq(100));
-
-	for(int pi=0; pi<cloud->n_points; pi++)
+	kd_unit_t tmp[3];
+	tmp[0] = a->coords[0];
+	tmp[1] = a->coords[1];
+	tmp[2] = a->coords[2];
+	a->coords[0] = b->coords[0];
+	a->coords[1] = b->coords[1];
+	a->coords[2] = b->coords[2];
+	b->coords[0] = tmp[0];
+	b->coords[1] = tmp[1];
+	b->coords[2] = tmp[2];
+}
+ 
+ 
+// quickselect implementation
+// ii is current depth in tree
+static kd_node_t* find_median(kd_node_t *start, kd_node_t *end, int ii)
+{
+	if(end <= start)
+		return NULL;
+	if(end == start + 1)
+		return start;
+ 
+	int idx = ii%3;
+	kd_node_t *p, *store, *md = start + (end - start) / 2;
+	kd_unit_t pivot;
+	while (1)
 	{
-		int x = cloud->points[pi].px;
-		int y = cloud->points[pi].py;
-		int z = cloud->points[pi].pz;
-
-		x += N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS;
-		y += N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS;
-		z += N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS;
-
-		if(x < 0 || y < 0 || z < 0 ||
-		   x >= N_ICP_BLOCKS_X*ICP_BLOCK_XS || y >= N_ICP_BLOCKS_Y*ICP_BLOCK_YS || z >= N_ICP_BLOCKS_Z*ICP_BLOCK_ZS)
+		pivot = md->coords[idx];
+		swap(md, end - 1);
+		for(store = p = start; p < end; p++)
 		{
-			#ifdef BUILD_BLOCKS_STATS
-				oor_ignored++;
-			#endif
+			if (p->coords[idx] < pivot)
+			{
+				if(p != store)
+					swap(p, store);
+				store++;
+			}
+		}
+		swap(store, end - 1);
+ 
+		if (store->coords[idx] == md->coords[idx])
+			return md;
+ 
+		if (store > md)
+			end = store;
+		else
+			start = store;
+	}
+}
+
+// statistics:
+int64_t branch_len_cumul;
+int n_branch;
+int max_branch_len;
+ 
+static kd_node_t* make_tree(kd_node_t *t, int len, int i)
+{
+	kd_node_t *median_node;
+
+	if(!len)
+	{
+		if(i>max_branch_len)
+			max_branch_len = i;
+
+		n_branch++;
+		branch_len_cumul += i;
+		return 0;
+	}
+ 
+	if( (median_node = find_median(t, t + len, i)) )
+	{
+		i++;
+		median_node->left  = make_tree(t, median_node - t, i);
+		median_node->right = make_tree(median_node + 1, t + len - (median_node + 1), i);
+	}
+
+	return median_node;
+}
+ 
+
+int visited;
+ 
+static void nearest(kd_node_t *root, kd_node_t *node, int i, kd_node_t **best, kd_unit_t *best_dist)
+{
+	kd_unit_tmpsq_t d, dx;
+
+	if (!root) return;
+
+	visited++;
+	d = dist(root, node);
+	dx = root->coords[i] - node->coords[i];
+  
+	if (d < *best_dist)
+	{
+		*best_dist = d;
+		*best = root;
+	}
+ 
+	// implementation I looked at returned here if !*best_dist.
+	// were they thinking returning if *best_dist == 0.0? If yes, ! is incorrect operation.
+	// That return seemed to almost never happen, only reducing performance by a few %.
+	// even if comparing to a higher value, something already affecting results, still no measurable performance benefit.
+	
+
+	if(++i >= 3)
+		i = 0;
+
+	nearest(dx > 0 ? root->left : root->right, node, i, best, best_dist);
+	if(sq(dx) >= *best_dist)
+		return;
+	nearest(dx > 0 ? root->right : root->left, node, i, best, best_dist);
+
+
+/*
+	// test: don't call just to return immediately. (remove the if(!root) return)
+	// no performance benefit measured
+	if(dx > 0 && root->left)
+		nearest(root->left, node, i, best, best_dist);
+	else if(dx <= 0 && root->right)
+		nearest(root->right, node, i, best, best_dist);
+
+	if(sq(dx) >= *best_dist)
+		return;
+
+	if(dx > 0 && root->right)
+		nearest(root->right, node, i, best, best_dist);
+	else if(dx <= 0 && root->left)
+		nearest(root->left, node, i, best, best_dist);
+*/
+
+}
+ 
+
+
+
+
+
+
+
+
+
+
+
+void cloud_to_kd(kd_node_t* kd, cloud_t* cloud)
+{
+	for(int i=0; i<cloud->n_points; i++)
+	{
+		if(
+			cloud->points[i].px > 32767 || cloud->points[i].px < -32768 ||
+			cloud->points[i].py > 32767 || cloud->points[i].py < -32768 ||
+			cloud->points[i].pz > 32767 || cloud->points[i].pz < -32768)
+		{
+			printf("WARNING: IGNORING POINT\n");
 			continue;
 		}
-
-		unsigned int bx = x>>ICP_BLOCK_SIZE_BITS;
-		unsigned int by = y>>ICP_BLOCK_SIZE_BITS;
-		unsigned int bz = z>>ICP_BLOCK_SIZE_BITS;
-
-		// Remaining: offset within the block
-		unsigned int ox = x & ICP_BLOCK_SIZE_MASK;
-		unsigned int oy = y & ICP_BLOCK_SIZE_MASK;
-		unsigned int oz = z & ICP_BLOCK_SIZE_MASK;
-
-		assert(ox < 16);
-		assert(oy < 16);
-		assert(oz < 16);
-
-		unsigned int block_idx = (bx<<ICP_BLOCK_ADDR_X_OFFS) | (by<<ICP_BLOCK_ADDR_Y_OFFS) | (bz<<ICP_BLOCK_ADDR_Z_OFFS);
-
-		if(reduce_lim > 0)
-		{
-			int_fast32_t sqdist_closest = INT_FAST32_MAX;
-			//int closest_idx;
-			for(int i = 0; i < blocks[block_idx].n_points; i++)
-			{
-				int earlier_ox = (blocks[block_idx].points[i]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK;
-				int earlier_oy = (blocks[block_idx].points[i]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK;
-				int earlier_oz = (blocks[block_idx].points[i]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK;
-
-				int_fast32_t sqdist = sq(earlier_ox - (int)ox) + sq(earlier_oy - (int)oy) + sq(earlier_oz - (int)oz);
-
-				if(sqdist < sqdist_closest)
-				{
-					sqdist_closest = sqdist;
-					//closest_idx = i;
-				}
-			}
-
-			if(sqdist_closest < reduce_lim)
-			{
-				#ifdef BUILD_BLOCKS_STATS
-					n_reduced++;
-				#endif
-				continue;
-			}
-		}
-
-		#ifndef ICP_BLOCK_TIGHT_ALLOC
-			if(blocks[block_idx].n_alloc <= blocks[block_idx].n_points)
-			{
-				// Out of room for points, reallocate more space
-				if(blocks[block_idx].n_alloc == 0)
-					blocks[block_idx].n_alloc = ICP_BLOCK_INIT_ALLOC_POINTS;
-				else
-					blocks[block_idx].n_alloc *= 2;
-
-				// realloc works like malloc when the pointer is NULL, the initial case.
-				blocks[block_idx].points = realloc(blocks[block_idx].points, blocks[block_idx].n_alloc * sizeof blocks[block_idx].points[0]);
-
-				assert(blocks[block_idx].points);
-			}
-		#else
-			blocks[block_idx].n_alloc++;
-			blocks[block_idx].points = realloc(blocks[block_idx].points, blocks[block_idx].n_alloc * sizeof blocks[block_idx].points[0]);
-			assert(blocks[block_idx].points);
-		#endif
-
-		// Insert the point:
-
-		blocks[block_idx].points[blocks[block_idx].n_points] = 
-			(ox<<ICP_POINT_X_OFFS) | (oy<<ICP_POINT_Y_OFFS) | (oz<<ICP_POINT_Z_OFFS);
-
-		blocks[block_idx].n_points++;
+		kd[i].coords[0] = cloud->points[i].px;
+		kd[i].coords[1] = cloud->points[i].py;
+		kd[i].coords[2] = cloud->points[i].pz;
 	}
-
-	#ifdef BUILD_BLOCKS_STATS
-		int64_t total_points = 0;
-		int64_t total_allocd = 0;
-
-		int nonnull_a = 0, nonnull_b = 0;
-
-		for(int i=0; i<N_ICP_BLOCKS_X*N_ICP_BLOCKS_Y*N_ICP_BLOCKS_Z; i++)
-		{
-			total_points += blocks[i].n_points;
-			total_allocd += blocks[i].n_alloc;
-
-			if(blocks[i].points != NULL)
-				nonnull_a++;
-
-			if(blocks[i].n_points > 0)
-				nonnull_b++;
-
-			if(blocks[i].n_points > 8)
-				n_over_8++;
-			if(blocks[i].n_points > 16)
-				n_over_16++;
-			if(blocks[i].n_points > 32)
-				n_over_32++;
-			if(blocks[i].n_points > 64)
-				n_over_64++;
-			if(blocks[i].n_points > 128)
-				n_over_128++;
-			if(blocks[i].n_points > 256)
-				n_over_256++;
-		}
-
-		assert(nonnull_a == nonnull_b);
-
-		printf("build_blocks(): cloud->n_points = %d, oor_ignored=%d, reduced = %d, active blocks = %d, points in blocks = %ld, allocated points = %ld (mem %ld KB)\n", 
-			cloud->n_points, oor_ignored, n_reduced, nonnull_a, total_points, total_allocd, total_allocd * sizeof blocks[0].points[0] / 1024);
-		printf("    over8: %d,  over16: %d,  over32: %d,  over64: %d,  over128: %d,  over256: %d\n", n_over_8, n_over_16, n_over_32, n_over_64, n_over_128, n_over_256);
-
-	#endif
 }
+
 
 
 static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
-	double x_corr, double y_corr, double z_corr, double yaw_corr,
+	float x_corr, float y_corr, float z_corr, float yaw_corr,
 	int threshold,
-	double* x_corr_out, double* y_corr_out, double* z_corr_out, double* yaw_corr_out,
+	float* x_corr_out, float* y_corr_out, float* z_corr_out, float* yaw_corr_out,
 	cloud_t* combined_cloud_out)
 {
+//	SWAP(cloud_t*, cloud_a, cloud_b_in);
+
 	float mat_rota[9];
 	float mat_transl[3];
 
-	build_blocks(cloud_a, blocks_a, 40);
+	kd_node_t* kda = calloc(cloud_a->n_points, sizeof (kd_node_t));
+
+	cloud_to_kd(kda, cloud_a);
+
+	branch_len_cumul = 0;
+	n_branch = 0;
+	max_branch_len = -1;
+
+	kd_node_t* root = make_tree(kda, cloud_a->n_points, 0);
+	
+	printf("%d branches, avg len = %d, max len = %d\n", n_branch, (int)(branch_len_cumul/(int64_t)n_branch), max_branch_len);
 
 	double t_total_total = 0.0;
+
 
 	for(int iter=0; iter<20; iter++)
 	{
@@ -267,7 +249,7 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		double ts;
 		double t_transform, t_build, t_search, t_free, t_total;
 
-		doublepoint_t mean_diff = {0,0,0};
+		floatpoint_t mean_diff = {0,0,0};
 
 		int_fast64_t dot_accum = 0;
 		int_fast64_t det_accum = 0;
@@ -279,91 +261,56 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		t_transform = subsec_timestamp() - ts;
 
 		ts = subsec_timestamp();
-		build_blocks(&cloud_b, blocks_b, 30);
 		t_build = subsec_timestamp() - ts;
-
 
 		ts = subsec_timestamp();
 
 		int n_associations = 0;
 
-		// Loop over all blocks of a;
-		// for each point within the a block, loop over the points of the few adjacent blocks in b
-		for(unsigned int a_bx = ICP_N_SEARCH_BLOCKS_X; a_bx < N_ICP_BLOCKS_X-ICP_N_SEARCH_BLOCKS_X; a_bx++)
+		int max_visited = -1;
+		int visited_cnt = 0;
+		int64_t visited_acc = 0;
+
+		for(int bi=0; bi<cloud_b.n_points; bi+=3)
 		{
-			for(unsigned int a_by = ICP_N_SEARCH_BLOCKS_Y; a_by < N_ICP_BLOCKS_Y-ICP_N_SEARCH_BLOCKS_Y; a_by++)
+			kd_unit_t best_dist = 32000;
+			kd_node_t* found;
+			kd_node_t testNode = {{cloud_b.points[bi].px, cloud_b.points[bi].py, cloud_b.points[bi].pz}};
+
+			visited=0;
+			nearest(root, &testNode, 0, &found, &best_dist);
+			visited_cnt++;
+			visited_acc += visited;
+			if(visited > max_visited)
 			{
-				for(unsigned int a_bz = ICP_N_SEARCH_BLOCKS_Z; a_bz < N_ICP_BLOCKS_Z-ICP_N_SEARCH_BLOCKS_Z; a_bz++)
-				{
-					unsigned int a_bidx = (a_bx<<ICP_BLOCK_ADDR_X_OFFS) | (a_by<<ICP_BLOCK_ADDR_Y_OFFS) | (a_bz<<ICP_BLOCK_ADDR_Z_OFFS);
+				max_visited = visited;
+			}
 
-					for(int ai=0; ai<blocks_a[a_bidx].n_points; ai++)
-					{
-						unsigned int ax = (a_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-						unsigned int ay = (a_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-						unsigned int az = (a_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+			if(best_dist < sq(20))
+			{
 
+				//printf("closest to bi%d (%.1f %.1f %.1f) is (%.1f %.1f %.1f)\n", bi,
+				//	testNode.coords[0], testNode.coords[1], testNode.coords[2], 
+				//	found->coords[0], found->coords[1], found->coords[2]);
 
-						unsigned int nearest_bx;
-						unsigned int nearest_by;
-						unsigned int nearest_bz;
+				n_associations++;
 
-						int min_sqdist = 999999999;
-						for(unsigned int b_bx = a_bx-ICP_N_SEARCH_BLOCKS_X; b_bx <= a_bx+ICP_N_SEARCH_BLOCKS_X; b_bx++)
-						{
-							for(unsigned int b_by = a_by-ICP_N_SEARCH_BLOCKS_Y; b_by <= a_by+ICP_N_SEARCH_BLOCKS_Y; b_by++)
-							{
-								for(unsigned int b_bz = a_bz-ICP_N_SEARCH_BLOCKS_Z; b_bz <= a_bz+ICP_N_SEARCH_BLOCKS_Z; b_bz++)
-								{
-									unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
+				mean_diff.x += testNode.coords[0] - found->coords[0];
+				mean_diff.y += testNode.coords[1] - found->coords[1];
+				mean_diff.z += testNode.coords[2] - found->coords[2];
 
-									for(int bi=0; bi<blocks_b[b_bidx].n_points; bi++)
-									{
-										unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
+				int sax = found->coords[0];
+				int say = found->coords[1];
+				int saz = found->coords[2];
+				int sbx = testNode.coords[0];
+				int sby = testNode.coords[1];
+				int sbz = testNode.coords[2];
 
-										int sqdist = sq(bx-ax) + sq(by-ay) + 2*sq(bz-az);
+				int_fast64_t dot = sax*sbx + say*sby;
+				int_fast64_t det = sax*sby - say*sbx;
 
-										if(sqdist < min_sqdist)
-										{
-											min_sqdist = sqdist;
-											nearest_bx = bx;
-											nearest_by = by;
-											nearest_bz = bz;
-										}
-									}
-								}
-							}
-
-						}
-
-
-						if(min_sqdist == 999999999) // no association found (outlier)
-							continue;
-
-						assert(min_sqdist < 999999999);
-
-						n_associations++;
-
-						mean_diff.x += (signed int)nearest_bx - (signed int)ax;
-						mean_diff.y += (signed int)nearest_by - (signed int)ay;
-						mean_diff.z += (signed int)nearest_bz - (signed int)az;
-
-						int sax = (signed int)ax - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS;
-						int say = (signed int)ay - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS;
-						int saz = (signed int)az - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS;
-						int sbx = (signed int)nearest_bx - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS;
-						int sby = (signed int)nearest_by - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS;
-						int sbz = (signed int)nearest_bz - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS;
-
-						int_fast64_t dot = sax*sbx + say*sby;
-						int_fast64_t det = sax*sby - say*sbx;
-
-						dot_accum += dot;
-						det_accum += det;
-					}
-				}
+				dot_accum += dot;
+				det_accum += det;
 			}
 
 		}
@@ -371,14 +318,13 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 		t_search = subsec_timestamp() - ts;
 
 		ts = subsec_timestamp();
-		free_and_zero_blocks(blocks_b);
 		t_free = subsec_timestamp() - ts;
 
-		mean_diff.x /= (double)n_associations;
-		mean_diff.y /= (double)n_associations;
-		mean_diff.z /= (double)n_associations;
+		mean_diff.x /= (float)n_associations;
+		mean_diff.y /= (float)n_associations;
+		mean_diff.z /= (float)n_associations;
 
-		double yaw = atan2(det_accum, dot_accum);
+		float yaw = atan2f(det_accum, dot_accum);
 
 		x_corr -= mean_diff.x;
 		y_corr -= mean_diff.y;
@@ -389,12 +335,14 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 
 		printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%), transl=(%+6.0f,%+6.0f,%+6.0f), yaw=%.2f deg, corr=(%+6.0f,%+6.0f,%+6.0f; %.2f deg)\n",
 			iter, cloud_a->n_points, cloud_b.n_points, n_associations,
-			100.0*(double)n_associations/(double)cloud_a->n_points, 100.0*(double)n_associations/(double)cloud_b.n_points,
+			100.0*(float)n_associations/(float)cloud_a->n_points, 100.0*(float)n_associations/(float)cloud_b.n_points,
 			mean_diff.x, mean_diff.y, mean_diff.z, RADTODEG(yaw), x_corr, y_corr, z_corr, RADTODEG(yaw_corr));
 
 
 		printf("Performance: transform %.2f ms  build %.2f ms  search %.2f ms  free %.2f ms  total %.2f ms\n\n",
 			t_transform*1000.0, t_build*1000.0, t_search*1000.0, t_free*1000.0, t_total*1000.0);
+		printf("visited avg=%d  max=%d\n", (int) ((int64_t)visited_acc/(int64_t)visited_cnt), max_visited);
+
 
 		t_total_total += t_total;
 	}
@@ -402,153 +350,15 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	printf("total time = %.1f ms\n", t_total_total*1000.0);
 
 
-	free_and_zero_blocks(blocks_a);
-
-	build_blocks(cloud_a, blocks_a, 0);
 
 	combined_cloud_out->n_points = 0;
-	// PRODUCE THE OUTPUT
-	{
-		static cloud_t cloud_b;
-
-		transform_cloud_copy(cloud_b_in, &cloud_b, x_corr, y_corr, z_corr, yaw_corr);
-
-		build_blocks(&cloud_b, blocks_b, 0);
-		int n_associations = 0;
-
-		// Loop over all blocks of a;
-		// for each point within the a block, loop over the points of the few adjacent blocks in b
-		for(unsigned int a_bx = ICP_N_SEARCH_BLOCKS_X; a_bx < N_ICP_BLOCKS_X-ICP_N_SEARCH_BLOCKS_X; a_bx++)
-		{
-			for(unsigned int a_by = ICP_N_SEARCH_BLOCKS_Y; a_by < N_ICP_BLOCKS_Y-ICP_N_SEARCH_BLOCKS_Y; a_by++)
-			{
-				for(unsigned int a_bz = ICP_N_SEARCH_BLOCKS_Z; a_bz < N_ICP_BLOCKS_Z-ICP_N_SEARCH_BLOCKS_Z; a_bz++)
-				{
-					unsigned int a_bidx = (a_bx<<ICP_BLOCK_ADDR_X_OFFS) | (a_by<<ICP_BLOCK_ADDR_Y_OFFS) | (a_bz<<ICP_BLOCK_ADDR_Z_OFFS);
-
-					for(int ai=0; ai<blocks_a[a_bidx].n_points; ai++)
-					{
-						unsigned int ax = (a_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-						unsigned int ay = (a_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-						unsigned int az = (a_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_a[a_bidx].points[ai]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
-
-
-						unsigned int nearest_bx;
-						unsigned int nearest_by;
-						unsigned int nearest_bz;
-
-						int min_sqdist = 999999999;
-						int nearest_b_bidx;
-						int nearest_b_bi;
-						for(unsigned int b_bx = a_bx-ICP_N_SEARCH_BLOCKS_X; b_bx <= a_bx+ICP_N_SEARCH_BLOCKS_X; b_bx++)
-						{
-							for(unsigned int b_by = a_by-ICP_N_SEARCH_BLOCKS_Y; b_by <= a_by+ICP_N_SEARCH_BLOCKS_Y; b_by++)
-							{
-								for(unsigned int b_bz = a_bz-ICP_N_SEARCH_BLOCKS_Z; b_bz <= a_bz+ICP_N_SEARCH_BLOCKS_Z; b_bz++)
-								{
-									unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
-
-									for(int bi=0; bi<blocks_b[b_bidx].n_points; bi++)
-									{
-										unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-										unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-										unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
-
-										int sqdist = sq(bx-ax) + sq(by-ay) + 2*sq(bz-az);
-
-										if(sqdist < min_sqdist)
-										{
-											min_sqdist = sqdist;
-											nearest_bx = bx;
-											nearest_by = by;
-											nearest_bz = bz;
-											nearest_b_bidx = b_bidx;
-											nearest_b_bi = bi;
-										}
-									}
-								}
-							}
-
-						}
-
-
-						if(min_sqdist > sq(3)) // no close association found - copy A to output as is
-						{
-							combined_cloud_out->points[combined_cloud_out->n_points++] =
-								(cloud_point_t){0,0,0,
-								ax - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS,
-								ay - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS,
-								az - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS};
-
-							assert(combined_cloud_out->n_points <= MAX_POINTS);
-						}
-						else
-						{
-							// Let 
-						}
-	
-
-					}
-				}
-			}
-
-		}
-
-		// Copy all transformed B points
-		// The two code snippets have the same result.
-
-		for(int i=0; i<cloud_b.n_points; i++)
-		{
-			combined_cloud_out->points[combined_cloud_out->n_points++] = 
-				cloud_b.points[i];
-
-			assert(combined_cloud_out->n_points <= MAX_POINTS);
-		}
-
-
-/*
-		for(unsigned int b_bx = ICP_N_SEARCH_BLOCKS_X; b_bx < N_ICP_BLOCKS_X-ICP_N_SEARCH_BLOCKS_X; b_bx++)
-		{
-			for(unsigned int b_by = ICP_N_SEARCH_BLOCKS_Y; b_by < N_ICP_BLOCKS_Y-ICP_N_SEARCH_BLOCKS_Y; b_by++)
-			{
-				for(unsigned int b_bz = ICP_N_SEARCH_BLOCKS_Z; b_bz < N_ICP_BLOCKS_Z-ICP_N_SEARCH_BLOCKS_Z; b_bz++)
-				{
-					unsigned int b_bidx = (b_bx<<ICP_BLOCK_ADDR_X_OFFS) | (b_by<<ICP_BLOCK_ADDR_Y_OFFS) | (b_bz<<ICP_BLOCK_ADDR_Z_OFFS);
-
-					for(int bi=0; bi<blocks_b[b_bidx].n_points; bi++)
-					{
-						if(blocks_b[b_bidx].points[bi] != DELETED_POINT)
-						{
-							unsigned int bx = (b_bx<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_X_OFFS)&ICP_POINT_X_MASK);
-							unsigned int by = (b_by<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Y_OFFS)&ICP_POINT_Y_MASK);
-							unsigned int bz = (b_bz<<ICP_BLOCK_SIZE_BITS) | ((blocks_b[b_bidx].points[bi]>>ICP_POINT_Z_OFFS)&ICP_POINT_Z_MASK);
-
-							combined_cloud_out->points[combined_cloud_out->n_points++] =
-								(cloud_point_t){0,0,0,
-								bx - N_ICP_BLOCKS_X/2 * ICP_BLOCK_XS,
-								by - N_ICP_BLOCKS_Y/2 * ICP_BLOCK_YS,
-								bz - N_ICP_BLOCKS_Z/2 * ICP_BLOCK_ZS};
-
-							assert(combined_cloud_out->n_points <= MAX_POINTS);
-						}
-					}
-				}
-			}
-		}
-*/
-
-
-	}
-
-
-
-	free_and_zero_blocks(blocks_a);
 
 	*x_corr_out = x_corr;
 	*y_corr_out = y_corr;
 	*z_corr_out = z_corr;
 	*yaw_corr_out = yaw_corr;
 
+	free(kda);
 
 	return 0;
 }
@@ -567,6 +377,9 @@ small_cloud_t* convert_cloud_to_small_cloud(cloud_t* in)
 
 int main()
 {
+//	kdtreetest();
+//	return 0;
+
 	static cloud_t cla, clb;
 
 	load_cloud(&cla, 10);
@@ -593,7 +406,7 @@ int main()
 	memcpy(clab.points, cla.points, sizeof cla.points[0] * cla.n_points);
 	memcpy(&clab.points[cla.n_points], clb.points, sizeof clb.points[0] * clb.n_points);
 
-	double xc, yc, zc, yawc;
+	float xc, yc, zc, yawc;
 
 	static cloud_t clad;
 
@@ -634,37 +447,4 @@ int main()
 }
 
 
-/*
-static int compare_x(const void* a, const void* b)
-{
-	if(((point_t*)a)->x < ((point_t*)b)->x)
-		return -1;
-	else if(((point_t*)a)->x > ((point_t*)b)->x)
-		return -1;
-	return 0;
 
-}
-
-static int compare_y(const void* a, const void* b)
-{
-	if(((point_t*)a)->y < ((point_t*)b)->y)
-		return -1;
-	else if(((point_t*)a)->y > ((point_t*)b)->y)
-		return -1;
-	return 0;
-}
-
-static int compare_z(const void* a, const void* b)
-{
-	if(((point_t*)a)->z < ((point_t*)b)->z)
-		return -1;
-	else if(((point_t*)a)->z > ((point_t*)b)->z)
-		return -1;
-	return 0;
-}
-
-void kdtree(point_t* p_points, int n_points, int depth)
-{
-
-}
-*/
