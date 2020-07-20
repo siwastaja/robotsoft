@@ -160,30 +160,30 @@ int load_cloud(cloud_t* cloud, int idx)
 	return 0;
 }
 
-#if 0
+#if 1
 // These DO NOT transform the ray sources
-static void transform_cloud(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
+void transform_cloud(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
 {
 	double cosa = cos(yaw);
 	double sina = sin(yaw);
 
 	for(int p=0; p<cloud->n_points; p++)
 	{
-		double x_in = cloud->points[p].x;
-		double y_in = cloud->points[p].y;
-		double z_in = cloud->points[p].z;
+		double x_in = cloud->points[p].px;
+		double y_in = cloud->points[p].py;
+		double z_in = cloud->points[p].pz;
 
 		double x = x_in*cosa - y_in*sina + transl_x;
 		double y = x_in*sina + y_in*cosa + transl_y;
 		double z = z_in + transl_z;
 
-		cloud->points[p].x = x;
-		cloud->points[p].y = y;
-		cloud->points[p].z = z;
+		cloud->points[p].px = x;
+		cloud->points[p].py = y;
+		cloud->points[p].pz = z;
 	}
 }
 
-static void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
+void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
 {
 	double cosa = cos(yaw);
 	double sina = sin(yaw);
@@ -191,17 +191,17 @@ static void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t 
 	cloud_out->n_points = cloud_in->n_points;
 	for(int p=0; p<cloud_in->n_points; p++)
 	{
-		double x_in = cloud_in->points[p].x;
-		double y_in = cloud_in->points[p].y;
-		double z_in = cloud_in->points[p].z;
+		double x_in = cloud_in->points[p].px;
+		double y_in = cloud_in->points[p].py;
+		double z_in = cloud_in->points[p].pz;
 
 		double x = x_in*cosa - y_in*sina + transl_x;
 		double y = x_in*sina + y_in*cosa + transl_y;
 		double z = z_in + transl_z;
 
-		cloud_out->points[p].x = x;
-		cloud_out->points[p].y = y;
-		cloud_out->points[p].z = z;
+		cloud_out->points[p].px = x;
+		cloud_out->points[p].py = y;
+		cloud_out->points[p].pz = z;
 	}
 }
 #endif

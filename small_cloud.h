@@ -186,4 +186,24 @@ ALWAYS_INLINE small_cloud_t set_small_cloud(int flag, int32_t sx, int32_t sy, in
 	return ret;
 }
 
+ALWAYS_INLINE small_cloud_t set_small_cloud_native_units(int flag, int32_t sx, int32_t sy, int32_t sz, int32_t x, int32_t y, int32_t z)
+{
+	small_cloud_t ret;
+
+	ret =	(((uint64_t)flag&1)<<63) |
+		(((uint64_t)sx&0x1ff)<<54) |
+		(((uint64_t)sy&0x1ff)<<45) |
+		(((uint64_t)sx&0x07f)<<38) |
+		(((uint64_t)x&0x1fff)<<25) |
+		(((uint64_t)y&0x1fff)<<12) |
+		(((uint64_t)z&0x0fff)<<0);
+
+	return ret;
+}
+
+
+// Function prototypes for small_cloud.c implementations follow.
+// small_cloud.h can be used as header-only. If this is the case, the following function prototypes are unnecessary.
+
+void save_small_cloud(const char* fname, int32_t ref_x, int32_t ref_y, int32_t ref_z, int n_points, small_cloud_t* points);
 

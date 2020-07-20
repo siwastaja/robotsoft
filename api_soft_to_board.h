@@ -162,6 +162,17 @@ typedef struct __attribute__((packed))
 	gyro_cal_t gyrocal;
 } s2b_inject_gyrocal_t;
 
+
+#define CMD_MANUAL_DRIVE 13
+	#define CMD_MANUAL_DRIVE_FLAG_IGNORE_SENSORS (1<<0)
+typedef struct __attribute__((packed))
+{
+	uint16_t buttons;
+	uint16_t flags;
+	uint32_t reserved;
+} s2b_manual_drive_t;
+
+
 typedef struct __attribute__((packed))
 {
 	uint16_t size;
@@ -186,6 +197,7 @@ s2b_message_t const s2b_msgs[256]  =
 	S2B_MESSAGE_STRUCT(s2b_mount_charger_t), // 10
 	S2B_MESSAGE_STRUCT(s2b_self_calib_request_t), // 11
 	S2B_MESSAGE_STRUCT(s2b_inject_gyrocal_t), // 12
+	S2B_MESSAGE_STRUCT(s2b_manual_drive_t), // 13
 	{0}
 };
 

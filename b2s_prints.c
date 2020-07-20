@@ -144,6 +144,8 @@ void print_drive_diag(void* m)
 
 	printf("Drive diagnostics  ang_err=%5.2f deg lin_err=%d mm cur (%d, %d), targ (%d, %d), id=%d, remaining %d mm, stop_flags=%08x, run=%u\n", ANGI32TOFDEG(mm->ang_err), mm->lin_err, 
 		mm->cur_x, mm->cur_y, mm->target_x, mm->target_y, mm->id, mm->remaining, mm->micronavi_stop_flags, mm->run);
+	printf("        ang_speed_i=%d, lin_speed_i=%d, dbg1=%d, dbg2=%d, dbg3=%d, dbg4=%d, dbg5=%d, dbg6=%d\n",
+		mm->ang_speed_i, mm->lin_speed_i, mm->dbg1, mm->dbg2, mm->dbg3, mm->dbg4, mm->dbg5, mm->dbg6);
 }
 
 void print_mcu_voxel_map(void* m)

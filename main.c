@@ -903,6 +903,25 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	return 0;
 }
 
+int manual_control(uint8_t control)
+{
+	s2b_manual_drive_t *p_msg = spi_init_cmd(CMD_MANUAL_DRIVE);
+
+	if(!p_msg)
+	{
+		printf(__func__);
+		printf("ERROR: p_msg null\n");
+		return -1;
+	}
+
+	memset(p_msg, 0, sizeof(*p_msg));
+	p_msg->buttons = control;
+
+	cmd_send_to_robot = 1;
+	return 0;
+}
+
+
 int new_inject_gyrocal(gyro_cal_t* gc)
 {
 	s2b_inject_gyrocal_t *p_msg = spi_init_cmd(CMD_INJECT_GYROCAL);
@@ -2047,6 +2066,11 @@ void* main_thread()
 			{
 				//set_robot_pos(msg_cr_setpos.ang<<16, msg_cr_setpos.x, msg_cr_setpos.y);
 
+			}
+			else if(ret == TCP_CR_MANCTRL_MID)
+			{
+				printf("Manual control %2x\n", msg_cr_manctrl.control);
+				manual_control(msg_cr_manctrl.control);
 			}
 		}
 

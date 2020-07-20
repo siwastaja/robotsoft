@@ -364,6 +364,7 @@ uint8_t* spi_rx_pop()
   1 transaction ok, more data on the FIFO that can be read right away, p_paylen is set to reflect the number of payload bytes of the next transaction
 */
 
+#ifdef SPI_ERROR_SIMU
 int rx_crc_err_simu;
 void simulate_crc_err_on_rx()
 {
@@ -375,6 +376,7 @@ void simulate_crc_err_on_tx()
 {
 	tx_crc_err_simu = 1;
 }
+#endif
 
 static int transact(int rxlen, int txlen)
 {
@@ -415,8 +417,15 @@ static int transact(int rxlen, int txlen)
 			CALC_CRC(crc);
 		}
 
-		spi_tx_frame[bigger_len] = crc+tx_crc_err_simu;
-		tx_crc_err_simu=0;
+		spi_tx_frame[bigger_len] = crc
+
+		#ifdef SPI_ERROR_SIMU
+			+tx_crc_err_simu;
+	
+			tx_crc_err_simu=0;
+		#else
+			;
+		#endif
 
 		#if 0
 		printf("Transact() with send! - CRC: %02x, rxlen (from board)=%d, txlen (to board)=%d\n", crc, rxlen, txlen);
@@ -488,13 +497,28 @@ static int transact(int rxlen, int txlen)
 			CALC_CRC(crc);
 		}
 
-		if(spi_rx_fifo[rx_fifo_wr][bigger_len] != crc+rx_crc_err_simu)
-		{
-			rx_crc_err_simu = 0;
-			printf("ERROR: CRC mismatch (expected %02x, got %02x) - ignoring the packet.\n", crc, spi_rx_fifo[rx_fifo_wr][bigger_len]);
-			return -1;
-		}
+		if(spi_rx_fifo[rx_fifo_wr][bigger_len] != crc
+
+		#ifdef SPI_ERROR_SIMU
+
+			+rx_crc_err_simu)
+			{
+				rx_crc_err_simu = 0;
+
+		#else
+
+
+		#endif
+				)
+			{
+
+				printf("ERROR: CRC mismatch (expected %02x, got %02x) - ignoring the packet.\n", crc, spi_rx_fifo[rx_fifo_wr][bigger_len]);
+				return -1;
+			}
+
+		#ifdef SPI_ERROR_SIMU
 		rx_crc_err_simu = 0;
+		#endif
 
 		if(p_header->err_flags&1)
 		{

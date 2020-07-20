@@ -952,8 +952,11 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		sm_ref_x, sm_ref_y, sm_ref_z,
 		&current_voxfilter, ssm_ref_x, ssm_ref_y, ssm_ref_z,
 		&current_cloud, 1800, 300,
+		#ifdef SLAM_STANDALONE
+		NULL, 0);
+		#else
 		&realtime_cloud, 0);
-
+		#endif
 
 	if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
 	{
@@ -963,7 +966,11 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 			sm_ref_x, sm_ref_y, sm_ref_z,
 			NULL, 0,0,0,
 			&current_cloud, 1800, 3000,
+			#ifdef SLAM_STANDALONE
+			NULL, 0);
+			#else
 			&realtime_cloud, 1);
+			#endif
 	}
 
 
@@ -975,8 +982,15 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 			sm_ref_x, sm_ref_y, sm_ref_z,
 			NULL, 0,0,0,
 			&current_cloud, 1800, 3000,
+			#ifdef SLAM_STANDALONE
+			NULL, 0);
+			#else
 			&realtime_cloud, 1);
+			#endif
 	}
+
+
+	#ifndef SLAM_STANDALONE
 
 	if(tss->sidx == LAST_SIDX)
 	{
@@ -986,6 +1000,8 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 		realtime_cloud.n_points = 0;
 	}
+
+	#endif
 
 	if(tss->sidx == LAST_SIDX)
 	{
@@ -1108,6 +1124,8 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 }
 
+#ifndef SLAM_STANDALONE
+
 result_t legacy_process_after_input(int ret)
 {
 	// p_cur_cloud is always fixed, only one cloud in memory at the time.
@@ -1144,6 +1162,7 @@ result_t legacy_process_after_input(int ret)
 	return corr;
 
 }
+#endif
 
 
 void process_after_input(int ret)
@@ -1213,7 +1232,7 @@ void process_after_input(int ret)
 
 }
 
-
+#ifndef SLAM_STANDALONE
 // state sequence: 0 = init, 1 = input "before" or "after" data
 int input_tof_slam_set_for_gyrocal(tof_slam_set_t* tss, int state)
 {
@@ -1285,11 +1304,12 @@ double gyroslam_process_after()
 
 	return -1.0*res.yaw;
 }
+#endif
 
 void input_from_file(int file_idx)
 {
 	char fname[1024];
-	sprintf(fname, "/home/hrst/robotsoft/tsellari/trace%08d.rb2", file_idx);
+	sprintf(fname, "/home/hrst/tsellari/trace%08d.rb2", file_idx);
 	tof_slam_set_t* tss;
 	if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
 	{
@@ -1302,6 +1322,8 @@ void input_from_file(int file_idx)
 
 	}
 }
+
+#ifndef SLAM_STANDALONE
 
 int slam_input_from_tss(tof_slam_set_t* tss, result_t* corr_out)
 {
@@ -1319,7 +1341,7 @@ int slam_input_from_tss(tof_slam_set_t* tss, result_t* corr_out)
 	return 0;
 }
 
-
+#endif
 
 
 
@@ -2010,16 +2032,18 @@ void init_slam()
 		init_slam();
 
 		int start_i = 0;
-		int end_i = 27294; //12800;
+		int end_i = 5000; //27294; //12800;
 
 		for(int i = start_i; i<=end_i; i++)
 			input_from_file(i);
+
+
 
 		//free_all_pages();
 
 		//visualize_submaps();
 
-		return 0;
+#if 0
 		load_closures(closures, &n_closures);
 
 
@@ -2071,6 +2095,8 @@ void init_slam()
 			}
 			printf("\n");
 		}
+
+#endif
 
 
 		free_all_pages();

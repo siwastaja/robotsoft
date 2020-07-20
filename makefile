@@ -7,7 +7,7 @@
 # and run:
 # ./robotsoft
 
-DEVIP = 192.168.1.101
+DEVIP = 192.168.10.43
 
 CC = arm-linux-gnueabihf-gcc
 LD = arm-linux-gnueabihf-gcc
@@ -22,6 +22,10 @@ CFLAGS = -I. -I../raspilibs/usr/include -I/home/hrst/pulu/raspilibs/usr/include/
 
 CFLAGS += -g
 CFLAGS += -O3 -march=armv8-a -mfloat-abi=hard -mfpu=neon-fp-armv8
+
+# Application-specific defines
+# VACUUM_APP adds ignore regions on the pointcloud for the nozzle, for correct mapping result
+CFLAGS += -DVACUUM_APP
 
 LDFLAGS = -L/home/hrst/cross-pi-gcc-9.2.0-2/arm-linux-gnueabihf/libc/lib -L../raspilibs/lib/arm-linux-gnueabihf -L../raspilibs/usr/lib/arm-linux-gnueabihf -L/home/hrst/pulu/raspilibs/usr/lib/arm-linux-gnueabihf
 

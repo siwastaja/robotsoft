@@ -153,6 +153,20 @@ typedef struct __attribute__ ((packed))
 
 extern tcp_cr_setpos_t msg_cr_setpos;
 
+// Manual drive control, basically a "joystick" like command, which will be directly relayed to the firmware, which decides
+// how to move the motors according to the buttons.
+// Each button is one bit, active high.
+// (fast<<4) | (up<<3) | (down<<2) | (left<<1) | (right<<0), rest reserved for future buttons
+
+#define TCP_CR_MANCTRL_MID    366
+
+typedef struct __attribute__ ((packed))
+{
+	uint8_t control;
+} tcp_cr_manctrl_t;
+
+extern tcp_cr_manctrl_t msg_cr_manctrl;
+
 
 
 #define TCP_RC_POS_MID    430

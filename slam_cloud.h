@@ -127,7 +127,7 @@ ALWAYS_INLINE void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, in
 		printf("WARNING: Ignoring point, cloud full.\n");
 		return;
 	}
-	assert(cloud->n_points >= 0);
+	//assert(cloud->n_points >= 0);
 
 	cloud->points[cloud->n_points].sx = sx;
 	cloud->points[cloud->n_points].sy = sy;
@@ -171,4 +171,6 @@ typedef struct __attribute__((packed))
 void load_sensor_softcals();
 
 
+void transform_cloud(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw);
+void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw);
 

@@ -127,9 +127,17 @@ tcp_message_t msgmeta_cr_setpos =
 	10, "sii"
 };
 
+tcp_cr_manctrl_t msg_cr_manctrl;
+tcp_message_t msgmeta_cr_manctrl =
+{
+	&msg_cr_manctrl,
+	TCP_CR_MANCTRL_MID,
+	1, "B"
+};
 
 
-#define NUM_CR_MSGS 11
+
+#define NUM_CR_MSGS 12
 tcp_message_t* CR_MSGS[NUM_CR_MSGS] =
 {
 	&msgmeta_cr_dest,
@@ -142,7 +150,8 @@ tcp_message_t* CR_MSGS[NUM_CR_MSGS] =
 	&msgmeta_cr_maintenance,
 	&msgmeta_cr_speedlim,
 	&msgmeta_cr_statevect,
-	&msgmeta_cr_setpos
+	&msgmeta_cr_setpos,
+	&msgmeta_cr_manctrl
 };
 
 // Robot->Client messages
