@@ -1,3 +1,5 @@
+//#define FILTER_OFF
+
 #include <stdio.h>
 #include <math.h>
 #include <inttypes.h>
@@ -60,20 +62,20 @@
 
 // Maximum number of subsubmaps in a submap. After exceeded, a new submap is force-started
 // Number of maximum scans is SUBSUBMAP_LIMIT * VOXFILTER_N_SCANS
-#define SUBSUBMAP_LIMIT 6
+#define SUBSUBMAP_LIMIT 24 // 6
 #define SUBMAP_MAX_SCANS (SUBSUBMAP_LIMIT * VOXFILTER_N_SCANS)
 
 // Maximum difference in robot coordinates during a submap, basically the length of the robot pose range before terminating the submap. In mm
-#define DX_LIMIT 2000
-#define DY_LIMIT 2000
-#define DZ_LIMIT 1000
+#define DX_LIMIT 8000 // 2000
+#define DY_LIMIT 8000 // 2000
+#define DZ_LIMIT 1000 // 1000
 
 // Cumulative linear travel limit; after exceeded, a new submap is started. In mm.
 // Difference to the D*_LIMITs is that this limit can force a new submap even when the robot is
 // just moving (back and forth, for example) inside a small area.
-#define CUMUL_TRAVEL_LIMIT 6000
+#define CUMUL_TRAVEL_LIMIT 16000  // 6000
 // Similar, but for cumulative angular (yaw) motion
-#define CUMUL_YAW_LIMIT DEGTORAD(200)
+#define CUMUL_YAW_LIMIT DEGTORAD(800)  // 200
 
 
 typedef struct  __attribute__((packed))
@@ -1104,11 +1106,15 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 				// filter_cloud makes a new cloud.
 				printf("input_tof_slam_set: submap finished, filtering the cloud (%d -> ", current_cloud.n_points); fflush(stdout);
-				filter_cloud(&current_cloud, p_cur_cloud, transl_x, transl_y, transl_z);
+				#ifdef FILTER_OFF
+					transform_cloud_copy(&current_cloud, p_cur_cloud, transl_x, transl_y, transl_z, 0.0);
+				#else
+					filter_cloud(&current_cloud, p_cur_cloud, transl_x, transl_y, transl_z);
+				#endif
 				printf("%d points), n_sm = %d\n",  p_cur_cloud->n_points, n_sms);
 				ret = -1;
 				ret = n_sms;
-//				n_sms++;
+				n_sms++;
 
 
 				current_cloud.n_points = 0; // this is enough to clear a cloud. Old data doesn't matter.
@@ -1309,7 +1315,7 @@ double gyroslam_process_after()
 void input_from_file(int file_idx)
 {
 	char fname[1024];
-	sprintf(fname, "/home/hrst/tsellari/trace%08d.rb2", file_idx);
+	sprintf(fname, "/home/hrst/pulu/tut_trace/trace%08d.rb2", file_idx);
 	tof_slam_set_t* tss;
 	if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
 	{
@@ -1998,7 +2004,7 @@ void visualize_submaps()
 
 	printf("VISUALIZING SUBMAPS\n\n");
 
-	for(int c=0; c<97; c++)
+	for(int c=0; c<5; c++)
 	{
 		static cloud_t tmp_cloud;
 
@@ -2030,9 +2036,10 @@ void init_slam()
 	int main(int argc, char** argv)
 	{
 		init_slam();
+		load_sensor_softcals();
 
 		int start_i = 0;
-		int end_i = 5000; //27294; //12800;
+		int end_i = 2206; //27294; //12800;
 
 		for(int i = start_i; i<=end_i; i++)
 			input_from_file(i);
@@ -2041,7 +2048,7 @@ void init_slam()
 
 		//free_all_pages();
 
-		//visualize_submaps();
+		visualize_submaps();
 
 #if 0
 		load_closures(closures, &n_closures);

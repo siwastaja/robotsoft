@@ -32,11 +32,13 @@ typedef struct
 
 
 
-// 24MB of memory with these, coverage 4.1x4.1x2.0 m
+// 128x128x64, step 32: 24MB of memory with these dimensions, coverage 4.1x4.1x2.0 m
+// 160x160x64, step 32: 37.5MB of memory with these dimensions, coverage 5.1x5.1x2.0 m
 // Outside of the filter, all points go through as they are.
 // When robot is fully stationary, max two sensors can see the same spot per full scan.
 // When moving, three sensors can see the same spot per full scan.
-// It's quite unlikely that 10 references would run out for 6 full scans. If it happens, no big harm done, data goes through without filtration
+// It's quite unlikely that 10 references would run out for 6 full scans (VOXFILTER_N_SCANS was 6 when writing this).
+// If it happens, no big harm done, some data goes through without filtration.
 // Tested different numbers of MAX_RAY_SOURCES for the Vuokravarasto Kellari dataset:
 // max  4: 390810 skipped points
 // max  7: 1544 skipped points

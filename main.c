@@ -125,9 +125,9 @@ pwr_status_t latest_pwr_status;
 state_vect_t state_vect =
 {
 	.v = {
-	.loca_3d = 1,
-	.mapping_3d = 1,
-	.mapping_collisions = 1,
+	.loca_3d = 0,
+	.mapping_3d = 0,
+	.mapping_collisions = 0,
 	.keep_position = 1,
 	.command_source = USER_IN_COMMAND
 	}

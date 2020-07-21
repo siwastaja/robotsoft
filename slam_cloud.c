@@ -284,18 +284,19 @@ static uint8_t free_cnt[CLOUDFLT_XS][CLOUDFLT_YS][CLOUDFLT_ZS];
 
 #define UNCERT_Z 2
 #define UNCERT 2
-#define LINE_CONE_SLOPE_XY 15
-#define LINE_CONE_SLOPE_Z  20
+#define LINE_CONE_SLOPE_XY 1500
+#define LINE_CONE_SLOPE_Z  2000
 
 static inline void output_voxel_cloudflt(int x, int y, int z)
 {
 //	assert(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1);
 
-//	if(free_cnt[x][y][z] < 255)
-//		free_cnt[x][y][z]++;
-
 	if(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1)
-		free_cnt[x][y][z] = 1;
+		if(free_cnt[x][y][z] < 255)
+			free_cnt[x][y][z]++;
+
+//	if(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1)
+//		free_cnt[x][y][z] = 1;
 }
 
 static inline uint8_t get_voxel_cloudflt(int x, int y, int z)
@@ -437,6 +438,155 @@ static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 	}
 }
 
+/*
+free_cnt is a voxel map where value >0 means that this voxel has been seen empty
+de-edging makes continuous volume smaller by eating the edges by one voxel
+Without this, sensor noise causes loss of real structures. Consider the example of floor, seen sideways
+
+	W
+	W
+	W
+	W          R
+	FFFFFFFFFFFFFFF
+	   NN
+
+	W=actual wall
+	F=actual floor
+	N=noise
+	R=robot
+
+	Weeeee
+	Weeeeee
+	Weeeeeeee
+	WeeeeeeeeeR
+	FFFFFxxxxFFFFFF
+	   NN
+
+	e= area traced empty correctly
+	x= area traced empty because of incorrect observation (N)
+
+
+	After de-edging the empty map:
+
+	W     
+	W eeee 
+	W eeeeee 
+	W   eeeee R
+	FFFFFFFFFFFFFFF
+	   NN
+
+
+*/ 
+// if defined, de-edges 2 blocks wide instead of just 1
+//#define DE_EDGE_2
+
+static void de_edge_free_cnt()
+{
+	// along z axis, up and down
+	for(int iy=0; iy < CLOUDFLT_YS; iy++)
+	{
+		for(int ix=0; ix < CLOUDFLT_XS; ix++)
+		{
+			for(int iz=2; iz < CLOUDFLT_ZS-1; iz++)
+			{
+				if(!free_cnt[ix][iy][iz-2] && !free_cnt[ix][iy][iz-1] && free_cnt[ix][iy][iz])
+				{
+					free_cnt[ix][iy][iz] = 0;
+					#ifdef DE_EDGE_2
+					free_cnt[ix][iy][iz+1] = 0;
+					iz++;
+					#endif
+					iz+=2; // skip so that the point we just removed does not cause continuous removal of everything
+				}
+			}
+
+			for(int iz=CLOUDFLT_ZS-2-1; iz >= 1; iz--)
+			{
+				if(!free_cnt[ix][iy][iz+2] && !free_cnt[ix][iy][iz+1] && free_cnt[ix][iy][iz])
+				{
+					free_cnt[ix][iy][iz] = 0;
+					#ifdef DE_EDGE_2
+					free_cnt[ix][iy][iz-1] = 0;
+					iz--;
+					#endif
+					iz-=2;
+				}
+			}
+
+		}
+	}
+
+	// along x axis
+	for(int iy=0; iy < CLOUDFLT_YS; iy++)
+	{
+		for(int iz=0; iz < CLOUDFLT_ZS; iz++)
+		{
+			for(int ix=2; ix < CLOUDFLT_XS-1; ix++)
+			{
+				if(!free_cnt[ix-2][iy][iz] && !free_cnt[ix-1][iy][iz] && free_cnt[ix][iy][iz])
+				{
+					free_cnt[ix][iy][iz] = 0;
+					#ifdef DE_EDGE_2
+					free_cnt[ix+1][iy][iz] = 0;
+					ix++;
+					#endif
+					ix+=3;
+				}
+			}
+
+			for(int ix=CLOUDFLT_XS-2-1; ix >= 1; ix--)
+			{
+				if(!free_cnt[ix+2][iy][iz] && !free_cnt[ix+1][iy][iz] && free_cnt[ix][iy][iz])
+				{
+					free_cnt[ix][iy][iz] = 0;
+					#ifdef DE_EDGE_2
+					free_cnt[ix-1][iy][iz] = 0;
+					ix--;
+					#endif
+					ix-=3;
+				}
+			}
+
+		}
+	}
+
+	// along y axis
+	for(int iz=0; iz < CLOUDFLT_ZS; iz++)
+	{
+		for(int ix=0; ix < CLOUDFLT_XS; ix++)
+		{
+			for(int iy=2; iy < CLOUDFLT_YS-1; iy++)
+			{
+				if(!free_cnt[ix][iy-2][iz] && !free_cnt[ix][iy-1][iz] && free_cnt[ix][iy][iz])
+				{
+					free_cnt[ix][iy][iz] = 0;
+					#ifdef DE_EDGE_2
+					free_cnt[ix][iy+1][iz] = 0;
+					iy++;
+					#endif
+					iy+=3; // skip so that the point we just removed does not cause continuous removal of everything
+				}
+			}
+
+			for(int iy=CLOUDFLT_YS-2-1; iy >= 1; iy--)
+			{
+				if(!free_cnt[ix][iy+2][iz] && !free_cnt[ix][iy+1][iz] && free_cnt[ix][iy][iz])
+				{
+					free_cnt[ix][iy][iz] = 0;
+					#ifdef DE_EDGE_2
+					free_cnt[ix][iy-1][iz] = 0;
+					iy--;
+					#endif
+					iy-=3;
+				}
+			}
+
+		}
+	}
+
+
+}
+
 void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl_y, int32_t transl_z)
 {
 //	printf("filter_cloud ref (%d, %d, %d)\n", ref_x, ref_y, ref_z);
@@ -457,6 +607,7 @@ void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl
 		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
 	}
 
+	de_edge_free_cnt();
 	out->n_points = 0;
 	int n_p = 0;
 	// Remove points at empty space by only outputting points where there is no free voxel.
@@ -467,7 +618,7 @@ void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl
 		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
 		int val = get_voxel_cloudflt(px, py, pz);
-		if(val < 1)
+		if(val < 10)
 		{
 			out->points[n_p] = TRANSLATE_CLOUD_POINT(cloud->points[p], transl_x, transl_y, transl_z);
 			n_p++;
@@ -524,7 +675,7 @@ void generate_cloudflt_free(cloud_t* cloud, int32_t transl_x, int32_t transl_y, 
 }
 
 
-#define CLOUD_TO_VOXMAP_TRACE_FREE
+//#define CLOUD_TO_VOXMAP_TRACE_FREE
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 {
 	printf("cloud_to_voxmap .."); fflush(stdout);

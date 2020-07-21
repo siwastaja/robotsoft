@@ -148,7 +148,11 @@ typedef struct __attribute__ ((packed))
 
 // Note that even if you call load_pages_quick for every single point, it's a fairly quick operation only if the pages tend to fit
 // memory, at least mostly. Pages are shuffled on and off disk multiple times if the value is too small.
+#ifdef SLAM_STANDALONE
+#define MAX_LOADED_PAGES (256)
+#else
 #define MAX_LOADED_PAGES (56)
+#endif
 
 // Valid ranges of page indeces, inclusive
 #define PX_MIN (0)

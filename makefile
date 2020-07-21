@@ -13,7 +13,7 @@ CC = arm-linux-gnueabihf-gcc
 LD = arm-linux-gnueabihf-gcc
 
 EXTRA_HEADERS = config.h api_board_to_soft.h api_soft_to_board.h api_tcp.h misc.h datatypes.h
-ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o slam_matchers.o slam_cloud.o slam_top.o voxmap.o voxmap_memdisk.o small_cloud.o routing.o
+ROBOTSOFT_OBJ = main.o tcp_comm.o tcp_parser.o spi.o b2s_prints.o slam_matchers.o slam_cloud.o slam_icp.o slam_top.o voxmap.o voxmap_memdisk.o small_cloud.o routing.o
 BOARDMON_OBJ = boardmon.o spi.o b2s_prints.o
 SPIPROG_OBJ = spiprog.o
 CALIBRATOR_OBJ = ../robotsoft-calibrator/calibrator.o spi.o b2s_prints.o
