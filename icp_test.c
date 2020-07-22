@@ -111,13 +111,21 @@ static kd_node_t* find_median(kd_node_t *start, kd_node_t *end, int ii)
 		swap(store, end - 1);
  		swaps++;
 
+		// This code proves that the algorithm does not sort the values around the median.
+		// Larger than median can be on either side, like smaller than median.
 		if (store->coords[idx] == md->coords[idx])
 		{
-//			for(kd_node_t* i = original_start; i < original_end; i++)
-//			{
-//				printf("(%d %d %d)\n", i->coords[0], i->coords[1], i->coords[2]);
-//			}
+			printf("coord at md: %d\n", md->coords[idx]);
 			printf("md=%d, swaps=%d\n", (int)(md-initial_root), swaps);
+			for(kd_node_t* i = original_start; i < original_end; i++)
+			{
+				printf("(%d %d %d)\n", i->coords[0], i->coords[1], i->coords[2]);
+				if(i < md && i->coords[idx] > md->coords[idx])
+					printf("                     MISMATCH1\n");
+				if(i > md && i->coords[idx] < md->coords[idx])
+					printf("                     MISMATCH2\n");
+				
+			}
 			return md;
 		}
  
@@ -413,6 +421,7 @@ int main()
 	load_cloud(&cla, 10);
 	load_cloud(&clb, 11);
 
+	cla.n_points = 1000;
 	for(int i=0; i<cla.n_points; i++)
 	{
 		cla.points[i].px /= SMALL_CLOUD_POINT_RESO_X;
