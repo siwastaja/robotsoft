@@ -117,7 +117,7 @@ static kd_node_t* find_median(kd_node_t *start, kd_node_t *end, int ii)
 		{
 			printf("coord at md: %d\n", md->coords[idx]);
 			printf("md=%d, swaps=%d\n", (int)(md-initial_root), swaps);
-			for(kd_node_t* i = original_start; i < original_end; i++)
+/*			for(kd_node_t* i = original_start; i < original_end; i++)
 			{
 				printf("(%d %d %d)\n", i->coords[0], i->coords[1], i->coords[2]);
 				if(i < md && i->coords[idx] > md->coords[idx])
@@ -125,7 +125,7 @@ static kd_node_t* find_median(kd_node_t *start, kd_node_t *end, int ii)
 				if(i > md && i->coords[idx] < md->coords[idx])
 					printf("                     MISMATCH2\n");
 				
-			}
+			}*/
 			return md;
 		}
  
@@ -158,7 +158,9 @@ static kd_node_t* make_tree(kd_node_t *t, int len, int i)
 	if( (median_node = find_median(t, t + len, i)) )
 	{
 		i++;
+		printf("LEFT\n");
 		median_node->left  = make_tree(t, median_node - t, i);
+		printf("RIGHT\n");
 		median_node->right = make_tree(median_node + 1, t + len - (median_node + 1), i);
 	}
 
