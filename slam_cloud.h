@@ -5,35 +5,137 @@
 #include "misc.h"
 #include "slam_config.h"
 
-// Ray sources are always near the middle of the submap. Consider typical submap robot moving range of 5000mm (+/- 2500mm), so
-// 16-bit range of +/-32787mm is plentiful.
-// For Z, 16-bit range is more than enough as well -> struct is 16 bytes nicely.
+
+// Cloud resolution
+#define CLOUD_MM       16
+#define CLOUD_MM_SHIFT  4
 
 typedef struct __attribute__((packed))
 {
-	int16_t sx;
-	int16_t sy;
-	int16_t sz;
-
-	int32_t px;
-	int32_t py;
-	int16_t pz;
+	uint16_t src_idx;
+	int16_t x;
+	int16_t y;
+	int16_t z;
 } cloud_point_t;
 
-#define TRANSLATE_CLOUD_POINT(c_, x_, y_, z_) (cloud_point_t){c_.sx + (x_) , c_.sy + (y_) , c_.sz + (z_) , c_.px + (x_) , c_.py + (y_) , c_.pz + (z_)}
+// Hard maximum number of points, for failure detection (early abort instead of freezing or ENOMEM)
+// Each full scan produces max 9600*10 points. Approx 1 scan per second.
+// Support 5 minutes of scans
+#define MAX_POINTS (9600*10*60*5)
 
-#define MAX_POINTS (9600*10*64)
+// Maximize performance vs. memory usage, having to call realloc() every now and then is just fine,
+// but having to call it multiple times for every point cloud is only a performance hindrance.
+// Linux handles reallocs very well because large chunks use mmap internally which can move data
+// around without actually moving any data.
+// So make this a bit smaller than a "typical" pointcloud.
+// Say half of the points are valid, and we collect for 15 seconds. This would be 9600/2*10*15 = 720000
+// Since a point is 8 bytes, this is 5.5Mbytes. So let's just do 4MBytes = 524288 points
+// Have another option to initialize a cloud for smaller usage, 0.5MBytes = 65536 points
+#define INITIAL_POINTS_ALLOC_LARGE (524288)
+#define INITIAL_POINTS_ALLOC_SMALL (65536)
+
+// Hard maximum number of sources (for failure detection as well)
+// Each full scan produces 10 sources. Approx 1 scan per second
+// Support 5 minutes of scans
+// For initial allocations, similar reasoning (see above)
+#define MAX_SOURCES (10*60*5)
+#define INITIAL_SRCS_ALLOC_LARGE (256)
+#define INITIAL_SRCS_ALLOC_SMALL (64)
+
 typedef struct
 {
+	int n_srcs;
+	int alloc_srcs;
 	int n_points;
-	cloud_point_t points[MAX_POINTS];
+	int alloc_points;
+	cloud_point_t* srcs;  // when used as sources, cloud_point_t.src_idx is dummy.
+	cloud_point_t* points;
 } cloud_t;
 
+// cloud_t instances are small, can be stored in stack, arrays, etc. efficiently.
+// remember to init_cloud and free_cloud, though.
+
+#define CLOUD_INIT_SMALL (1<<0)
+
+// New cloud must be created with this function. All-zeroes is no proper initialization.
+void init_cloud(cloud_t* cloud, int flags)
+{
+	cloud->n_srcs = 0;
+	cloud->n_points = 0;
+	
+	if(flags & CLOUD_INIT_SMALL)
+	{
+		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_SMALL;
+		cloud->alloc_points = INITIAL_POINTS_ALLOC_SMALL;
+	}
+	else
+	{
+		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_LARGE;
+		cloud->alloc_points = INITIAL_POINTS_ALLOC_LARGE;
+	}
+
+	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
+	assert(cloud->srcs);
+	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
+	assert(cloud->points);
+}
+
+void free_cloud(cloud_t* cloud)
+{
+	free(cloud->srcs);
+	free(cloud->points);
+}
+
+ALWAYS_INLINE int cloud_add_source(cloud_t* cloud, cloud_point_t p)
+{
+	if(cloud->n_srcs >= cloud->alloc_srcs)
+	{
+		cloud->alloc_srcs <<= 1;
+		cloud->srcs = realloc(cloud->srcs, cloud->alloc_srcs * sizeof(cloud_point_t));
+		assert(cloud->srcs);
+	}
+
+	cloud->srcs[cloud->n_srcs] = p;
+
+	return cloud->n_srcs++;
+}
+
+// Find existing (close enough) source, use it. If suitable source is not found, a new source is added. Returns the source idx.
+// For now, linear search is used because the number of sources is fairly low, and there are usually thousands of points per source.
+// Never fails.
+ALWAYS_INLINE int cloud_find_source(cloud_t* cloud, cloud_point_t p)
+{
+	int_fast32_t closest = INT_FAST32_MAX;
+	for(int i=0; i<cloud->n_srcs; i++)
+	{
+		int_fast32_t sqdist = sq(p.x - cloud->srcs[i].x) + sq(p.y - cloud->srcs[i].y) + sq(p.z - cloud->srcs[i].z);
+		if(sqdist < closest)
+		{
+			closest = sqdist;
+			closest_i = i;
+		}
+	}
+
+	if(closest <= sq(SOURCE_COMBINE_THRESHOLD))
+		return i;
+
+	return cloud_add_source(cloud, p);
+}
+
+ALWAYS_INLINE void cloud_add_point(cloud_t* cloud, cloud_point_t p)
+{
+	if(cloud->n_points >= cloud->alloc_points)
+	{
+		cloud->alloc_points <<= 1;
+		cloud->points = realloc(cloud->points, cloud->alloc_points * sizeof(cloud_point_t));
+		assert(cloud->points);
+	}
+
+	cloud->points[cloud->n_points++] = p;
+}
 
 
-
-// 128x128x64, step 32: 24MB of memory with these dimensions, coverage 4.1x4.1x2.0 m
-// 160x160x64, step 32: 37.5MB of memory with these dimensions, coverage 5.1x5.1x2.0 m
+// 128x128x64, step 32: 16MB of memory with these dimensions, coverage 4.1x4.1x2.0 m
 // Outside of the filter, all points go through as they are.
 // When robot is fully stationary, max two sensors can see the same spot per full scan.
 // When moving, three sensors can see the same spot per full scan.
@@ -45,57 +147,60 @@ typedef struct
 // max  8: 107 skipped points
 // max  9: 6 skipped points
 // max 10: 0 skipped points
-// 10 is good: sizeof(voxfilter_point_t) = 24 bytes (alignable by 4 and 8)
+// 6 is good: sizeof(voxfilter_point_t) = 16 bytes (alignable by 4 and 8)
 // It doesn't have a lot of extra margin, in some cases a few points could slip through the voxfilter,
 // but this is not catastrophic.
 
-#define VOXFILTER_MAX_RAY_SOURCES 10
+#define VOXFILTER_MAX_RAY_SOURCES 6
 #define VOXFILTER_XS 128
 #define VOXFILTER_YS 128
 #define VOXFILTER_ZS 64
-#define VOXFILTER_STEP 32
+//#define VOXFILTER_STEP (CLOUD_MM*2)
 
 
 /*
+Voxfilter: Because sensors output points at constant angular resolution, nearby surfaces produce
+a huge clumps of points, as opposed to faraway surfaces. Voxfilter is a simple, first-order filter
+that reduces the amount of data before it is accumulated in memory. Instead of storing points directly
+to the pointcloud, it is stored using the voxfilter_insert_point interface. If the point fits inside the
+(fairly small) voxfilter area of voxels, i.e., it's in the dense near field sensing area, it is averaged within
+other points hitting the same voxel. If the point is outside the voxelized area, point is added to the pointcloud
+directly instead. After enough scans are processed (e.g., the robot has moved enough that the small voxfilter
+range is running out, or at latest, when we want to output the point cloud), the points contained in the voxfilter
+are added to the point cloud at once. At this stage, only one output point is produced per voxel. This point
+isn't the quantized voxel coordinates; instead, it's the true average of the points within the voxel. The result
+is more equalized amount of points near and far, and increased resolution (thanks to averaging) near-field.
+
 When the voxfilter accumulates (averages) close points from different sources, we must store the information of all
-sources involved, so that the free space can be traced from all correct sources. 
+sources involved, so that the free space can be traced from all correct sources.
 
-In order to filter better, we allow another source point to be used instead, if it's close enough to
-the correct source. This happens, for example, if the robot is stationary (creating exact same source coordinates again)
-or crawling very slowly (nearly the same). Or, in some cases, when the robot happens to run forward at a certain lucky
-speed, so that another sensor gets an image close to the point where the another sensor picked an image earlier.
+VOXFILTER_STEP is now designed as a fixed CLOUD_MM*2, so that on each voxel, there are 8 different possible positions for
+the point. Now, utilizing the points[][][] table indeces, the point position within the voxel can be described by 1+1+1 bits
+for x,y,z respectively. So we can accumulate the average by just counting the cases when LSb = 1. If this count is over
+cnt_of_points/2, then the resulting point has LSb=1 as well.
 
-Upside in increasing this: point clouds gets smaller. Normally, each different source needs to generate a new point even if
-the target point is combined by the voxfilter, but if the sources are combined, one point per one combined target suffices.
-
-The only downside to increasing this: free space very close to the robot may not be traced perfectly - some
-small stripes and spots *might* remain unknown (not free) even when they are actually free. Note that if you have
-a lot of moving people around the robot while mapping, this might prevent the later free space filter from removing
-some artefacts.
 */
-#define VOXFILTER_SOURCE_COMBINE_THRESHOLD 50 // mm
 
 typedef struct __attribute__((packed))
 {
-	uint8_t src_idxs[VOXFILTER_MAX_RAY_SOURCES]; // Zero-terminated list of indeces to voxfilter.ray_sources[]  (zero termination not required, if max length used)
-	uint16_t cnt;
-	int32_t x;
-	int32_t y;
-	int32_t z;
-} voxfilter_point_t;
+	uint16_t src_idxs[VOXFILTER_MAX_RAY_SOURCES]; // Zero-terminated list of indeces to cloud ray sources  (zero termination not required, if max length used)
 
-typedef struct
-{
-	int x;
-	int y;
-	int z;
-} voxfilter_ray_source_t;
+	uint8_t cnt;
+
+	// point LSb accumulation: increased whenever the point has LSb='1'
+	// Obviously, max 256 points per voxel.
+	uint8_t x;
+	uint8_t y;
+	uint8_t z;
+} voxfilter_point_t;
 
 // Remember to zero this struct out first.
 typedef struct
 {
-	int n_ray_sources;
-	voxfilter_ray_source_t ray_sources[VOXFILTER_N_SCANS*N_SENSORS+1]; // Start collecting at index 1
+	// Extra translation, so that the voxfilter can live in its own limited space instead of the larger submap span.
+	int_fast32_t ref_x;
+	int_fast32_t ref_y;
+	int_fast32_t ref_z;
 	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS];
 } voxfilter_t;
 

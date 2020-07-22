@@ -830,23 +830,18 @@ void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud)
 }
 
 
-ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter, int srcid, 
-	int32_t sx, int32_t sy, int32_t sz, // source coordinates are only used when the point cannot go to voxfilter; otherwise, srcid is stored
-	int32_t x, int32_t y, int32_t z, // the point
-	int32_t ref_x, int32_t ref_y, int32_t ref_z) // Extra translation, so that the voxfilter can live in its own limited space instead of the larger submap span.
-	// Because only voxel selection is translated, not the actual stored coordinates (they fit int32_t accumulation variables just fine),
-	// there is no need to translate points back later, basically we just store at a certain offset to maximize the span.
+ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter, cloud_point_t p)
 {
-	int vox_x = (x+ref_x)/VOXFILTER_STEP + VOXFILTER_XS/2;
-	int vox_y = (y+ref_y)/VOXFILTER_STEP + VOXFILTER_YS/2;
-	int vox_z = (z+ref_z)/VOXFILTER_STEP + VOXFILTER_ZS/2;
+	int vox_x = (p.x+voxfilter->ref_x)/VOXFILTER_STEP + VOXFILTER_XS/2;
+	int vox_y = (p.y+voxfilter->ref_y)/VOXFILTER_STEP + VOXFILTER_YS/2;
+	int vox_z = (p.z+voxfilter->ref_z)/VOXFILTER_STEP + VOXFILTER_ZS/2;
 
-	assert(srcid > 0 && srcid <= voxfilter->n_ray_sources);
+	assert(p.src_idx > 0);
 
 	if(vox_x < 0 || vox_x > VOXFILTER_XS-1 || vox_y < 0 || vox_y > VOXFILTER_YS-1 || vox_z < 0 || vox_z > VOXFILTER_ZS-1)
 	{
 //		printf("INFO: voxfilter: skipping OOR point %d, %d, %d\n", vox_x, vox_y, vox_z);
-		cloud_insert_point(cloud, sx, sy, sz, x, y, z);
+		cloud_add_point(cloud, p);
 		return;
 	}
 
@@ -854,32 +849,35 @@ ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter
 
 	for(int i = 0; i < VOXFILTER_MAX_RAY_SOURCES; i++)
 	{
-		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == srcid)
+		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == p.src_idx)
 			goto SOURCE_EXISTS;
 
 		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == 0)
 		{
 			// Zero terminator found: did not find the srcid, and this is a suitable place for adding it.
-			voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] = srcid;
+			voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] = p.src_idx;
 			goto SOURCE_EXISTS; // now it's there
 		}
 	}
 
-	//printf("WARN: voxfilter - no space left to add source, skipping filter\n");
-	// Did not find the source, nor had space to add it. Just insert the point to the cloud, bypassing the filter.	
-	cloud_insert_point(cloud, sx, sy, sz, x, y, z);
-	return;
+	//printf("WARN: voxfilter - no space left to add source, not adding source\n");
+	// Did not find the source, nor had space to add it. Still insert the point to the voxfilter - just without source.
+	// The consequence is, while the voxfilter still limits number of points, cannot trace all free space.
+	// Do nothing here. TODO: Maybe log it.
 
 	SOURCE_EXISTS:;	
 
-	// Accumulate the point
+	// Accumulate the point.
+	// The point coordinate higher bits are implicitly available as points[][][] indices.
+	// Accumulate the LSb only.
 
-	voxfilter->points[vox_x][vox_y][vox_z].cnt++;
-	voxfilter->points[vox_x][vox_y][vox_z].x += x;
-	voxfilter->points[vox_x][vox_y][vox_z].y += y;
-	voxfilter->points[vox_x][vox_y][vox_z].z += z;
-
-	//printf("point (%d,%d,%d), voxel (%d,%d,%d), cnt now = %d\n", x, y, z, vox_x, vox_y, vox_z, voxfilter->points[vox_x][vox_y][vox_z].cnt);
+	if(LIKELY(voxfilter->points[vox_x][vox_y][vox_z].cnt < 255)) // If the count is full - unlikely - just ignore the point completely.
+	{
+		voxfilter->points[vox_x][vox_y][vox_z].cnt++;
+		voxfilter->points[vox_x][vox_y][vox_z].x += p.x&1;
+		voxfilter->points[vox_x][vox_y][vox_z].y += p.y&1;
+		voxfilter->points[vox_x][vox_y][vox_z].z += p.z&1;
+	}
 
 }
 
