@@ -66,11 +66,17 @@ static inline void swap(kd_node_t *a, kd_node_t *b)
 	b->coords[2] = tmp[2];
 }
  
+
+int fm_cnt;
+
+kd_node_t* initial_root;
  
 // quickselect implementation
 // ii is current depth in tree
 static kd_node_t* find_median(kd_node_t *start, kd_node_t *end, int ii)
 {
+	fm_cnt++;
+
 	if(end <= start)
 		return NULL;
 	if(end == start + 1)
@@ -79,23 +85,41 @@ static kd_node_t* find_median(kd_node_t *start, kd_node_t *end, int ii)
 	int idx = ii%3;
 	kd_node_t *p, *store, *md = start + (end - start) / 2;
 	kd_unit_t pivot;
+
+	kd_node_t* original_start = start;
+	kd_node_t* original_end = end;
+
+	printf("find_median start=%d  end=%d\n", (int)(original_start-initial_root), (int)(original_end-initial_root));
+	int swaps = 0;
 	while (1)
 	{
 		pivot = md->coords[idx];
 		swap(md, end - 1);
+		swaps++;
 		for(store = p = start; p < end; p++)
 		{
 			if (p->coords[idx] < pivot)
 			{
 				if(p != store)
+				{
 					swap(p, store);
+					swaps++;
+				}
 				store++;
 			}
 		}
 		swap(store, end - 1);
- 
+ 		swaps++;
+
 		if (store->coords[idx] == md->coords[idx])
+		{
+//			for(kd_node_t* i = original_start; i < original_end; i++)
+//			{
+//				printf("(%d %d %d)\n", i->coords[0], i->coords[1], i->coords[2]);
+//			}
+			printf("md=%d, swaps=%d\n", (int)(md-initial_root), swaps);
 			return md;
+		}
  
 		if (store > md)
 			end = store;
@@ -235,8 +259,10 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	n_branch = 0;
 	max_branch_len = -1;
 
+	initial_root = kda;
 	kd_node_t* root = make_tree(kda, cloud_a->n_points, 0);
 	
+	printf("fm_cnt = %d\n", fm_cnt);
 	printf("%d branches, avg len = %d, max len = %d\n", n_branch, (int)(branch_len_cumul/(int64_t)n_branch), max_branch_len);
 	printf("root at %d: (%d %d %d)\n", (int)(root-kda), root->coords[0], root->coords[1],root->coords[2]);
 	printf("left child at %d: (%d %d %d)\n", (int)((root->left)-kda), root->left->coords[0], root->left->coords[1],root->left->coords[2]);
