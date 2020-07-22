@@ -216,7 +216,6 @@ void cloud_to_kd(kd_node_t* kd, cloud_t* cloud)
 }
 
 
-
 static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	float x_corr, float y_corr, float z_corr, float yaw_corr,
 	int threshold,
@@ -239,6 +238,9 @@ static int match_by_closest_points(cloud_t* cloud_a, cloud_t* cloud_b_in,
 	kd_node_t* root = make_tree(kda, cloud_a->n_points, 0);
 	
 	printf("%d branches, avg len = %d, max len = %d\n", n_branch, (int)(branch_len_cumul/(int64_t)n_branch), max_branch_len);
+	printf("root at %d: (%d %d %d)\n", (int)(root-kda), root->coords[0], root->coords[1],root->coords[2]);
+	printf("left child at %d: (%d %d %d)\n", (int)((root->left)-kda), root->left->coords[0], root->left->coords[1],root->left->coords[2]);
+	printf("right child at %d: (%d %d %d)\n", (int)((root->right)-kda), root->right->coords[0], root->right->coords[1],root->right->coords[2]);
 
 	double t_total_total = 0.0;
 
