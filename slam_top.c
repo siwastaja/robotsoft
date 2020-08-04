@@ -778,25 +778,33 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 //	static int32_t sm_ref_x, sm_ref_y, sm_ref_z;
 
+	printf("input_tof_slam_set sidx = %d\n", cur_sidx);
+
 	if(cur_sidx != tss->sidx)
 	{
 		printf("WARNING: ignoring out-of-order tof_slam_set sidx=%d, expecting %d\n", tss->sidx, cur_sidx);
 		return -1;
 	}
 
-	printf("input_tof_slam_set sidx = %d\n", cur_sidx);
+	static cloud_t submap;
 
-//	if(cur_sidx == 0)
-//	{
-//		sm_ref_x = tss->sets[0].pose.x;
-//		sm_ref_y = tss->sets[0].pose.y;
-//		sm_ref_z = tss->sets[0].pose.z;
-//	}
+	if(cur_sidx == FIRST_SIDX)
+	{
+		if(!cloud_is_init(&submap))
+		{
+			printf("init submap.."); fflush(stdout);
+			init_cloud(&submap, 0);
+			printf("ok\n");
+			submap.m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
+			submap.m.ref_y = tss->sets[0].pose.y/CLOUD_MM;
+			submap.m.ref_z = tss->sets[0].pose.z/CLOUD_MM;
+		}
+	}
 
-	printf("init_cloud.."); fflush(stdout);
-	printf("ok\n");
 
+	printf("init clouds[%d]..", cur_sidx); fflush(stdout);
 	init_cloud(&clouds[cur_sidx], CLOUD_INIT_SMALL);
+	printf("ok\n");
 
 
 	clouds[cur_sidx].m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
@@ -835,22 +843,23 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 */
 
+
 	if(cur_sidx == LAST_SIDX)
 	{
 		cur_sidx = FIRST_SIDX;
 
-		cloud_t combined_cloud;
-		init_cloud(&combined_cloud, 0);
-		combined_cloud.m.ref_x = clouds[FIRST_SIDX].m.ref_x;
-		combined_cloud.m.ref_y = clouds[FIRST_SIDX].m.ref_y;
-		combined_cloud.m.ref_z = clouds[FIRST_SIDX].m.ref_z;
+		cloud_t combined_scan;
+		init_cloud(&combined_scan, 0);
+		combined_scan.m.ref_x = clouds[FIRST_SIDX].m.ref_x;
+		combined_scan.m.ref_y = clouds[FIRST_SIDX].m.ref_y;
+		combined_scan.m.ref_z = clouds[FIRST_SIDX].m.ref_z;
 
-		cat_cloud(&combined_cloud, &clouds[FIRST_SIDX]);
+		cat_cloud(&combined_scan, &clouds[FIRST_SIDX]);
 
 		for(int sidx=FIRST_SIDX+1; sidx<=LAST_SIDX; sidx++)
 		{
-//			cat_cloud(&combined_cloud, &clouds[sidx]);
-			match_by_closest_points(&combined_cloud, &clouds[sidx], &combined_cloud,
+//			cat_cloud(&combined_scan, &clouds[sidx]);
+			match_by_closest_points(&combined_scan, &clouds[sidx], &combined_scan,
 				0.0f, 0.0f, 0.0f, 0.0f,
 				0, // no iters, just combine
 				200.0, // match threshold (meaningless because iters=0)
@@ -865,14 +874,39 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 			free_cloud(&clouds[sidx]);
 		}
 
-		small_cloud_t* scla = convert_cloud_to_small_cloud(&combined_cloud);
-		save_small_cloud("cla.smallcloud", 0,0,0, combined_cloud.m.n_points, scla);
+		small_cloud_t* scla = convert_cloud_to_small_cloud(&combined_scan);
+		save_small_cloud("cla.smallcloud", 0,0,0, combined_scan.m.n_points, scla);
 		free(scla);
-		free_cloud(&combined_cloud);
 
+		assert(cloud_is_init(&submap));
+
+		if(submap.m.n_points < 1000)
+		{
+			cat_cloud(&submap, &combined_scan);
+		}
+		else
+		{
+			match_by_closest_points(&submap, &combined_scan, &submap,
+				0.0f, 0.0f, 0.0f, 0.0f,
+				5, // n iters
+				200.0, // match threshold
+				250.0, // points can't be combined if further away
+				20.0, 0.04, // points can't be combined if perpendicularly further away from the sensor->point line,
+					    // than 20mm + 4% of the distance (sensor to point)
+					    // At 4000mm distance, this is 180.0mm
+				NULL,NULL,NULL,NULL); // correction results
+		}		
+
+		free_cloud(&combined_scan);
+
+
+		small_cloud_t* sclb = convert_cloud_to_small_cloud(&submap);
+		save_small_cloud("clb.smallcloud", 0,0,0, submap.m.n_points, sclb);
+		free(sclb);
 	}
 	else
 	{
+
 		cur_sidx++;
 	}
 
