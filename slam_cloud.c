@@ -125,6 +125,11 @@ void cloud_remove_points(cloud_t* cloud)
 	cloud->m.n_poses = 0;
 }
 
+int cloud_is_init(cloud_t* cloud)
+{
+	return (cloud->points != NULL);
+}
+
 void free_cloud(cloud_t* cloud)
 {
 	free(cloud->srcs);
@@ -1067,9 +1072,9 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 	// On each block, average coordinates of all points hitting that block are calculated
 	// Outputs only one point per block (with the average coordinates)
 
-	#define FILTER_XS 128
-	#define FILTER_YS 128
-	#define FILTER_ZS 64
+	#define FILTER_XS 192
+	#define FILTER_YS 192
+	#define FILTER_ZS 128
 	#define FILTER_STEP 32
 	#define FILTER_IDX(x_, y_, z_) ((x_)*FILTER_YS*FILTER_ZS + (y_)*FILTER_ZS + (z_))
 

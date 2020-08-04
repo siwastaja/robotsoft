@@ -473,4 +473,5 @@ void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in);
 // ... but keep the allocations and meta fields
 void cloud_remove_points(cloud_t* cloud);
 
+int cloud_is_init(cloud_t* cloud);
 
