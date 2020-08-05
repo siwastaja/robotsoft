@@ -33,19 +33,19 @@ void init_cloud(cloud_t* cloud, int flags)
 	
 	if(flags & CLOUD_INIT_SMALL)
 	{
-		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_SMALL;
+//		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_SMALL;
 		cloud->alloc_points = INITIAL_POINTS_ALLOC_SMALL;
 		cloud->alloc_poses = INITIAL_POSES_ALLOC_SMALL;
 	}
 	else
 	{
-		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_LARGE;
+//		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_LARGE;
 		cloud->alloc_points = INITIAL_POINTS_ALLOC_LARGE;
 		cloud->alloc_poses = INITIAL_POSES_ALLOC_LARGE;
 	}
 
-	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
-	assert(cloud->srcs);
+//	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
+//	assert(cloud->srcs);
 	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
 	assert(cloud->points);
 	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
@@ -57,12 +57,12 @@ void init_cloud(cloud_t* cloud, int flags)
 // this exact amount of space.
 void alloc_cloud(cloud_t* cloud)
 {
-	cloud->alloc_srcs = cloud->m.n_srcs;
+//	cloud->alloc_srcs = cloud->m.n_srcs;
 	cloud->alloc_points = cloud->m.n_points;
 	cloud->alloc_poses = cloud->m.n_poses;
 
-	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
-	assert(cloud->srcs);
+//	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
+//	assert(cloud->srcs);
 	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
 	assert(cloud->points);
 	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
@@ -73,12 +73,12 @@ void init_cloud_copy(cloud_t* cloud, const cloud_t* const orig, int flags)
 {
 	cloud->m = orig->m;
 	
-	cloud->alloc_srcs = orig->alloc_srcs;
+//	cloud->alloc_srcs = orig->alloc_srcs;
 	cloud->alloc_points = orig->alloc_points;
 	cloud->alloc_poses = orig->alloc_poses;
 
-	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
-	assert(cloud->srcs);
+//	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
+//	assert(cloud->srcs);
 	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
 	assert(cloud->points);
 	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
@@ -90,7 +90,7 @@ void init_cloud_copy(cloud_t* cloud, const cloud_t* const orig, int flags)
 // Tries to find matching sources in in, creates new sources if necessary, changes the source indeces.
 void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in)
 {
-	uint16_t* src_transl = calloc(in->m.n_srcs, sizeof (uint16_t));
+	uint8_t* src_transl = calloc(in->m.n_srcs, sizeof (uint8_t));
 	assert(src_transl);
 
 	int64_t tx = in->m.ref_x - out->m.ref_x;
@@ -125,18 +125,77 @@ void cloud_remove_points(cloud_t* cloud)
 	cloud->m.n_poses = 0;
 }
 
+void cloud_remove_points_keep_sources(cloud_t* cloud)
+{
+	cloud->m.n_points = 0;
+}
+
 int cloud_is_init(cloud_t* cloud)
 {
 	return (cloud->points != NULL);
 }
 
+void cloud_print_sources(cloud_t* cloud, int analyze)
+{
+	int cnt_srcs[256] = {0};
+	int cnt_multisrcs[256] = {0};	
+
+	if(analyze)
+	{
+		for(int p=0; p<cloud->m.n_points; p++)
+		{
+			if(cloud->points[p].flags & CLOUD_FLAG_MULTISRC)
+				cnt_multisrcs[cloud->points[p].src_idx]++;
+			else
+				cnt_srcs[cloud->points[p].src_idx]++;
+		}
+	}
+
+
+	printf("SOURCES [n=%d]:\n", cloud->m.n_srcs);
+	for(int i=0; i<cloud->m.n_srcs; i++)
+	{
+		printf("   %3d: (%+06d,%+06d,%+06d)", i, cloud->srcs[i].x*CLOUD_MM,cloud->srcs[i].y*CLOUD_MM,cloud->srcs[i].z*CLOUD_MM);
+
+		if(analyze)
+			printf("   COUNT = %4d\n", cnt_srcs[i]);
+		else
+			printf("\n");
+	}
+
+	int failure = 0;
+	printf("MULTISOURCES [n=%d]:\n", cloud->m.n_multisrcs);
+	for(int i=0; i<cloud->m.n_multisrcs; i++)
+	{
+		printf("   %3d [n=%d]: ", i, cloud->multisrcs[i].n);
+		int o;
+		for(o=0; o<cloud->multisrcs[i].n; o++)
+		{
+			printf("%3d, ", cloud->multisrcs[i].idxs[o]);
+
+			if(o>0 && cloud->multisrcs[i].idxs[o] <= cloud->multisrcs[i].idxs[o-1])
+				failure = 1;
+		}
+
+		for(; o<8; o++)
+			printf("     ");
+
+		if(analyze)
+			printf("   COUNT = %4d", cnt_multisrcs[i]);
+
+		if(failure) printf(" FAILED DATA");
+
+		printf("\n");
+	}
+}
+
 void free_cloud(cloud_t* cloud)
 {
-	free(cloud->srcs);
+//	free(cloud->srcs);
 	free(cloud->points);
 	free(cloud->poses);
 
-	cloud->srcs = NULL;
+//	cloud->srcs = NULL;
 	cloud->points = NULL;
 	cloud->poses = NULL;
 
@@ -954,7 +1013,7 @@ void load_sensor_softcals()
 	}
 }
 
-#define SUBPIX
+//#define SUBPIX // started implementing angular resolution improvement. Feel free to continue. Now enabling this does nothing.
 void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x, int32_t ref_y, int32_t ref_z,
 	 int do_filter, cloud_t* cloud, int dist_ignore_threshold)
 {
@@ -1007,9 +1066,6 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
 		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
 
-	uint16_t local_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot;
-	uint16_t local_sensor_ver_ang = sensor_softcals[sidx].mount.vert_ang_rel_ground;
-
 	int32_t  global_sensor_x = robot_x - ref_x +
 			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
 			((lut_sin_from_u16(robot_ang)*-1*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
@@ -1021,17 +1077,21 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground;
 
 
-	int32_t  local_sensor_x = sensor_softcals[sidx].mount.x_rel_robot;
-	int32_t  local_sensor_y = sensor_softcals[sidx].mount.y_rel_robot;
-	int32_t  local_sensor_z = sensor_softcals[sidx].mount.z_rel_ground;
+	#ifdef VACUUM_APP
+		uint16_t local_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot;
+		uint16_t local_sensor_ver_ang = sensor_softcals[sidx].mount.vert_ang_rel_ground;
 
+		int32_t  local_sensor_x = sensor_softcals[sidx].mount.x_rel_robot;
+		int32_t  local_sensor_y = sensor_softcals[sidx].mount.y_rel_robot;
+		int32_t  local_sensor_z = sensor_softcals[sidx].mount.z_rel_ground;
+	#endif
 
 	int sx = global_sensor_x;
 	int sy = global_sensor_y;
 	int sz = global_sensor_z;
 
 	// cloud_find_source reuses an old source if close enough, or creates a new one:
-	int src_idx = cloud_find_source(cloud, CL_P(sx, sy, sz));
+	int src_idx = cloud_find_source(cloud, CL_P_MM(sx, sy, sz));
 
 	// Kludgy code to ignore the corners and top/bottom edges
 	for(int py=5; py<TOF_YS-5; py++)
@@ -1162,14 +1222,14 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 				int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
 				int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
 
-				uint16_t local_comb_hor_ang = hor_ang + local_sensor_hor_ang;
-				uint16_t local_comb_ver_ang = ver_ang + local_sensor_ver_ang;
-
-				int32_t local_x = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_cos_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_x;
-				int32_t local_y = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_sin_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_y;
-				int32_t local_z = (((int64_t)d * (int64_t)lut_sin_from_u16(local_comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + local_sensor_z;
-
 				#ifdef VACUUM_APP
+					uint16_t local_comb_hor_ang = hor_ang + local_sensor_hor_ang;
+					uint16_t local_comb_ver_ang = ver_ang + local_sensor_ver_ang;
+
+					int32_t local_x = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_cos_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_x;
+					int32_t local_y = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_sin_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_y;
+					int32_t local_z = (((int64_t)d * (int64_t)lut_sin_from_u16(local_comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + local_sensor_z;
+
 					// VACUUM APP: Ignore the nozzle
 					#define NOZZLE_WIDTH 760
 					if(local_z < 200 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))

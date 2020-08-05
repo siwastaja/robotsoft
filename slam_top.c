@@ -763,7 +763,62 @@ small_cloud_t* convert_cloud_to_small_cloud(cloud_t* in)
 	return out;
 }
 
+#ifdef SLAM_STANDALONE
 
+int32_t corr_x, corr_y, corr_z;
+int64_t corrcorr_x, corrcorr_y;  // x65536, accumulating (x,y) shift due to coordinate rotation from angular corrections
+uint32_t corr_yaw, corr_pitch, corr_roll;
+
+int sw_correct_pos(int32_t da, int32_t dx, int32_t dy, int32_t dz)
+{
+	corr_yaw += (uint32_t)da;
+	corr_x += dx;
+	corr_y += dy;
+	corr_z += dz;
+}
+
+// Correct any hw_pose silently:
+// This must be called with data in-order, because it keeps track of movement deltas, to correctly rotate the vectors
+void fix_pose(hw_pose_t* pose)
+{
+	static int32_t prev_x = INT32_MIN;
+	static int32_t prev_y;
+	static int32_t prev_z;
+
+	if(prev_x == INT32_MIN)
+	{
+		prev_x = pose->x;
+		prev_y = pose->y;
+		prev_z = pose->z;
+	}
+
+	int32_t dx = pose->x - prev_x;
+	int32_t dy = pose->y - prev_y;
+	int32_t dz = pose->z - prev_z;
+
+	double fcorr_yaw = ANG32TORAD(corr_yaw);
+	corrcorr_x += 65536.0*((double)(dx) * cos(fcorr_yaw) - (double)(dy) * sin(fcorr_yaw)  - (double)(dx));
+	corrcorr_y += 65536.0*((double)(dx) * sin(fcorr_yaw) + (double)(dy) * cos(fcorr_yaw)  - (double)(dy));
+
+//	printf("raw pose (%d,%d,%d, %.1f deg), d (%d,%d,%d), corr is now %.1f deg, x=%d, y=%d, corrcorr x=%lld, y=%lld\n", 
+//		pose->x, pose->y, pose->z, ANG32TOFDEG(pose->ang), dx, dy, dz, 
+//		ANG32TOFDEG(corr_yaw), corr_x, corr_y, corrcorr_x>>16, corrcorr_y>>16);
+
+
+	prev_x = pose->x;
+	prev_y = pose->y;
+	prev_z = pose->z;
+
+	pose->x += corr_x + (corrcorr_x>>16);
+	pose->y += corr_y + (corrcorr_y>>16);
+	pose->z += corr_z;
+	pose->ang += corr_yaw;
+	pose->pitch += corr_pitch;
+	pose->roll += corr_roll;
+}
+
+
+#endif
 
 int input_tof_slam_set(tof_slam_set_t* tss)
 {
@@ -772,6 +827,7 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 	int ret = -1;
 
+	fix_pose(&tss->sets[0].pose);
 
 	static cloud_t clouds[N_SENSORS];
 	static int cur_sidx = FIRST_SIDX;
@@ -886,15 +942,19 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		}
 		else
 		{
+			float cx=0.0, cy=0.0, cz=0.0, cyaw=0.0;
 			match_by_closest_points(&submap, &combined_scan, &submap,
-				0.0f, 0.0f, 0.0f, 0.0f,
-				5, // n iters
+				0.0f, 0.0f, 0.0f, 0.0f, //DEGTORAD(-0.5),
+				30, // n iters
 				200.0, // match threshold
-				250.0, // points can't be combined if further away
-				20.0, 0.04, // points can't be combined if perpendicularly further away from the sensor->point line,
+				300.0, // points can't be combined if further away
+				200.0, 0.04, // points can't be combined if perpendicularly further away from the sensor->point line,
 					    // than 20mm + 4% of the distance (sensor to point)
 					    // At 4000mm distance, this is 180.0mm
-				NULL,NULL,NULL,NULL); // correction results
+				&cx,&cy,&cz,&cyaw); // correction results
+
+				sw_correct_pos(RADTOANGI32(cyaw), cx, cy, cz);
+
 		}		
 
 		free_cloud(&combined_scan);
@@ -1659,7 +1719,7 @@ int main(int argc, char** argv)
 	load_sensor_softcals();
 
 	int start_i = 200;
-	int end_i = start_i+15;
+	int end_i = start_i+100;
 
 	for(int i = start_i; i<=end_i; i++)
 		input_from_file(i);

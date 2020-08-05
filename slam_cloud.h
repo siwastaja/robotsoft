@@ -13,21 +13,28 @@
 /*
 	Always little-endian.
 
-	cloud_point_t usage options:
+	cloud_point_t usage options, pick any of these ways to access:
 
-	src_idx, x, y, z
-	src_idx, coords[3]
+	flags, src_idx, x, y, z     example: p.y
+	flags, src_idx, coords[3]   example: p.coords[1]
+	raw_u8[8]
 	raw_u16[4]
 	raw_i16[4]
 	raw_u64
 */
 
 
+// If set, src_idx refers to multisrcs[] of the cloud instead of srcs[].
+#define CLOUD_FLAG_MULTISRC   (1<<0)
+#define CLOUD_FLAG_REMOVED    (1<<1)
+
+
 typedef union
 {
 	struct __attribute__((packed))
 	{
-		uint16_t src_idx;
+		uint8_t  flags;
+		uint8_t  src_idx;
 		union
 		{
 			struct __attribute__((packed))
@@ -41,19 +48,33 @@ typedef union
 		};
 	};
 
+	uint16_t raw_u8[8];
 	uint16_t raw_u16[4];
-
 	int16_t raw_i16[4];
-
 	uint64_t raw_u64;
-
 } cloud_point_t;
 
-#define CL_P(x_,y_,z_) ((cloud_point_t){{0,{{(x_),(y_),(z_)}}}})
-#define CL_SRCP(s_,x_,y_,z_) ((cloud_point_t){{(s_),{{(x_),(y_),(z_)}}}})
 
-#define CL_P_MM(x_,y_,z_) ((cloud_point_t){{0,{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
-#define CL_SRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{(s_),{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+#define CLOUD_GENERAL_SRC 255       // Source index meaning: "no source available"
+
+#define CLOUD_MAX_SRCS 255
+#define CLOUD_MAX_MULTISRCS 255
+#define CLOUD_MAX_SRCS_IN_MULTISRC 15
+
+typedef struct __attribute__((packed))
+{
+	uint8_t n; // below 2 is illegal, such multisources wouldn't make sense. above CLOUD_MAX_SRCS_IN_MULTISRC is illegal.
+	uint8_t idxs[CLOUD_MAX_SRCS_IN_MULTISRC]; // is kept sorted in increasing order
+} multisource_t;
+
+
+#define CL_P(x_,y_,z_) ((cloud_point_t){{0,0,{{(x_),(y_),(z_)}}}})
+#define CL_SRCP(s_,x_,y_,z_) ((cloud_point_t){{0,(s_),{{(x_),(y_),(z_)}}}})
+#define CL_FSRCP(f_, s_,x_,y_,z_) ((cloud_point_t){{(f_),(s_),{{(x_),(y_),(z_)}}}})
+
+#define CL_P_MM(x_,y_,z_) ((cloud_point_t){{0,0,{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+#define CL_SRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{0,(s_),{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+#define CL_FSRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{(f_),(s_),{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
 
 
 ALWAYS_INLINE cloud_point_t cloud_point_minus(cloud_point_t a, cloud_point_t b)
@@ -89,16 +110,27 @@ ALWAYS_INLINE float cloud_point_len(cloud_point_t a)
 
 ALWAYS_INLINE cloud_point_t transform_point(cloud_point_t p, int tx, int ty, int tz, float yaw)
 {
-	float cosa = cosf(yaw);
-	float sina = sinf(yaw);
-
 	cloud_point_t ret;
 
 	ret.src_idx = p.src_idx;
 
-	ret.x = ((float)p.x*cosa) - ((float)p.y*sina) + tx;
-	ret.y = ((float)p.x*sina) + ((float)p.y*cosa) + ty;
-	ret.z = p.z + tz;
+	// Often we just translate using this function, but don't want stupid rounding errors when we can avoid them.
+	// Translation is lossless. Rotation is lossy.
+	if(yaw > -DEGTORAD(0.1) && yaw < DEGTORAD(0.1))
+	{
+		ret.x = p.x + tx;
+		ret.y = p.y + ty;
+		ret.z = p.z + tz;
+	}
+	else
+	{
+		float cosa = cosf(yaw);
+		float sina = sinf(yaw);
+
+		ret.x = ((float)p.x*cosa) - ((float)p.y*sina) + tx;
+		ret.y = ((float)p.x*sina) + ((float)p.y*cosa) + ty;
+		ret.z = p.z + tz;
+	}
 
 	return ret;
 }
@@ -133,17 +165,12 @@ typedef struct __attribute__((packed))
 	uint32_t yaw;
 
 	int32_t n_srcs;
+	int32_t n_multisrcs;
 	int32_t n_points;
 	int32_t n_poses;
 } cloud_meta_t;
 
-#define MAX_SOURCES 4096 // 12 bits leaves 4 bits for flags
 
-#define METASOURCE_FLAG 0x8000
-//#define METASOURCE_LAST  0x4000
-
-//#define U64_METASOURCE_START   0x8000000000000000ULL
-//#define U64_METASOURCE_ANYLAST 0x4000400040004000ULL // if raw_u64 matches this, the metasource ends
 
 typedef struct
 {
@@ -153,7 +180,7 @@ typedef struct
 
 	// The rest is for storing in memory. To write to a file or socket,
 	// ignore the alloc_ counts and loop over the tables using the actual length parameters (n_*)
-	int alloc_srcs;
+	//int alloc_srcs;
 	int alloc_points;
 	int alloc_poses;
 
@@ -163,38 +190,21 @@ typedef struct
 	// Storing source coordinates for each point would be huge waste of space and also processing, because
 	// one sensor (located at one point at a time) sees thousands of points at once. So, all possible sources
 	// are stored in one table, then indeces to this source table are stored in the points.
+
 	// When multiple points seen from different sources are combined into one, the need to have single-point-
-	// with-multiple-sources datatype emerges.
-	//
-	// Through a trick, a single point can have multiple sources.
-	// The sources use the same cloud_point_t datatype as the points. Normally, with only one source needed,
-	// the src_idx field is excess, and set to zero. But, when you need a special new multi-source source,
-	// you can create a "meta-source" that refers to other sources.
-	// These meta-sources have the first field (src_idx) flag space (4 highest bits) set non-zero;
-	// When a meta-source starts, raw_u16[0] has METASOURCE_START (S in the example below) flag set
-	// With the last index, raw_u16[i] has METASOURCE_LAST (L in the example below) flag set
+	// with-multiple-sources datatype emerges. Such points use CLOUD_FLAG_MULTISRC, and the src_idx refers to
+	// multisrcs[] instead. multisrcs[] does not hold coordinates, but refers to srcs[] instead; this is because
+	// almost always when having multisources, all of those sources exist anyway for some single points, as well,
+	// so only storing one byte to refer to the srcs[] saves space.
+	// Because we want to refer to the sources by one byte (so that multisources are efficient), we limit the number
+	// of sources to 256. Because multisrcs have their own index space, we have another 256 of them.
+	// Static allocation is OK for now, it's such low number compared to the typical number of points.
+	// Is 256 srcs running out?
+	//   * Combine closeby sources. Having gazillion sources is slow anyway (tracing the empty space)
+	//   * Do not construct massive point clouds using this cloud datatype, it's not meant for that. Even the coordinates are limited range.
 
-	// Multisources are not allowed to refer to other multisources to avoid long chains of references
-
-/*
-	Example:
-
-	table_i	srcid	x	y	z	comment
-		raw[0]	raw[1]	raw[2]	raw[3]	
-
-	1	0	123	123	123	Normal source 1
-	2	0	1234	567	-42	Normal source 2
-	...
-	57	S|5	6	L|8	any	Metasource with 3 sources: 5,6,8
-	...
-	123	S|10	11	12	13	Metasource with 8 sources: 10,11,12,13,14,15,16,17
-	124	14	15	16	L|17	Invalid item: using this index alone should never happen
-
-	
-*/
-
-
-	cloud_point_t* srcs;
+	cloud_point_t srcs[CLOUD_MAX_SRCS];
+	multisource_t multisrcs[CLOUD_MAX_MULTISRCS];
 
 	// The points.
 	cloud_point_t* points;
@@ -245,20 +255,24 @@ void free_cloud(cloud_t* cloud);
 
 ALWAYS_INLINE int cloud_add_source(cloud_t* cloud, cloud_point_t p)
 {
+	/*
 	if(cloud->m.n_srcs >= cloud->alloc_srcs)
 	{
 		cloud->alloc_srcs <<= 1;
 		cloud->srcs = realloc(cloud->srcs, cloud->alloc_srcs * sizeof (cloud_point_t));
 		assert(cloud->srcs);
 	}
+	*/
+
+	assert(cloud->m.n_srcs < CLOUD_MAX_SRCS);
 
 	cloud->srcs[cloud->m.n_srcs] = p;
 
 	return cloud->m.n_srcs++;
 }
 
-// Find existing (close enough) source, use it. If suitable source is not found, a new source is added. Returns the source idx.
-// For now, linear search is used because the number of sources is fairly low, and there are usually thousands of points per source.
+// Find existing (close enough) source. If suitable source is not found, a new source is added. Returns the source idx of the found or added source.
+// For now, linear search is used because the number of sources is fairly low, and there are usually thousands of points per source for which this is called once.
 // Never fails.
 ALWAYS_INLINE int cloud_find_source(cloud_t* cloud, cloud_point_t p)
 {
@@ -266,19 +280,6 @@ ALWAYS_INLINE int cloud_find_source(cloud_t* cloud, cloud_point_t p)
 	int closest_i;
 	for(int i=0; i<cloud->m.n_srcs; i++)
 	{
-/*
-		if(cloud->srcs[i].raw_u64 & U64_METASOURCE_START)
-		{
-			while(!(cloud->srcs[i].raw_u64 & U64_METASOURCE_ANYLAST)) // Metasource does not end here
-			{
-				i++; // Skip source indeces until it ends.
-				assert(i < cloud->m.n_srcs);
-			}
-		}
-*/
-		if(cloud->srcs[i].src_idx & METASOURCE_FLAG)
-			continue;
-
 		int_fast32_t sqdist = sq(p.x - cloud->srcs[i].x) + sq(p.y - cloud->srcs[i].y) + sq(p.z - cloud->srcs[i].z);
 		if(sqdist < closest)
 		{
@@ -290,7 +291,78 @@ ALWAYS_INLINE int cloud_find_source(cloud_t* cloud, cloud_point_t p)
 	if(closest <= sq(SOURCE_COMBINE_THRESHOLD))
 		return closest_i;
 
-	return cloud_add_source(cloud, p);
+	if(cloud->m.n_srcs == CLOUD_MAX_SRCS)
+	{
+		printf("WARNING: cloud_find_source(): cannot create new source, sources full, returning general no-source index\n");
+		return CLOUD_GENERAL_SRC;
+	}
+	else
+		return cloud_add_source(cloud, p);
+}
+
+
+ALWAYS_INLINE int cloud_add_multisource(cloud_t* cloud, multisource_t ms)
+{
+	assert(cloud->m.n_multisrcs < CLOUD_MAX_MULTISRCS);
+
+	cloud->multisrcs[cloud->m.n_multisrcs] = ms;
+
+	return cloud->m.n_multisrcs++;
+}
+
+ALWAYS_INLINE int cloud_find_multisource(cloud_t* cloud, multisource_t ms)
+{
+	assert(ms.n > 1 && ms.n < CLOUD_MAX_SRCS_IN_MULTISRC);
+	//printf("cloud_find_multisource(): ms.n=%d\n", ms.n);
+	for(int i=0; i<cloud->m.n_multisrcs; i++)
+	{
+		//printf("i%d, n=%d\n", i, cloud->multisrcs[i].n);
+		if(ms.n == cloud->multisrcs[i].n)
+		{
+			for(int o=0; o<ms.n; o++)
+			{
+				//printf("o%d, idxs: %d vs %d\n", o, cloud->multisrcs[i].idxs[o], ms.idxs[o]);
+
+				if(o>0) assert(ms.idxs[o] > ms.idxs[o-1]);
+				if(o>0) assert(cloud->multisrcs[i].idxs[o] > cloud->multisrcs[i].idxs[o-1]);
+
+/*
+				if(o>0 && cloud->multisrcs[i].idxs[o] <= cloud->multisrcs[i].idxs[o-1]) 
+				{
+					printf("WRONG ORDER\n");
+					exit(1);
+				}
+*/
+				if(cloud->multisrcs[i].idxs[o] != ms.idxs[o]) // no match
+					goto BREAK_NO_MATCH_SO_FAR;
+			}
+			// match!
+			return i;
+			BREAK_NO_MATCH_SO_FAR:;
+		}
+	}
+
+	// no match
+	if(cloud->m.n_multisrcs == CLOUD_MAX_MULTISRCS)
+	{
+		printf("WARNING: cloud_find_multisource(): cannot create new multisource, multisources full, returning general no-source index\n");
+		return CLOUD_GENERAL_SRC;
+	}
+	else
+		return cloud_add_multisource(cloud, ms);
+
+}
+
+ALWAYS_INLINE void cloud_sort_multisource(multisource_t* ms)
+{
+	for(int i=1; i<ms->n; i++)
+	{
+		uint8_t t = ms->idxs[i];
+		int j;
+		for(j=i; j > 0 && ms->idxs[j-1] > t; j--)
+			ms->idxs[j] = ms->idxs[j-1];
+		ms->idxs[j] = t;
+	}	
 }
 
 ALWAYS_INLINE void cloud_add_point(cloud_t* cloud, cloud_point_t p)
@@ -403,6 +475,8 @@ void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in);
 
 // ... but keep the allocations and meta fields
 void cloud_remove_points(cloud_t* cloud);
+void cloud_remove_points_keep_sources(cloud_t* cloud);
+
 
 int cloud_is_init(cloud_t* cloud);
-
+void cloud_print_sources(cloud_t* cloud, int analyze);

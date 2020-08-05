@@ -20,7 +20,7 @@
 #define RESOLEVELS 0b1111
 
 
-#define SOURCE_COMBINE_THRESHOLD 5   // point cloud units
+#define SOURCE_COMBINE_THRESHOLD 16   // point cloud units
 
 
 // A "scan" is the combination of one acquisition of each sensor (one full round)
