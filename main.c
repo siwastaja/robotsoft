@@ -1232,6 +1232,7 @@ void* main_thread()
 	hwmsg_decim[4] = 4;
 	hwmsg_decim[10] = 2;
 	hwmsg_decim[11] = 2;
+//	hwmsg_decim[14] = 1000;
 //	hwmsg_decim[5] = 1;
 //	hwmsg_decim[6] = 1;
 

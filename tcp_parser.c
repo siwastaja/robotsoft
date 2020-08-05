@@ -211,6 +211,7 @@ void tcp_send_info_state(info_state_t state)
 
 void tcp_send_small_cloud(int32_t ref_x, int32_t ref_y, int32_t ref_z, int n_points, small_cloud_t* points)
 {
+	//return;
 	int max_compressed_size = sizeof(small_cloud_t)*n_points + 128; // A bit extra for zlib overhead
 	int max_size = sizeof(small_cloud_header_t) + max_compressed_size; 
 	uint8_t* tcpbuf = malloc(max_size);
