@@ -1061,34 +1061,27 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 	int16_t pitch_ang = tss->sets[setnum].pose.pitch>>16;
 	int16_t roll_ang = tss->sets[setnum].pose.roll>>16;
 
+//	printf("pitch=%.2f  roll=%.2f\n", ANGI32TOFDEG(tss->sets[setnum].pose.pitch), ANGI32TOFDEG(tss->sets[setnum].pose.roll));
+
+	// Temporary bodge to "calibrate" the unit on the field I'm writing this for.
+	// Gravitation vector calibration could have been done at the time of sensor calibration very easily but didn't cross mind then.
+	pitch_ang += DEGTOANG16(0.7);
+	roll_ang  += DEGTOANG16(0.7);
+
 	uint16_t global_sensor_ver_ang = 
 		(int32_t)((int16_t)sensor_softcals[sidx].mount.vert_ang_rel_ground) +
 		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
 		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
 
+	// The angle of sensor rotating around it's own normal
 	uint16_t sensor_rota = 
 		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*-pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
 		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
 
-	//sensor_rota = 0;
-
-
 	int32_t sin_sensor_rota = lut_sin_from_u16(sensor_rota);
 	int32_t cos_sensor_rota = lut_cos_from_u16(sensor_rota);
 
-	printf("sensor_rota=%u  sin=%d  cos=%d\n", sensor_rota, sin_sensor_rota, cos_sensor_rota);
-
-#if 0
-	int32_t  global_sensor_x = robot_x - ref_x +
-			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-			((lut_sin_from_u16(robot_ang)*-1*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
-
-	int32_t  global_sensor_y = robot_y - ref_y + 
-			((lut_sin_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
-
-	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground;
-#else
+//	printf("sensor_rota=%u  sin=%d  cos=%d\n", sensor_rota, sin_sensor_rota, cos_sensor_rota);
 
 	int32_t  global_sensor_x = robot_x - ref_x +
 			(((int64_t)lut_cos_from_u16(pitch_ang)*(int64_t)lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT)) +
@@ -1101,7 +1094,6 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground +
 			((lut_sin_from_u16(pitch_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
 			((lut_sin_from_u16(roll_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
-#endif
 
 	#ifdef VACUUM_APP
 		uint16_t local_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot;
@@ -1120,25 +1112,25 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 	int src_idx = cloud_find_source(cloud, CL_P_MM(sx, sy, sz));
 
 	// Kludgy code to ignore the corners and top/bottom edges
-	for(int py=5; py<TOF_YS-5; py++)
+	for(int py=1; py<TOF_YS-1; py++)
 	{
-		int px_start = 10;
-		int px_end = TOF_XS-10;
+		int px_start = 1;
+		int px_end = TOF_XS-1;
 
 		if(py < 4 || py > TOF_YS-4)
 		{
-			px_start += 9;
-			px_end -= 9;
+			px_start += 12;
+			px_end -= 12;
 		}
 		if(py < 8 || py > TOF_YS-8)
 		{
-			px_start += 8;
-			px_end -= 8;
+			px_start += 12;
+			px_end -= 12;
 		}
 		if(py < 12 || py > TOF_YS-12)
 		{
-			px_start += 6;
-			px_end -= 6;
+			px_start += 10;
+			px_end -= 10;
 		}
 		if(py < 16 || py > TOF_YS-16)
 		{
