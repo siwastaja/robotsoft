@@ -934,9 +934,9 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		save_small_cloud("cla.smallcloud", 0,0,0, combined_scan.m.n_points, scla);
 		free(scla);
 
+#if 0
 		assert(cloud_is_init(&submap));
-
-		if(submap.m.n_points < 1000)
+		if(1) //submap.m.n_points < 1000)
 		{
 			cat_cloud(&submap, &combined_scan);
 		}
@@ -963,6 +963,10 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		small_cloud_t* sclb = convert_cloud_to_small_cloud(&submap);
 		save_small_cloud("clb.smallcloud", 0,0,0, submap.m.n_points, sclb);
 		free(sclb);
+#endif
+		printf("YEEEEEEEEEEEEEEEEEES\n");
+	//	sleep(1);
+
 	}
 	else
 	{
@@ -1099,7 +1103,7 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 void input_from_file(int file_idx)
 {
 	char fname[1024];
-	sprintf(fname, "/home/hrst/pulu/tut_trace/trace%08d.rb2", file_idx);
+	sprintf(fname, "/home/hrst/pulu/pitchroll_trace/trace%08d.rb2", file_idx);
 	tof_slam_set_t* tss;
 	if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
 	{
@@ -1718,8 +1722,8 @@ int main(int argc, char** argv)
 	init_slam();
 	load_sensor_softcals();
 
-	int start_i = 200;
-	int end_i = start_i+100;
+	int start_i = argc==2?atoi(argv[1]):0;
+	int end_i = start_i+15;
 
 	for(int i = start_i; i<=end_i; i++)
 		input_from_file(i);

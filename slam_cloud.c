@@ -1066,6 +1066,19 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
 		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
 
+	uint16_t sensor_rota = 
+		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*-pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
+		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
+
+	//sensor_rota = 0;
+
+
+	int32_t sin_sensor_rota = lut_sin_from_u16(sensor_rota);
+	int32_t cos_sensor_rota = lut_cos_from_u16(sensor_rota);
+
+	printf("sensor_rota=%u  sin=%d  cos=%d\n", sensor_rota, sin_sensor_rota, cos_sensor_rota);
+
+#if 0
 	int32_t  global_sensor_x = robot_x - ref_x +
 			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
 			((lut_sin_from_u16(robot_ang)*-1*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
@@ -1075,7 +1088,20 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
 
 	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground;
+#else
 
+	int32_t  global_sensor_x = robot_x - ref_x +
+			(((int64_t)lut_cos_from_u16(pitch_ang)*(int64_t)lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT)) +
+			(((int64_t)lut_cos_from_u16(roll_ang)*(int64_t)lut_sin_from_u16(robot_ang)*-sensor_softcals[sidx].mount.y_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT));
+
+	int32_t  global_sensor_y = robot_y - ref_y + 
+			(((int64_t)lut_cos_from_u16(pitch_ang)*(int64_t)lut_sin_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT)) +
+			(((int64_t)lut_cos_from_u16(roll_ang)*(int64_t)lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT));
+
+	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground +
+			((lut_sin_from_u16(pitch_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
+			((lut_sin_from_u16(roll_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
+#endif
 
 	#ifdef VACUUM_APP
 		uint16_t local_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot;
@@ -1210,10 +1236,19 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 
 				int32_t d = avg;
 
-				uint16_t hor_ang, ver_ang;
+				int16_t h_ang = -sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
+				int16_t v_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
 
-				hor_ang = -sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
-				ver_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
+				// Rotate the pixel angles according to the sensor rotation
+				// Rotation: xr = x*cos(a) - y*sin(a)
+				//           yr = x*sin(a) + y*cos(a)
+
+
+				uint16_t hor_ang, ver_ang;
+				hor_ang = ((int32_t)h_ang*cos_sensor_rota - (int32_t)v_ang*sin_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+				ver_ang = ((int32_t)h_ang*sin_sensor_rota + (int32_t)v_ang*cos_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+				//hor_ang = h_ang;
+				//ver_ang = v_ang;
 
 				uint16_t comb_hor_ang = hor_ang + global_sensor_hor_ang;
 				uint16_t comb_ver_ang = ver_ang + global_sensor_ver_ang;
