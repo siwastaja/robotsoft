@@ -345,7 +345,7 @@ ALWAYS_INLINE int cloud_find_multisource(cloud_t* cloud, multisource_t ms)
 	// no match
 	if(cloud->m.n_multisrcs == CLOUD_MAX_MULTISRCS)
 	{
-		printf("WARNING: cloud_find_multisource(): cannot create new multisource, multisources full, returning general no-source index\n");
+		//printf("WARNING: cloud_find_multisource(): cannot create new multisource, multisources full, returning general no-source index\n");
 		return CLOUD_GENERAL_SRC;
 	}
 	else

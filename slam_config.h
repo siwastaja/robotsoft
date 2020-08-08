@@ -3,7 +3,12 @@
 // Range of connected sensors
 // This is important for detecting when a "scan" starts and ends
 // It's ok if there are missing sensors in-between.
-#define FIRST_SIDX 1
+#define N_SENSORS 10 // maximum index N_SENSORS-1
+#ifdef VACUUM_APP
+	#define FIRST_SIDX 1
+#else
+	#define FIRST_SIDX 0
+#endif
 #define LAST_SIDX 9
 
 // First level of filtration: how many points in a 3x3 pixel block needs to be close enough to the middle pixel of that block,
@@ -16,11 +21,10 @@
 #define TOF_N_CONFORM_REQUIRED 6
 
 
-#define N_SENSORS 10
 #define RESOLEVELS 0b1111
 
 
-#define SOURCE_COMBINE_THRESHOLD 16   // point cloud units
+#define SOURCE_COMBINE_THRESHOLD (128 /*mm*/ /16)   // point cloud units
 
 
 // A "scan" is the combination of one acquisition of each sensor (one full round)

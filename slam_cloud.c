@@ -1148,6 +1148,8 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 			px_end -= 2;
 		}
 
+		//px_start = 55;
+		//px_end = 70;
 		for(int px=px_start; px<px_end; px++)
 		{
 			// Start by looking at 3x3 pixels. Middle pixel is refdist. Any of the 9 pixels must be

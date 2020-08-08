@@ -834,7 +834,8 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 //	static int32_t sm_ref_x, sm_ref_y, sm_ref_z;
 
-	printf("input_tof_slam_set sidx = %d\n", cur_sidx);
+	printf("input_tof_slam_set sidx = %d  ", cur_sidx);
+	print_hw_pose(&tss->sets[0].pose);
 
 	if(cur_sidx != tss->sidx)
 	{
@@ -858,26 +859,26 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 	}
 
 
-	printf("init clouds[%d]..", cur_sidx); fflush(stdout);
+	//printf("init clouds[%d]..", cur_sidx); fflush(stdout);
 	init_cloud(&clouds[cur_sidx], CLOUD_INIT_SMALL);
-	printf("ok\n");
+	//printf("ok\n");
 
 
 	clouds[cur_sidx].m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
 	clouds[cur_sidx].m.ref_y = tss->sets[0].pose.y/CLOUD_MM;
 	clouds[cur_sidx].m.ref_z = tss->sets[0].pose.z/CLOUD_MM;
 
-	printf("ref (%d,%d,%d)\n", (int)clouds[cur_sidx].m.ref_x,(int)clouds[cur_sidx].m.ref_y,(int)clouds[cur_sidx].m.ref_z);
+	//printf("ref (%d,%d,%d)\n", (int)clouds[cur_sidx].m.ref_x,(int)clouds[cur_sidx].m.ref_y,(int)clouds[cur_sidx].m.ref_z);
 	// Set 0 is always there
 
-	printf("tof_to_cloud.."); fflush(stdout);
+	//printf("tof_to_cloud.."); fflush(stdout);
 
 	tof_to_cloud(0, 0, tss,
 		tss->sets[0].pose.x, tss->sets[0].pose.y, tss->sets[0].pose.z,
 		1, 
 		&clouds[cur_sidx], 0);
 
-	printf("ok\n");
+	//printf("ok\n");
 
 /*
 	// Set 1, if available, contains either a narrow beam image, or a longer-range wide beam image 
@@ -920,10 +921,10 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 				0, // no iters, just combine
 				200.0, // match threshold (meaningless because iters=0)
 
-				250.0, // points can't be combined if further away
-				20.0, 0.04, // points can't be combined if perpendicularly further away from the sensor->point line,
-					    // than 20mm + 4% of the distance (sensor to point)
-				            // At 4000mm distance, this is 180.0mm
+				200.0, // points can't be combined if further away
+				30.0, 0.015, // points can't be combined if perpendicularly further away from the sensor->point line,
+					    // than 30mm + 1.5% of the distance (sensor to point)
+				            // At 4000mm distance, this is 90.0mm
 				NULL,NULL,NULL,NULL); // correction results meaningless because iters = 0
 
 
@@ -934,9 +935,8 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		save_small_cloud("cla.smallcloud", 0,0,0, combined_scan.m.n_points, scla);
 		free(scla);
 
-#if 0
 		assert(cloud_is_init(&submap));
-		if(1) //submap.m.n_points < 1000)
+		if(submap.m.n_points < 1000)
 		{
 			cat_cloud(&submap, &combined_scan);
 		}
@@ -948,7 +948,7 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 				30, // n iters
 				200.0, // match threshold
 				300.0, // points can't be combined if further away
-				200.0, 0.04, // points can't be combined if perpendicularly further away from the sensor->point line,
+				100.0, 0.025, // points can't be combined if perpendicularly further away from the sensor->point line,
 					    // than 20mm + 4% of the distance (sensor to point)
 					    // At 4000mm distance, this is 180.0mm
 				&cx,&cy,&cz,&cyaw); // correction results
@@ -963,9 +963,6 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		small_cloud_t* sclb = convert_cloud_to_small_cloud(&submap);
 		save_small_cloud("clb.smallcloud", 0,0,0, submap.m.n_points, sclb);
 		free(sclb);
-#endif
-		printf("YEEEEEEEEEEEEEEEEEES\n");
-	//	sleep(1);
 
 	}
 	else
@@ -1103,7 +1100,7 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 void input_from_file(int file_idx)
 {
 	char fname[1024];
-	sprintf(fname, "/home/hrst/pulu/pitchroll_trace/trace%08d.rb2", file_idx);
+	sprintf(fname, "/home/hrst/pulu/tut_trace/trace%08d.rb2", file_idx);
 	tof_slam_set_t* tss;
 	if(process_file(fname, &tss) == 0) // tof_slam_set record succesfully extracted
 	{
@@ -1722,8 +1719,8 @@ int main(int argc, char** argv)
 	init_slam();
 	load_sensor_softcals();
 
-	int start_i = argc==2?atoi(argv[1]):0;
-	int end_i = start_i+15;
+	int start_i = argc>=2?atoi(argv[1]):0;
+	int end_i = start_i + (argc==3?atoi(argv[2]):15);
 
 	for(int i = start_i; i<=end_i; i++)
 		input_from_file(i);
