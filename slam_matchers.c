@@ -1246,12 +1246,12 @@ static void cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* matchmap,
 	// Trace empty space:
 	for(int p=0; p<cloud->m.n_points; p++)
 	{
-		float sx_in = cloud->srcs[cloud->points[p].src_idx].x;
-		float sy_in = cloud->srcs[cloud->points[p].src_idx].y;
+		float sx_in = cloud->srcs[cloud->points[p].srcs[0]].x;
+		float sy_in = cloud->srcs[cloud->points[p].srcs[0]].y;
 
 		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
 		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
-		int   mmsz = cloud->srcs[cloud->points[p].src_idx].z + z_corr;
+		int   mmsz = cloud->srcs[cloud->points[p].srcs[0]].z + z_corr;
 
 		float px_in = cloud->points[p].x;
 		float py_in = cloud->points[p].y;
@@ -1407,12 +1407,12 @@ static void decim_cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* mat
 	// Trace empty space:
 	for(int p=0; p<cloud->m.n_points; p+=3)
 	{
-		float sx_in = cloud->srcs[cloud->points[p].src_idx].x;
-		float sy_in = cloud->srcs[cloud->points[p].src_idx].y;
+		float sx_in = cloud->srcs[cloud->points[p].srcs[0]].x;
+		float sy_in = cloud->srcs[cloud->points[p].srcs[0]].y;
 
 		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
 		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
-		int   mmsz = cloud->srcs[cloud->points[p].src_idx].z + z_corr;
+		int   mmsz = cloud->srcs[cloud->points[p].srcs[0]].z + z_corr;
 
 		float px_in = cloud->points[p].x;
 		float py_in = cloud->points[p].y;
@@ -1568,12 +1568,12 @@ static void cloud_to_ref_fine_matchmap_free(cloud_t* cloud, ref_fine_matchmap_t*
 	// Trace empty space:
 	for(int p=0; p<cloud->m.n_points; p++)
 	{
-		float sx_in = cloud->srcs[cloud->points[p].src_idx].x;
-		float sy_in = cloud->srcs[cloud->points[p].src_idx].y;
+		float sx_in = cloud->srcs[cloud->points[p].srcs[0]].x;
+		float sy_in = cloud->srcs[cloud->points[p].srcs[0]].y;
 
 		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
 		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
-		int   mmsz = cloud->srcs[cloud->points[p].src_idx].z + z_corr;
+		int   mmsz = cloud->srcs[cloud->points[p].srcs[0]].z + z_corr;
 
 		float px_in = cloud->points[p].x;
 		float py_in = cloud->points[p].y;

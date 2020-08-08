@@ -24,18 +24,8 @@
 #define RESOLEVELS 0b1111
 
 
-#define SOURCE_COMBINE_THRESHOLD (128 /*mm*/ /16)   // point cloud units
+#define SOURCE_COMBINE_THRESHOLD (192 /*mm*/ /16)   // point cloud units
 
-
-// A "scan" is the combination of one acquisition of each sensor (one full round)
-// VOXFILTER_N_SCANS scans are combined together without any matching.
-#define VOXFILTER_N_SCANS 4
-
-// After the voxfilter is full (VOXFILTER_N_SCANS reached), subsubmap is finished.
-
-
-// Maximum number of subsubmaps in a submap. After exceeded, a new submap is force-started
-#define SUBSUBMAP_LIMIT 12
 
 
 // Maximum difference in robot coordinates during a submap, basically the length of the robot pose range before terminating the submap. In mm

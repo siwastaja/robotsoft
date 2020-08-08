@@ -24,17 +24,22 @@
 */
 
 
-// If set, src_idx refers to multisrcs[] of the cloud instead of srcs[].
-#define CLOUD_FLAG_MULTISRC   (1<<0)
 #define CLOUD_FLAG_REMOVED    (1<<1)
+
+
+#define CLOUD_GENERAL_SRC 255       // Source index meaning: "no source available"
+
+#define CLOUD_MAX_SRCS 254
+#define POINT_MAX_SRCS 9 // resulting 16-byte point. Abs. max 15, number of sources has to fit in 4 bits
 
 
 typedef union
 {
 	struct __attribute__((packed))
 	{
-		uint8_t  flags;
-		uint8_t  src_idx;
+		uint8_t  flags : 4;
+		uint8_t  n_srcs : 4;
+		uint8_t  srcs[POINT_MAX_SRCS];
 		union
 		{
 			struct __attribute__((packed))
@@ -48,33 +53,19 @@ typedef union
 		};
 	};
 
-	uint16_t raw_u8[8];
-	uint16_t raw_u16[4];
-	int16_t raw_i16[4];
-	uint64_t raw_u64;
+	uint8_t raw_u8[16];
+	uint16_t raw_u16[8];
+	int16_t raw_i16[8];
+	uint64_t raw_u64[2];
 } cloud_point_t;
 
 
-#define CLOUD_GENERAL_SRC 255       // Source index meaning: "no source available"
 
-#define CLOUD_MAX_SRCS 255
-#define CLOUD_MAX_MULTISRCS 255
-#define CLOUD_MAX_SRCS_IN_MULTISRC 15
+#define CL_P(x_,y_,z_) ((cloud_point_t){{0,0,{0},{{(x_),(y_),(z_)}}}})
+#define CL_SRCP(s_,x_,y_,z_) ((cloud_point_t){{0,1,{(s_),0,0,0,0,0,0,0},{{(x_),(y_),(z_)}}}})
 
-typedef struct __attribute__((packed))
-{
-	uint8_t n; // below 2 is illegal, such multisources wouldn't make sense. above CLOUD_MAX_SRCS_IN_MULTISRC is illegal.
-	uint8_t idxs[CLOUD_MAX_SRCS_IN_MULTISRC]; // is kept sorted in increasing order
-} multisource_t;
-
-
-#define CL_P(x_,y_,z_) ((cloud_point_t){{0,0,{{(x_),(y_),(z_)}}}})
-#define CL_SRCP(s_,x_,y_,z_) ((cloud_point_t){{0,(s_),{{(x_),(y_),(z_)}}}})
-#define CL_FSRCP(f_, s_,x_,y_,z_) ((cloud_point_t){{(f_),(s_),{{(x_),(y_),(z_)}}}})
-
-#define CL_P_MM(x_,y_,z_) ((cloud_point_t){{0,0,{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
-#define CL_SRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{0,(s_),{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
-#define CL_FSRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{(f_),(s_),{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+#define CL_P_MM(x_,y_,z_) ((cloud_point_t){{0,0,{0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+#define CL_SRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{0,1,{(s_),0,0,0,0,0,0,0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
 
 
 ALWAYS_INLINE cloud_point_t cloud_point_minus(cloud_point_t a, cloud_point_t b)
@@ -112,7 +103,7 @@ ALWAYS_INLINE cloud_point_t transform_point(cloud_point_t p, int tx, int ty, int
 {
 	cloud_point_t ret;
 
-	ret.src_idx = p.src_idx;
+	ret = p; // copy source indeces and flags
 
 	// Often we just translate using this function, but don't want stupid rounding errors when we can avoid them.
 	// Translation is lossless. Rotation is lossy.
@@ -161,11 +152,10 @@ typedef struct __attribute__((packed))
 	int64_t ref_y;
 	int64_t ref_z;
 
-	// Cloud can be rotated by just modifying the header
+	// Cloud can be rotated by just modifying the header. Well, not yet, but maybe some time...
 	uint32_t yaw;
 
 	int32_t n_srcs;
-	int32_t n_multisrcs;
 	int32_t n_points;
 	int32_t n_poses;
 } cloud_meta_t;
@@ -174,12 +164,12 @@ typedef struct __attribute__((packed))
 
 typedef struct
 {
-	// This part can be stored to a file etc. directly:
+	// This part can be stored to a file, copied to socket, etc. directly:
 	cloud_meta_t m;
 
 
 	// The rest is for storing in memory. To write to a file or socket,
-	// ignore the alloc_ counts and loop over the tables using the actual length parameters (n_*)
+	// ignore the alloc_ counts and loop over the tables using the actual length parameters (m.n_*)
 	//int alloc_srcs;
 	int alloc_points;
 	int alloc_poses;
@@ -190,21 +180,13 @@ typedef struct
 	// Storing source coordinates for each point would be huge waste of space and also processing, because
 	// one sensor (located at one point at a time) sees thousands of points at once. So, all possible sources
 	// are stored in one table, then indeces to this source table are stored in the points.
+	// Room for optimization: use another datatype for srcs[], they are x,y,z only.
 
-	// When multiple points seen from different sources are combined into one, the need to have single-point-
-	// with-multiple-sources datatype emerges. Such points use CLOUD_FLAG_MULTISRC, and the src_idx refers to
-	// multisrcs[] instead. multisrcs[] does not hold coordinates, but refers to srcs[] instead; this is because
-	// almost always when having multisources, all of those sources exist anyway for some single points, as well,
-	// so only storing one byte to refer to the srcs[] saves space.
-	// Because we want to refer to the sources by one byte (so that multisources are efficient), we limit the number
-	// of sources to 256. Because multisrcs have their own index space, we have another 256 of them.
-	// Static allocation is OK for now, it's such low number compared to the typical number of points.
 	// Is 256 srcs running out?
 	//   * Combine closeby sources. Having gazillion sources is slow anyway (tracing the empty space)
 	//   * Do not construct massive point clouds using this cloud datatype, it's not meant for that. Even the coordinates are limited range.
 
 	cloud_point_t srcs[CLOUD_MAX_SRCS];
-	multisource_t multisrcs[CLOUD_MAX_MULTISRCS];
 
 	// The points.
 	cloud_point_t* points;
@@ -300,7 +282,39 @@ ALWAYS_INLINE int cloud_find_source(cloud_t* cloud, cloud_point_t p)
 		return cloud_add_source(cloud, p);
 }
 
+// Add source(s) of in to the source list of out, not adding existing indeces
+ALWAYS_INLINE void point_add_src_idxs(cloud_point_t *out, cloud_point_t *in)
+{
+	assert(in->n_srcs <= POINT_MAX_SRCS);
+	assert(out->n_srcs <= POINT_MAX_SRCS);
+	for(int i=0; i<in->n_srcs; i++)
+	{
+		if(out->n_srcs >= POINT_MAX_SRCS)
+		{
+			// Source list is full, can't add
+			break;
+		}
 
+		// Find existing to see if adding is unnecessary
+		int o;
+		for(o=0; o<out->n_srcs; o++)
+		{
+			if(in->srcs[i] == out->srcs[o])
+				goto IDX_EXISTS;
+		}
+		assert(o == out->n_srcs);
+
+		// Add.
+		out->srcs[out->n_srcs++] = in->srcs[i];
+
+		IDX_EXISTS:;
+	}
+
+	assert(out->n_srcs <= POINT_MAX_SRCS);
+
+}
+
+#if 0
 ALWAYS_INLINE int cloud_add_multisource(cloud_t* cloud, multisource_t ms)
 {
 	assert(cloud->m.n_multisrcs < CLOUD_MAX_MULTISRCS);
@@ -364,6 +378,7 @@ ALWAYS_INLINE void cloud_sort_multisource(multisource_t* ms)
 		ms->idxs[j] = t;
 	}	
 }
+#endif
 
 ALWAYS_INLINE void cloud_add_point(cloud_t* cloud, cloud_point_t p)
 {
@@ -428,11 +443,15 @@ int save_cloud(cloud_t* cloud, int idx);
 int load_cloud(cloud_t* cloud, int idx);
 void rotate_cloud(cloud_t* cloud, double yaw);
 void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw);
-void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl_y, int32_t transl_z);
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z);
 
 void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x, int32_t ref_y, int32_t ref_z,
 	 int do_filter, cloud_t* cloud, int dist_ignore_threshold);
+
+
+void cloud_copy_all_but_points(cloud_t* restrict out, cloud_t* restrict cloud);
+void freespace_filter_cloud(cloud_t* out, cloud_t* cloud);
+
 
 
 //#include "../robotboard2-fw/tof_process.h" // for sensor_mount_t

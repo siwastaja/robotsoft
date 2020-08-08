@@ -758,7 +758,7 @@ small_cloud_t* convert_cloud_to_small_cloud(cloud_t* in)
 	assert(out);
 	for(int i=0; i<in->m.n_points; i++)
 	{
-		out[i] = set_small_cloud_native_units(0, in->srcs[in->points[i].src_idx].x, in->srcs[in->points[i].src_idx].y, in->srcs[in->points[i].src_idx].z, in->points[i].x, in->points[i].y, in->points[i].z);
+		out[i] = set_small_cloud_native_units(0, 0, 0, 0, in->points[i].x, in->points[i].y, in->points[i].z);
 	}
 	return out;
 }
@@ -931,9 +931,6 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 			free_cloud(&clouds[sidx]);
 		}
 
-		small_cloud_t* scla = convert_cloud_to_small_cloud(&combined_scan);
-		save_small_cloud("cla.smallcloud", 0,0,0, combined_scan.m.n_points, scla);
-		free(scla);
 
 		assert(cloud_is_init(&submap));
 		if(submap.m.n_points < 1000)
@@ -959,10 +956,24 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 		free_cloud(&combined_scan);
 
+		{
+			small_cloud_t* sc = convert_cloud_to_small_cloud(&submap);
+			save_small_cloud("cla.smallcloud", 0,0,0, submap.m.n_points, sc);
+			free(sc);
+		}
 
-		small_cloud_t* sclb = convert_cloud_to_small_cloud(&submap);
-		save_small_cloud("clb.smallcloud", 0,0,0, submap.m.n_points, sclb);
-		free(sclb);
+		cloud_t filtered_submap;
+		init_cloud(&filtered_submap, 0);
+
+		freespace_filter_cloud(&filtered_submap, &submap);
+
+		{
+			small_cloud_t* sc = convert_cloud_to_small_cloud(&filtered_submap);
+			save_small_cloud("clb.smallcloud", 0,0,0, filtered_submap.m.n_points, sc);
+			free(sc);
+		}
+
+		free_cloud(&filtered_submap);
 
 	}
 	else
@@ -1710,12 +1721,15 @@ void init_slam()
 //	p_cur_cloud = &filtered_clouds[0];
 //	p_prev_cloud = &filtered_clouds[1];
 //	p_prev_prev_cloud = &filtered_clouds[2];
+
+	assert(sizeof (cloud_point_t) == 16);
 }
 
 
 #ifdef SLAM_STANDALONE
 int main(int argc, char** argv)
 {
+	printf("sizeof (cloud_point_t) = %d\n", (int)sizeof(cloud_point_t));
 	init_slam();
 	load_sensor_softcals();
 
