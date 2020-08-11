@@ -828,14 +828,16 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 	int ret = -1;
 
 	fix_pose(&tss->sets[0].pose);
+	fix_pose(&tss->sets[1].pose);
 
 	static cloud_t clouds[N_SENSORS];
 	static int cur_sidx = FIRST_SIDX;
 
 //	static int32_t sm_ref_x, sm_ref_y, sm_ref_z;
 
-	printf("input_tof_slam_set sidx = %d  ", cur_sidx);
-	print_hw_pose(&tss->sets[0].pose);
+	printf("input_tof_slam_set sidx = %d\n", cur_sidx);
+	printf("set0 "); print_hw_pose(&tss->sets[0].pose);
+	printf("set1 "); print_hw_pose(&tss->sets[1].pose);
 
 	if(cur_sidx != tss->sidx)
 	{
@@ -880,30 +882,89 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 	//printf("ok\n");
 
-/*
-	// Set 1, if available, contains either a narrow beam image, or a longer-range wide beam image 
-	if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
-	{
-		tof_to_cloud(1, 1, tss,
-			sm_ref_x, sm_ref_y, sm_ref_z,
-			0,
-			p_cur_cloud, 3000);
-	}
-	else if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
-	{
-		tof_to_cloud(0, 1, tss,
-			sm_ref_x, sm_ref_y, sm_ref_z,
-			0,
-			p_cur_cloud, 3000);
-	}
-	// else no set[1] available
 
-*/
+	// Set 1, if available, contains either a narrow beam image, or a longer-range wide beam image 
+	// Use the same reference coordinates as the first set
+	// Ignore close-by points, and do not use filter because it's only needed for close-by points.
+
+	#ifdef USE_NARROWS
+		if(tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW)
+		{
+			printf("ADDING LONG NARROW SET\n");
+
+			cloud_t set1;
+			init_cloud(&set1, CLOUD_INIT_SMALL);
+
+			set1.m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
+			set1.m.ref_y = tss->sets[0].pose.y/CLOUD_MM;
+			set1.m.ref_z = tss->sets[0].pose.z/CLOUD_MM;
+
+			tof_to_cloud(1, 1, tss,
+				tss->sets[0].pose.x, tss->sets[0].pose.y, tss->sets[0].pose.z,
+				0, &set1, 5000);
+
+			match_by_closest_points(&clouds[cur_sidx], &set1, &clouds[cur_sidx],
+				0.0f, 0.0f, 0.0f, 0.0f,
+				0, // no iters, just combine
+				200.0, // match threshold (meaningless because iters=0)
+				300.0, // points can't be combined if further away
+				50.0, 0.017, // points can't be combined if perpendicularly further away from the sensor->point line,
+					    // than 30mm + 1.5% of the distance (sensor to point)
+					    // At 4000mm distance, this is 90.0mm
+				NULL,NULL,NULL,NULL, ICP_USE_A); // correction results meaningless because iters = 0
+
+			free_cloud(&set1);
+
+			assert(clouds[cur_sidx].m.n_srcs == 1);
+		}
+	#endif
+
+	#ifdef USE_LONG_WIDES
+		// Untested code because the firmware isn't producing wide sets right now...
+		if(tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE)
+		{
+			printf("ADDING LONG WIDE SET\n");
+
+			cloud_t set1;
+			init_cloud(&set1, CLOUD_INIT_SMALL);
+
+			set1.m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
+			set1.m.ref_y = tss->sets[0].pose.y/CLOUD_MM;
+			set1.m.ref_z = tss->sets[0].pose.z/CLOUD_MM;
+
+			tof_to_cloud(0, 1, tss,
+				tss->sets[0].pose.x, tss->sets[0].pose.y, tss->sets[0].pose.z,
+				0, &set1, 5000);
+
+			match_by_closest_points(&clouds[cur_sidx], &set1, &clouds[cur_sidx],
+				0.0f, 0.0f, 0.0f, 0.0f,
+				0, // no iters, just combine
+				200.0, // match threshold (meaningless because iters=0)
+				300.0, // points can't be combined if further away
+				50.0, 0.017, // points can't be combined if perpendicularly further away from the sensor->point line,
+					    // than 30mm + 1.5% of the distance (sensor to point)
+					    // At 4000mm distance, this is 90.0mm
+				NULL,NULL,NULL,NULL, ICP_USE_A); // correction results meaningless because iters = 0
+
+			free_cloud(&set1);
+
+			assert(clouds[cur_sidx].m.n_srcs == 1);
+		}
+	#endif
+
+
 
 
 	if(cur_sidx == LAST_SIDX)
 	{
 		cur_sidx = FIRST_SIDX;
+
+		// Build a cloud with just one round of sensors, by combining clouds[N_SENSORS].
+		// ICP combining is used, but without any correction iterations; individual sensor clouds
+		// are therefore combined by the original hw_pose differences, but the ICP combining algorithm
+		// does allow moving individual points a bit when detecting their associations, creating 1 averaged point
+		// from 2 input points, keeping the areas of sensor overlap clean, having equivalent point density to
+		// the areas of no overlap.
 
 		cloud_t combined_scan;
 		init_cloud(&combined_scan, 0);
@@ -912,25 +973,29 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		combined_scan.m.ref_z = clouds[FIRST_SIDX].m.ref_z;
 
 		cat_cloud(&combined_scan, &clouds[FIRST_SIDX]);
-
 		for(int sidx=FIRST_SIDX+1; sidx<=LAST_SIDX; sidx++)
 		{
-//			cat_cloud(&combined_scan, &clouds[sidx]);
 			match_by_closest_points(&combined_scan, &clouds[sidx], &combined_scan,
 				0.0f, 0.0f, 0.0f, 0.0f,
 				0, // no iters, just combine
 				200.0, // match threshold (meaningless because iters=0)
-
 				200.0, // points can't be combined if further away
 				30.0, 0.015, // points can't be combined if perpendicularly further away from the sensor->point line,
 					    // than 30mm + 1.5% of the distance (sensor to point)
 				            // At 4000mm distance, this is 90.0mm
-				NULL,NULL,NULL,NULL); // correction results meaningless because iters = 0
-
+				NULL,NULL,NULL,NULL, ICP_USE_COMB); // correction results meaningless because iters = 0
 
 			free_cloud(&clouds[sidx]);
 		}
 
+		// Now one full sensor scan is in combined_scan. ICP match it to the submap cloud.
+		// Here, ICP iterations are used to register the new scan to the existing submap.
+		// After registration, sensor scan is combined with the existing submap, again averaging overlapping points,
+		// keeping point density acceptable.
+		// ICP provides pose correction, which is given to the sw_correct_pos function, which adjusts correction parameters
+		// that will correct all incoming data afterwards, making this an "on-line" slam.
+		// If loop closures are needed later, it's best to treat this on-line adjusted hw_pose as the pose estimate, forgetting/overwriting
+		// the "raw" original hw_poses, because the ICP seems to do quite good job.
 
 		assert(cloud_is_init(&submap));
 		if(submap.m.n_points < 1000)
@@ -941,14 +1006,14 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		{
 			float cx=0.0, cy=0.0, cz=0.0, cyaw=0.0;
 			match_by_closest_points(&submap, &combined_scan, &submap,
-				0.0f, 0.0f, 0.0f, 0.0f, //DEGTORAD(-0.5),
+				0.0f, 0.0f, 0.0f, 0.0f,
 				30, // n iters
 				200.0, // match threshold
 				300.0, // points can't be combined if further away
 				100.0, 0.025, // points can't be combined if perpendicularly further away from the sensor->point line,
 					    // than 20mm + 4% of the distance (sensor to point)
 					    // At 4000mm distance, this is 180.0mm
-				&cx,&cy,&cz,&cyaw); // correction results
+				&cx,&cy,&cz,&cyaw, ICP_USE_COMB); // correction results
 
 				sw_correct_pos(RADTOANGI32(cyaw), cx, cy, cz);
 
@@ -956,16 +1021,18 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 		free_cloud(&combined_scan);
 
+		cloud_t filtered_submap;
+		init_cloud(&filtered_submap, 0);
+
+		freespace_filter_cloud(&filtered_submap, &submap);
+		free_cloud(&submap);
+
+
 		{
 			small_cloud_t* sc = convert_cloud_to_small_cloud(&submap);
 			save_small_cloud("cla.smallcloud", 0,0,0, submap.m.n_points, sc);
 			free(sc);
 		}
-
-		cloud_t filtered_submap;
-		init_cloud(&filtered_submap, 0);
-
-		freespace_filter_cloud(&filtered_submap, &submap);
 
 		{
 			small_cloud_t* sc = convert_cloud_to_small_cloud(&filtered_submap);

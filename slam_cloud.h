@@ -24,8 +24,6 @@
 */
 
 
-#define CLOUD_FLAG_REMOVED    (1<<1)
-
 
 #define CLOUD_GENERAL_SRC 255       // Source index meaning: "no source available"
 
@@ -37,7 +35,9 @@ typedef union
 {
 	struct __attribute__((packed))
 	{
-		uint8_t  flags : 4;
+		uint8_t  removed  : 1;
+		uint8_t  reserved1 : 1;
+		uint8_t  reserved2 : 2;
 		uint8_t  n_srcs : 4;
 		uint8_t  srcs[POINT_MAX_SRCS];
 		union
@@ -60,12 +60,33 @@ typedef union
 } cloud_point_t;
 
 
+typedef struct __attribute__((packed))
+{
+	uint8_t reserved;
+	uint8_t src;
+	union
+	{
+		struct __attribute__((packed))
+		{
+			int16_t x;
+			int16_t y;
+			int16_t z;
+		};
 
-#define CL_P(x_,y_,z_) ((cloud_point_t){{0,0,{0},{{(x_),(y_),(z_)}}}})
-#define CL_SRCP(s_,x_,y_,z_) ((cloud_point_t){{0,1,{(s_),0,0,0,0,0,0,0},{{(x_),(y_),(z_)}}}})
+		int16_t coords[3];
+	};
+} freevect_point_t;
 
-#define CL_P_MM(x_,y_,z_) ((cloud_point_t){{0,0,{0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
-#define CL_SRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{0,1,{(s_),0,0,0,0,0,0,0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+
+
+#define CL_P(x_,y_,z_) ((cloud_point_t){{0,0,0,0,{0},{{(x_),(y_),(z_)}}}})
+#define CL_SRCP(s_,x_,y_,z_) ((cloud_point_t){{0,0,0,1,{(s_),0,0,0,0,0,0,0},{{(x_),(y_),(z_)}}}})
+
+#define CL_P_MM(x_,y_,z_) ((cloud_point_t){{0,0,0,0,{0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+#define CL_SRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{0,0,0,1,{(s_),0,0,0,0,0,0,0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+
+
+#define CL_FREEVECT_MM(s_, x_,y_,z_) ((freevect_point_t){0,(s_),{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}})
 
 
 ALWAYS_INLINE cloud_point_t cloud_point_minus(cloud_point_t a, cloud_point_t b)
@@ -98,7 +119,7 @@ ALWAYS_INLINE float cloud_point_len(cloud_point_t a)
 	return sqrtf(cloud_point_sqlen(a));
 }
 
-
+// I trust the compiler can optimize the cosf(),sinf() out of the loop if this always_inline function is "called" inside a loop.
 ALWAYS_INLINE cloud_point_t transform_point(cloud_point_t p, int tx, int ty, int tz, float yaw)
 {
 	cloud_point_t ret;
@@ -125,6 +146,34 @@ ALWAYS_INLINE cloud_point_t transform_point(cloud_point_t p, int tx, int ty, int
 
 	return ret;
 }
+
+
+ALWAYS_INLINE freevect_point_t transform_freevect(freevect_point_t p, int tx, int ty, int tz, float yaw)
+{
+	freevect_point_t ret;
+
+	ret = p; // copy src index, reserved field
+
+	if(yaw > -DEGTORAD(0.1) && yaw < DEGTORAD(0.1))
+	{
+		ret.x = p.x + tx;
+		ret.y = p.y + ty;
+		ret.z = p.z + tz;
+	}
+	else
+	{
+		float cosa = cosf(yaw);
+		float sina = sinf(yaw);
+
+		ret.x = ((float)p.x*cosa) - ((float)p.y*sina) + tx;
+		ret.y = ((float)p.x*sina) + ((float)p.y*cosa) + ty;
+		ret.z = p.z + tz;
+	}
+
+	return ret;
+}
+
+
 
 // Maximize performance vs. memory usage, having to call realloc() every now and then is just fine,
 // but having to call it multiple times for every point cloud is only a performance hindrance.
@@ -158,6 +207,7 @@ typedef struct __attribute__((packed))
 	int32_t n_srcs;
 	int32_t n_points;
 	int32_t n_poses;
+	int32_t n_freevects;
 } cloud_meta_t;
 
 
@@ -173,6 +223,7 @@ typedef struct
 	//int alloc_srcs;
 	int alloc_points;
 	int alloc_poses;
+	int alloc_freevects;
 
 	// The sources.
 	// Sources are the sensor locations; a line can be traced from source to the point.
@@ -191,6 +242,7 @@ typedef struct
 	// The points.
 	cloud_point_t* points;
 	hw_pose_t* poses; // robot trajectory
+	freevect_point_t* freevects;
 
 } cloud_t;
 
@@ -315,58 +367,6 @@ ALWAYS_INLINE void point_add_src_idxs(cloud_point_t *out, cloud_point_t *in)
 }
 
 #if 0
-ALWAYS_INLINE int cloud_add_multisource(cloud_t* cloud, multisource_t ms)
-{
-	assert(cloud->m.n_multisrcs < CLOUD_MAX_MULTISRCS);
-
-	cloud->multisrcs[cloud->m.n_multisrcs] = ms;
-
-	return cloud->m.n_multisrcs++;
-}
-
-ALWAYS_INLINE int cloud_find_multisource(cloud_t* cloud, multisource_t ms)
-{
-	assert(ms.n > 1 && ms.n < CLOUD_MAX_SRCS_IN_MULTISRC);
-	//printf("cloud_find_multisource(): ms.n=%d\n", ms.n);
-	for(int i=0; i<cloud->m.n_multisrcs; i++)
-	{
-		//printf("i%d, n=%d\n", i, cloud->multisrcs[i].n);
-		if(ms.n == cloud->multisrcs[i].n)
-		{
-			for(int o=0; o<ms.n; o++)
-			{
-				//printf("o%d, idxs: %d vs %d\n", o, cloud->multisrcs[i].idxs[o], ms.idxs[o]);
-
-				if(o>0) assert(ms.idxs[o] > ms.idxs[o-1]);
-				if(o>0) assert(cloud->multisrcs[i].idxs[o] > cloud->multisrcs[i].idxs[o-1]);
-
-/*
-				if(o>0 && cloud->multisrcs[i].idxs[o] <= cloud->multisrcs[i].idxs[o-1]) 
-				{
-					printf("WRONG ORDER\n");
-					exit(1);
-				}
-*/
-				if(cloud->multisrcs[i].idxs[o] != ms.idxs[o]) // no match
-					goto BREAK_NO_MATCH_SO_FAR;
-			}
-			// match!
-			return i;
-			BREAK_NO_MATCH_SO_FAR:;
-		}
-	}
-
-	// no match
-	if(cloud->m.n_multisrcs == CLOUD_MAX_MULTISRCS)
-	{
-		//printf("WARNING: cloud_find_multisource(): cannot create new multisource, multisources full, returning general no-source index\n");
-		return CLOUD_GENERAL_SRC;
-	}
-	else
-		return cloud_add_multisource(cloud, ms);
-
-}
-
 ALWAYS_INLINE void cloud_sort_multisource(multisource_t* ms)
 {
 	for(int i=1; i<ms->n; i++)
@@ -429,6 +429,19 @@ ALWAYS_INLINE void cloud_add_pose(cloud_t* cloud, hw_pose_t p)
 
 	cloud->poses[cloud->m.n_poses++] = p;
 }
+
+ALWAYS_INLINE void cloud_add_freevect(cloud_t* cloud, freevect_point_t p)
+{
+	if(UNLIKELY(cloud->m.n_freevects >= cloud->alloc_freevects))
+	{
+		cloud->alloc_freevects <<= 1;
+		cloud->freevects = realloc(cloud->freevects, cloud->alloc_freevects * sizeof (freevect_point_t));
+		assert(cloud->freevects);
+	}
+
+	cloud->freevects[cloud->m.n_freevects++] = p;
+}
+
 
 #include "small_cloud.h"
 #define MAX_REALTIME_N_POINTS (10*9600)

@@ -35,12 +35,14 @@ void init_cloud(cloud_t* cloud, int flags)
 	{
 //		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_SMALL;
 		cloud->alloc_points = INITIAL_POINTS_ALLOC_SMALL;
+		cloud->alloc_freevects = INITIAL_POINTS_ALLOC_SMALL;
 		cloud->alloc_poses = INITIAL_POSES_ALLOC_SMALL;
 	}
 	else
 	{
 //		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_LARGE;
 		cloud->alloc_points = INITIAL_POINTS_ALLOC_LARGE;
+		cloud->alloc_freevects = INITIAL_POINTS_ALLOC_LARGE;
 		cloud->alloc_poses = INITIAL_POSES_ALLOC_LARGE;
 	}
 
@@ -48,6 +50,8 @@ void init_cloud(cloud_t* cloud, int flags)
 //	assert(cloud->srcs);
 	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
 	assert(cloud->points);
+	cloud->freevects = malloc(cloud->alloc_freevects * sizeof (freevect_point_t));
+	assert(cloud->freevects);
 	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
 	assert(cloud->poses);
 }
@@ -65,22 +69,8 @@ void alloc_cloud(cloud_t* cloud)
 //	assert(cloud->srcs);
 	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
 	assert(cloud->points);
-	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
-	assert(cloud->poses);
-}
-
-void init_cloud_copy(cloud_t* cloud, const cloud_t* const orig, int flags)
-{
-	cloud->m = orig->m;
-	
-//	cloud->alloc_srcs = orig->alloc_srcs;
-	cloud->alloc_points = orig->alloc_points;
-	cloud->alloc_poses = orig->alloc_poses;
-
-//	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
-//	assert(cloud->srcs);
-	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
-	assert(cloud->points);
+	cloud->freevects = malloc(cloud->alloc_freevects * sizeof (freevect_point_t));
+	assert(cloud->freevects);
 	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
 	assert(cloud->poses);
 }
@@ -127,11 +117,12 @@ void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in)
 	free(src_transl);
 }
 
-// ... but keep the allocations and meta fields
+// ... but keep the allocations and other meta fields
 void cloud_remove_points(cloud_t* cloud)
 {
 	cloud->m.n_srcs = 0;
 	cloud->m.n_points = 0;
+	cloud->m.n_freevects = 0;
 	cloud->m.n_poses = 0;
 }
 
@@ -840,14 +831,40 @@ static void flt_vox_midfree()
 				}
 */
 
-				if(strong_occupied_start > -1 && flt_voxes[ix][iy][iz].free_cnt >= 1) // strong case of "free" also found
+				if(strong_occupied_start > -1 && flt_voxes[ix][iy][iz].free_cnt >= 1) // "free" also found
 				{
+					// test code to delete everything above first appearance and disappearane, if free is also found
+
+					/*
+					for(int i=strong_occupied_start+2; i<CLOUDFLT_ZS; i++)
+					{
+						flt_voxes[ix][iy][i].free_cnt = 1;
+						iz = 999;
+					}
+					*/
+
 					int strong_occupied_end = iz;
+
+					// Look for another free, until last free is found. Any strong occupied stops the process.
+					for(int i=strong_occupied_end; i<CLOUDFLT_ZS-1; i++)
+					{
+						if(flt_voxes[ix][iy][i].free_cnt >= 1)
+						{
+							strong_occupied_end = i;
+						}
+
+						if((((int)flt_voxes[ix][iy][i].occu_cnt+(int)flt_voxes[ix][iy][i+1].occu_cnt) >= 8))
+						{
+							break;
+						}
+					}
+
 					for(int i=strong_occupied_start+2; i<strong_occupied_end; i++)
 						flt_voxes[ix][iy][i].free_cnt = 1; // assume everything inbetween free.
 
 					strong_occupied_start = -1; // continue looking for more
 				}
+
 			}
 		}
 	}
@@ -866,7 +883,7 @@ void freespace_filter_cloud(cloud_t* restrict out, cloud_t* restrict cloud)
 {
 //	printf("filter_cloud ref (%d, %d, %d)\n", ref_x, ref_y, ref_z);
 	memset(flt_voxes, 0, sizeof(flt_voxes));
-	// Trace empty space:
+	// Trace empty space to points:
 	for(int p=0; p<cloud->m.n_points; p++)
 	{
 		int px = cloud->points[p].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
@@ -887,14 +904,28 @@ void freespace_filter_cloud(cloud_t* restrict out, cloud_t* restrict cloud)
 		output_n_occu_voxel(px,py,pz,cloud->points[p].n_srcs);
 	}
 
+	// Trace empty space with freevects:
+
+	printf("FILTER: n_freevects = %d\n", cloud->m.n_freevects);
+	for(int p=0; p<cloud->m.n_freevects; p++)
+	{
+		int px = cloud->freevects[p].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = cloud->freevects[p].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = cloud->freevects[p].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
+		int sx = cloud->srcs[cloud->freevects[p].src].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int sy = cloud->srcs[cloud->freevects[p].src].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int sz = cloud->srcs[cloud->freevects[p].src].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
+		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
+	}
+
 	de_edge_flt_voxes();
 	
 	// Whenever we have a strong case of free voxel, and a strong case of occupied voxel some distance below or above it, assume
 	// everything inbetween as free.
 
 	flt_vox_midfree();
-
-	
 
 	cloud_copy_all_but_points(out, cloud);
 	// The number of points out is typically close to the number of points in. Allocate for full number.
@@ -1147,45 +1178,35 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 	// cloud_find_source reuses an old source if close enough, or creates a new one:
 	int src_idx = cloud_find_source(cloud, CL_P_MM(sx, sy, sz));
 
-	// Kludgy code to ignore the corners and top/bottom edges
+	// Corner ignore:
+
+	#define X_EDGE_IGNORE 8
+	static const int px_ignore[TOF_YS] =
+	{
+		50, 45, 41, 37, 33, 
+		30, 27, 24, 21, 18,
+		16, 14, 12, 10,  8,
+		 7,  6,  5,  4,  3,
+		 2,  2,  1,  1,  0,
+		 0,  0,  0,  0,  0,
+
+		 0,  0,  0,  0,  0,
+		 0,  1,  1,  2,  2,
+		 3,  4,  5,  6,  7,
+		 8, 10, 12, 14, 16,
+		18, 21, 24, 27, 30,
+		33, 37, 41, 45, 50
+	};
+
+	// Generate points
 	for(int py=1; py<TOF_YS-1; py++)
 	{
-		int px_start = 1;
-		int px_end = TOF_XS-1;
+		int px_start = X_EDGE_IGNORE;
+		int px_end = TOF_XS-X_EDGE_IGNORE;
 
-		if(py < 4 || py > TOF_YS-4)
-		{
-			px_start += 12;
-			px_end -= 12;
-		}
-		if(py < 8 || py > TOF_YS-8)
-		{
-			px_start += 12;
-			px_end -= 12;
-		}
-		if(py < 12 || py > TOF_YS-12)
-		{
-			px_start += 10;
-			px_end -= 10;
-		}
-		if(py < 16 || py > TOF_YS-16)
-		{
-			px_start += 4;
-			px_end -= 4;
-		}
-		if(py < 20 || py > TOF_YS-20)
-		{
-			px_start += 3;
-			px_end -= 3;
-		}
-		if(py < 24 || py > TOF_YS-24)
-		{
-			px_start += 2;
-			px_end -= 2;
-		}
+		px_start += px_ignore[py];
+		px_end   -= px_ignore[py];
 
-		//px_start = 55;
-		//px_end = 70;
 		for(int px=px_start; px<px_end; px++)
 		{
 			// Start by looking at 3x3 pixels. Middle pixel is refdist. Any of the 9 pixels must be
@@ -1261,10 +1282,9 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 			{
 				avg <<= DIST_SHIFT; // Convert to mm
 				avg /= n_conform;
+				int64_t d = avg;
 
 				//refdist <<= DIST_SHIFT;  // if you ever need refdist, convert to mm first
-
-				int32_t d = avg;
 
 				int16_t h_ang = -sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
 				int16_t v_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
@@ -1272,7 +1292,6 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 				// Rotate the pixel angles according to the sensor rotation
 				// Rotation: xr = x*cos(a) - y*sin(a)
 				//           yr = x*sin(a) + y*cos(a)
-
 
 				uint16_t hor_ang, ver_ang;
 				hor_ang = ((int32_t)h_ang*cos_sensor_rota - (int32_t)v_ang*sin_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
@@ -1286,6 +1305,9 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 				int32_t x = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_cos_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_x;
 				int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
 				int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
+
+				if(is_narrow && z < 0)
+					continue;
 
 				#ifdef VACUUM_APP
 					uint16_t local_comb_hor_ang = hor_ang + local_sensor_hor_ang;
@@ -1305,12 +1327,10 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 						continue;
 				#endif
 
-//				if(z > 2200)
-//					continue;
 
 				if(d < dist_ignore_threshold)
 					continue;
-
+				
 				if(filter)
 				{
 					int fltx = FILTER_XS/2 + x/FILTER_STEP;
@@ -1328,11 +1348,13 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 					}
 					
 				}
-
+				else
+					cloud_add_point(cloud, CL_SRCP_MM(src_idx, x, y, z));
 			}
 		}
 	}
 
+	// Per each filter voxel, create only one output point, which is the average of the points falling inside each voxel
 	if(filter)
 	{
 		for(int xx=0; xx<FILTER_XS; xx++)
@@ -1358,6 +1380,74 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 
 		free(filter);
 	}
+
+
+	#define FREEVECT_PIXEL_SKIP 3
+	#define FREEVECT_PIXEL_AREA 2
+
+	#define ASSUMED_SENSOR_RANGE 2500.0f // going over 2000 is risky, black objects may end up removed
+
+
+	// Generate freevects.
+	// Require that all pixels within square of 2*FREEVECT_PIXEL_AREA x 2*FREEVECT_PIXEL_AREA are underexposed
+	// Freevect is an imaginary point where we can assume we have somewhat guaranteed sensor range even under worst cases
+	// If we read "underexposed" for multiple pixels, we can assume that, for example, if there is anything there, it
+	// has to be further than, say, 1 meter away, otherwise we would have seen it, even if it was a wall covered in black
+	// leather.
+	if(!is_narrow) for(int py=1; py<TOF_YS-1; py+=FREEVECT_PIXEL_SKIP)
+	{
+		int px_start = X_EDGE_IGNORE + 2;
+		int px_end = TOF_XS-X_EDGE_IGNORE - 2;
+
+		px_start += px_ignore[py]+2;
+		px_end   -= px_ignore[py]+2;
+
+		for(int px=px_start; px<px_end; px+=FREEVECT_PIXEL_SKIP)
+		{
+			for(int iy=-FREEVECT_PIXEL_AREA; iy<=FREEVECT_PIXEL_AREA; iy++)
+			{
+				for(int ix=-FREEVECT_PIXEL_AREA; ix<=FREEVECT_PIXEL_AREA; ix++)
+				{
+					int_fast32_t dist = tss->sets[setnum].ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
+					if(dist != DIST_UNDEREXP)
+						goto NOT_FREEVECT;
+				}
+			}
+
+			// Assumed worst-case sensor range:
+			int64_t d;
+			if(px > 50 && px < TOF_XS-50)
+				d = ASSUMED_SENSOR_RANGE*1.0;
+			else if(px > 40 && px < TOF_XS-40)
+				d = ASSUMED_SENSOR_RANGE*0.9;
+			else if(px > 30 && px < TOF_XS-30)
+				d = ASSUMED_SENSOR_RANGE*0.75;
+			else
+				d = ASSUMED_SENSOR_RANGE*0.6;
+
+			if(py > 15 && py < TOF_YS-15)
+				d += ASSUMED_SENSOR_RANGE*0.05;
+
+			int16_t h_ang = -sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
+			int16_t v_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
+
+			uint16_t hor_ang, ver_ang;
+			hor_ang = ((int32_t)h_ang*cos_sensor_rota - (int32_t)v_ang*sin_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+			ver_ang = ((int32_t)h_ang*sin_sensor_rota + (int32_t)v_ang*cos_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+			uint16_t comb_hor_ang = hor_ang + global_sensor_hor_ang;
+			uint16_t comb_ver_ang = ver_ang + global_sensor_ver_ang;
+
+			int32_t x = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_cos_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_x;
+			int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
+			int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
+
+			cloud_add_freevect(cloud, CL_FREEVECT_MM(src_idx, x, y, z));
+
+
+			NOT_FREEVECT:;
+		}
+	}
+
 
 }
 

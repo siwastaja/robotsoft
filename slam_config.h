@@ -11,6 +11,9 @@
 #endif
 #define LAST_SIDX 9
 
+//#define USE_NARROWS
+//#define USE_LONG_WIDES
+
 // First level of filtration: how many points in a 3x3 pixel block needs to be close enough to the middle pixel of that block,
 // in order to get a point generated.
 // >= 9 gets only points with "perfect" surrounding through. Not recommended.
@@ -29,15 +32,15 @@
 
 
 // Maximum difference in robot coordinates during a submap, basically the length of the robot pose range before terminating the submap. In mm
-#define DX_LIMIT 8000 // 2000
-#define DY_LIMIT 8000 // 2000
-#define DZ_LIMIT 1000 // 1000
+#define DX_LIMIT 8000
+#define DY_LIMIT 8000
+#define DZ_LIMIT 1000
 
 // Cumulative linear travel limit; after exceeded, a new submap is started. In mm.
 // Difference to the D*_LIMITs is that this limit can force a new submap even when the robot is
 // just moving (back and forth, for example) inside a small area.
-#define CUMUL_TRAVEL_LIMIT 16000  // 6000
+#define CUMUL_TRAVEL_LIMIT 16000
 // Similar, but for cumulative angular (yaw) motion
-#define CUMUL_YAW_LIMIT DEGTORAD(800)  // 200
+#define CUMUL_YAW_LIMIT DEGTORAD(360*5)
 
 
