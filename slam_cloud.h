@@ -5,99 +5,442 @@
 #include "misc.h"
 #include "slam_config.h"
 
-// Ray sources are always near the middle of the submap. Consider typical submap robot moving range of 5000mm (+/- 2500mm), so
-// 16-bit range of +/-32787mm is plentiful.
-// For Z, 16-bit range is more than enough as well -> struct is 16 bytes nicely.
 
-typedef struct __attribute__((packed))
-{
-	int16_t sx;
-	int16_t sy;
-	int16_t sz;
-
-	int32_t px;
-	int32_t py;
-	int16_t pz;
-} cloud_point_t;
-
-#define TRANSLATE_CLOUD_POINT(c_, x_, y_, z_) (cloud_point_t){c_.sx + (x_) , c_.sy + (y_) , c_.sz + (z_) , c_.px + (x_) , c_.py + (y_) , c_.pz + (z_)}
-
-#define MAX_POINTS (9600*10*64)
-typedef struct
-{
-	int n_points;
-	cloud_point_t points[MAX_POINTS];
-} cloud_t;
-
-
-
-
-// 128x128x64, step 32: 24MB of memory with these dimensions, coverage 4.1x4.1x2.0 m
-// 160x160x64, step 32: 37.5MB of memory with these dimensions, coverage 5.1x5.1x2.0 m
-// Outside of the filter, all points go through as they are.
-// When robot is fully stationary, max two sensors can see the same spot per full scan.
-// When moving, three sensors can see the same spot per full scan.
-// It's quite unlikely that 10 references would run out for 6 full scans (VOXFILTER_N_SCANS was 6 when writing this).
-// If it happens, no big harm done, some data goes through without filtration.
-// Tested different numbers of MAX_RAY_SOURCES for the Vuokravarasto Kellari dataset:
-// max  4: 390810 skipped points
-// max  7: 1544 skipped points
-// max  8: 107 skipped points
-// max  9: 6 skipped points
-// max 10: 0 skipped points
-// 10 is good: sizeof(voxfilter_point_t) = 24 bytes (alignable by 4 and 8)
-// It doesn't have a lot of extra margin, in some cases a few points could slip through the voxfilter,
-// but this is not catastrophic.
-
-#define VOXFILTER_MAX_RAY_SOURCES 10
-#define VOXFILTER_XS 128
-#define VOXFILTER_YS 128
-#define VOXFILTER_ZS 64
-#define VOXFILTER_STEP 32
-
+// Cloud resolution
+#define CLOUD_MM       16
+#define CLOUD_MM_SHIFT  4
 
 /*
-When the voxfilter accumulates (averages) close points from different sources, we must store the information of all
-sources involved, so that the free space can be traced from all correct sources. 
+	Always little-endian.
 
-In order to filter better, we allow another source point to be used instead, if it's close enough to
-the correct source. This happens, for example, if the robot is stationary (creating exact same source coordinates again)
-or crawling very slowly (nearly the same). Or, in some cases, when the robot happens to run forward at a certain lucky
-speed, so that another sensor gets an image close to the point where the another sensor picked an image earlier.
+	cloud_point_t usage options, pick any of these ways to access:
 
-Upside in increasing this: point clouds gets smaller. Normally, each different source needs to generate a new point even if
-the target point is combined by the voxfilter, but if the sources are combined, one point per one combined target suffices.
-
-The only downside to increasing this: free space very close to the robot may not be traced perfectly - some
-small stripes and spots *might* remain unknown (not free) even when they are actually free. Note that if you have
-a lot of moving people around the robot while mapping, this might prevent the later free space filter from removing
-some artefacts.
+	flags, src_idx, x, y, z     example: p.y
+	flags, src_idx, coords[3]   example: p.coords[1]
+	raw_u8[8]
+	raw_u16[4]
+	raw_i16[4]
+	raw_u64
 */
-#define VOXFILTER_SOURCE_COMBINE_THRESHOLD 50 // mm
+
+
+
+#define CLOUD_GENERAL_SRC 255       // Source index meaning: "no source available"
+
+#define CLOUD_MAX_SRCS 254
+#define POINT_MAX_SRCS 9 // resulting 16-byte point. Abs. max 15, number of sources has to fit in 4 bits
+
+
+typedef union
+{
+	struct __attribute__((packed))
+	{
+		uint8_t  removed  : 1;
+		uint8_t  reserved1 : 1;
+		uint8_t  reserved2 : 2;
+		uint8_t  n_srcs : 4;
+		uint8_t  srcs[POINT_MAX_SRCS];
+		union
+		{
+			struct __attribute__((packed))
+			{
+				int16_t x;
+				int16_t y;
+				int16_t z;
+			};
+
+			int16_t coords[3];
+		};
+	};
+
+	uint8_t raw_u8[16];
+	uint16_t raw_u16[8];
+	int16_t raw_i16[8];
+	uint64_t raw_u64[2];
+} cloud_point_t;
+
 
 typedef struct __attribute__((packed))
 {
-	uint8_t src_idxs[VOXFILTER_MAX_RAY_SOURCES]; // Zero-terminated list of indeces to voxfilter.ray_sources[]  (zero termination not required, if max length used)
-	uint16_t cnt;
-	int32_t x;
-	int32_t y;
-	int32_t z;
-} voxfilter_point_t;
+	uint8_t reserved;
+	uint8_t src;
+	union
+	{
+		struct __attribute__((packed))
+		{
+			int16_t x;
+			int16_t y;
+			int16_t z;
+		};
+
+		int16_t coords[3];
+	};
+} freevect_point_t;
+
+
+
+#define CL_P(x_,y_,z_) ((cloud_point_t){{0,0,0,0,{0},{{(x_),(y_),(z_)}}}})
+#define CL_SRCP(s_,x_,y_,z_) ((cloud_point_t){{0,0,0,1,{(s_),0,0,0,0,0,0,0},{{(x_),(y_),(z_)}}}})
+
+#define CL_P_MM(x_,y_,z_) ((cloud_point_t){{0,0,0,0,{0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+#define CL_SRCP_MM(s_,x_,y_,z_) ((cloud_point_t){{0,0,0,1,{(s_),0,0,0,0,0,0,0},{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}}})
+
+
+#define CL_FREEVECT_MM(s_, x_,y_,z_) ((freevect_point_t){0,(s_),{{(x_)>>CLOUD_MM_SHIFT,(y_)>>CLOUD_MM_SHIFT,(z_)>>CLOUD_MM_SHIFT}}})
+
+
+ALWAYS_INLINE cloud_point_t cloud_point_minus(cloud_point_t a, cloud_point_t b)
+{
+	return CL_P(a.x-b.x, a.y-b.y, a.z-b.z);
+}
+
+ALWAYS_INLINE cloud_point_t cloud_point_plus(cloud_point_t a, cloud_point_t b)
+{
+	return CL_P(a.x+b.x, a.y+b.y, a.z+b.z);
+}
+
+ALWAYS_INLINE int_fast64_t cloud_point_dot(cloud_point_t a, cloud_point_t b)
+{
+	return (int_fast64_t)a.x*(int_fast64_t)b.x + (int_fast64_t)a.y*(int_fast64_t)b.y + (int_fast64_t)a.z*(int_fast64_t)b.z;
+}
+
+ALWAYS_INLINE cloud_point_t cloud_point_cross(cloud_point_t a, cloud_point_t b)
+{
+	return CL_P(a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x);
+}
+
+ALWAYS_INLINE int_fast64_t cloud_point_sqlen(cloud_point_t a)
+{
+	return sq(a.x)+sq(a.y)+sq(a.z);
+}
+
+ALWAYS_INLINE float cloud_point_len(cloud_point_t a)
+{
+	return sqrtf(cloud_point_sqlen(a));
+}
+
+// I trust the compiler can optimize the cosf(),sinf() out of the loop if this always_inline function is "called" inside a loop.
+ALWAYS_INLINE cloud_point_t transform_point(cloud_point_t p, int tx, int ty, int tz, float yaw)
+{
+	cloud_point_t ret;
+
+	ret = p; // copy source indeces and flags
+
+	// Often we just translate using this function, but don't want stupid rounding errors when we can avoid them.
+	// Translation is lossless. Rotation is lossy.
+	if(yaw > -DEGTORAD(0.1) && yaw < DEGTORAD(0.1))
+	{
+		ret.x = p.x + tx;
+		ret.y = p.y + ty;
+		ret.z = p.z + tz;
+	}
+	else
+	{
+		float cosa = cosf(yaw);
+		float sina = sinf(yaw);
+
+		ret.x = ((float)p.x*cosa) - ((float)p.y*sina) + tx;
+		ret.y = ((float)p.x*sina) + ((float)p.y*cosa) + ty;
+		ret.z = p.z + tz;
+	}
+
+	return ret;
+}
+
+
+ALWAYS_INLINE freevect_point_t transform_freevect(freevect_point_t p, int tx, int ty, int tz, float yaw)
+{
+	freevect_point_t ret;
+
+	ret = p; // copy src index, reserved field
+
+	if(yaw > -DEGTORAD(0.1) && yaw < DEGTORAD(0.1))
+	{
+		ret.x = p.x + tx;
+		ret.y = p.y + ty;
+		ret.z = p.z + tz;
+	}
+	else
+	{
+		float cosa = cosf(yaw);
+		float sina = sinf(yaw);
+
+		ret.x = ((float)p.x*cosa) - ((float)p.y*sina) + tx;
+		ret.y = ((float)p.x*sina) + ((float)p.y*cosa) + ty;
+		ret.z = p.z + tz;
+	}
+
+	return ret;
+}
+
+
+
+// Maximize performance vs. memory usage, having to call realloc() every now and then is just fine,
+// but having to call it multiple times for every point cloud is only a performance hindrance.
+// Linux handles reallocs very well because large chunks use mmap internally which can move data
+// around without actually moving any data.
+// So make this a bit smaller than a "typical" pointcloud.
+// Say half of the points are valid, and we collect for 15 seconds. This would be 9600/2*10*15 = 720000
+// Since a point is 8 bytes, this is 5.5Mbytes. So let's just do 4MBytes = 524288 points
+// Have another option to initialize a cloud for smaller usage, 0.5MBytes = 65536 points
+#define INITIAL_POINTS_ALLOC_LARGE (524288)
+#define INITIAL_POINTS_ALLOC_SMALL (65536)
+
+// For initial allocations, similar reasoning (see above)
+#define INITIAL_SRCS_ALLOC_LARGE (256)
+#define INITIAL_SRCS_ALLOC_SMALL (64)
+
+#define INITIAL_POSES_ALLOC_LARGE (64)
+#define INITIAL_POSES_ALLOC_SMALL (16)
+
+
+typedef struct __attribute__((packed))
+{
+	// points have limited numerical range; ref coords give an extra translation to the whole pointcloud
+	int64_t ref_x;
+	int64_t ref_y;
+	int64_t ref_z;
+
+	// Cloud can be rotated by just modifying the header. Well, not yet, but maybe some time...
+	uint32_t yaw;
+
+	int32_t n_srcs;
+	int32_t n_points;
+	int32_t n_poses;
+	int32_t n_freevects;
+} cloud_meta_t;
+
+
 
 typedef struct
 {
-	int x;
-	int y;
-	int z;
-} voxfilter_ray_source_t;
+	// This part can be stored to a file, copied to socket, etc. directly:
+	cloud_meta_t m;
 
-// Remember to zero this struct out first.
-typedef struct
+
+	// The rest is for storing in memory. To write to a file or socket,
+	// ignore the alloc_ counts and loop over the tables using the actual length parameters (m.n_*)
+	//int alloc_srcs;
+	int alloc_points;
+	int alloc_poses;
+	int alloc_freevects;
+
+	// The sources.
+	// Sources are the sensor locations; a line can be traced from source to the point.
+	// This is handy, because such line was knowingly empty of obstacles, so can be used for filtration.
+	// Storing source coordinates for each point would be huge waste of space and also processing, because
+	// one sensor (located at one point at a time) sees thousands of points at once. So, all possible sources
+	// are stored in one table, then indeces to this source table are stored in the points.
+	// Room for optimization: use another datatype for srcs[], they are x,y,z only.
+
+	// Is 256 srcs running out?
+	//   * Combine closeby sources. Having gazillion sources is slow anyway (tracing the empty space)
+	//   * Do not construct massive point clouds using this cloud datatype, it's not meant for that. Even the coordinates are limited range.
+
+	cloud_point_t srcs[CLOUD_MAX_SRCS];
+
+	// The points.
+	cloud_point_t* points;
+	hw_pose_t* poses; // robot trajectory
+	freevect_point_t* freevects;
+
+} cloud_t;
+
+// cloud_t instances are small, can be stored in stack, arrays, etc. efficiently.
+// remember to init_cloud and free_cloud, though.
+
+#define CLOUD_INIT_SMALL (1<<0)
+
+/*
+	init_cloud: the basic initialization
+	New cloud must be created with this function. All-zeroes is no proper initialization.
+	Flags:
+		CLOUD_INIT_SMALL - initially reserve less memory.
+
+	Example:
+
+	cloud_t my_cloud;
+	init_cloud(&my_cloud, 0);
+	cloud_add_point(&my_cloud, CL_P_MM(123, 456, 789));
+	free_cloud(&my_cloud);
+*/
+void init_cloud(cloud_t* cloud, int flags);
+
+/*
+	alloc_cloud: alternative initialization
+	You supply a pointer to an otherwise-uninitialized cloud, but you have
+	set the m.n_* fields. This function does the rest of the init: allocates for
+	this exact amount of space.
+
+	Example:
+
+	cloud_t my_cloud;
+	my_cloud.m.n_srcs = read_from_file_header();
+	my_cloud.m.n_points = read_from_file_header();
+	my_cloud.m.n_poses = read_from_file_header();
+	alloc_cloud(&my_cloud);
+	// read from file directly, write to memory pointed by my_cloud.points, .srcs, .poses	
+*/
+
+void alloc_cloud(cloud_t* cloud);
+
+
+void free_cloud(cloud_t* cloud);
+
+ALWAYS_INLINE int cloud_add_source(cloud_t* cloud, cloud_point_t p)
 {
-	int n_ray_sources;
-	voxfilter_ray_source_t ray_sources[VOXFILTER_N_SCANS*N_SENSORS+1]; // Start collecting at index 1
-	voxfilter_point_t points[VOXFILTER_XS][VOXFILTER_YS][VOXFILTER_ZS];
-} voxfilter_t;
+	/*
+	if(cloud->m.n_srcs >= cloud->alloc_srcs)
+	{
+		cloud->alloc_srcs <<= 1;
+		cloud->srcs = realloc(cloud->srcs, cloud->alloc_srcs * sizeof (cloud_point_t));
+		assert(cloud->srcs);
+	}
+	*/
+
+	assert(cloud->m.n_srcs < CLOUD_MAX_SRCS);
+
+	cloud->srcs[cloud->m.n_srcs] = p;
+
+	return cloud->m.n_srcs++;
+}
+
+// Find existing (close enough) source. If suitable source is not found, a new source is added. Returns the source idx of the found or added source.
+// For now, linear search is used because the number of sources is fairly low, and there are usually thousands of points per source for which this is called once.
+// Never fails.
+ALWAYS_INLINE int cloud_find_source(cloud_t* cloud, cloud_point_t p)
+{
+	int_fast32_t closest = INT_FAST32_MAX;
+	int closest_i;
+	for(int i=0; i<cloud->m.n_srcs; i++)
+	{
+		int_fast32_t sqdist = sq(p.x - cloud->srcs[i].x) + sq(p.y - cloud->srcs[i].y) + sq(p.z - cloud->srcs[i].z);
+		if(sqdist < closest)
+		{
+			closest = sqdist;
+			closest_i = i;
+		}
+	}
+
+	if(closest <= sq(SOURCE_COMBINE_THRESHOLD))
+		return closest_i;
+
+	if(cloud->m.n_srcs == CLOUD_MAX_SRCS)
+	{
+		printf("WARNING: cloud_find_source(): cannot create new source, sources full, returning general no-source index\n");
+		return CLOUD_GENERAL_SRC;
+	}
+	else
+		return cloud_add_source(cloud, p);
+}
+
+// Add source(s) of in to the source list of out, not adding existing indeces
+ALWAYS_INLINE void point_add_src_idxs(cloud_point_t *out, cloud_point_t *in)
+{
+	assert(in->n_srcs <= POINT_MAX_SRCS);
+	assert(out->n_srcs <= POINT_MAX_SRCS);
+	for(int i=0; i<in->n_srcs; i++)
+	{
+		if(out->n_srcs >= POINT_MAX_SRCS)
+		{
+			// Source list is full, can't add
+			break;
+		}
+
+		// Find existing to see if adding is unnecessary
+		int o;
+		for(o=0; o<out->n_srcs; o++)
+		{
+			if(in->srcs[i] == out->srcs[o])
+				goto IDX_EXISTS;
+		}
+		assert(o == out->n_srcs);
+
+		// Add.
+		out->srcs[out->n_srcs++] = in->srcs[i];
+
+		IDX_EXISTS:;
+	}
+
+	assert(out->n_srcs <= POINT_MAX_SRCS);
+
+}
+
+#if 0
+ALWAYS_INLINE void cloud_sort_multisource(multisource_t* ms)
+{
+	for(int i=1; i<ms->n; i++)
+	{
+		uint8_t t = ms->idxs[i];
+		int j;
+		for(j=i; j > 0 && ms->idxs[j-1] > t; j--)
+			ms->idxs[j] = ms->idxs[j-1];
+		ms->idxs[j] = t;
+	}	
+}
+#endif
+
+ALWAYS_INLINE void cloud_add_point(cloud_t* cloud, cloud_point_t p)
+{
+	if(UNLIKELY(cloud->m.n_points >= cloud->alloc_points))
+	{
+		cloud->alloc_points <<= 1;
+		cloud->points = realloc(cloud->points, cloud->alloc_points * sizeof (cloud_point_t));
+		assert(cloud->points);
+	}
+
+	cloud->points[cloud->m.n_points++] = p;
+}
+
+// Allocates for multiple points at once. After calling this, you are free to call
+// cloud_fast_add_point for maximum number of cnt times.
+ALWAYS_INLINE void cloud_prepare_fast_add_points(cloud_t* cloud, int cnt)
+{
+	int change = 0;
+	while(cloud->m.n_points + cnt >= cloud->alloc_points)
+	{
+		cloud->alloc_points <<= 1;
+		change = 1;
+	}
+
+	if(change)
+	{
+		cloud->points = realloc(cloud->points, cloud->alloc_points * sizeof (cloud_point_t));
+		assert(cloud->points);
+	}
+}
+
+// No range checking, no allocation expansion:
+// Call cloud_prepare_fast_add_points() first with the maximum possible number of points you are going to add with this function.
+ALWAYS_INLINE void cloud_fast_add_point(cloud_t* cloud, cloud_point_t p)
+{
+	cloud->points[cloud->m.n_points++] = p;
+}
+
+
+ALWAYS_INLINE void cloud_add_pose(cloud_t* cloud, hw_pose_t p)
+{
+	if(cloud->m.n_poses >= cloud->alloc_poses)
+	{
+		cloud->alloc_poses <<= 1;
+		cloud->poses = realloc(cloud->poses, cloud->alloc_poses * sizeof (hw_pose_t));
+		assert(cloud->poses);
+	}
+
+	cloud->poses[cloud->m.n_poses++] = p;
+}
+
+ALWAYS_INLINE void cloud_add_freevect(cloud_t* cloud, freevect_point_t p)
+{
+	if(UNLIKELY(cloud->m.n_freevects >= cloud->alloc_freevects))
+	{
+		cloud->alloc_freevects <<= 1;
+		cloud->freevects = realloc(cloud->freevects, cloud->alloc_freevects * sizeof (freevect_point_t));
+		assert(cloud->freevects);
+	}
+
+	cloud->freevects[cloud->m.n_freevects++] = p;
+}
 
 
 #include "small_cloud.h"
@@ -113,34 +456,16 @@ int save_cloud(cloud_t* cloud, int idx);
 int load_cloud(cloud_t* cloud, int idx);
 void rotate_cloud(cloud_t* cloud, double yaw);
 void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw);
-void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl_y, int32_t transl_z);
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z);
 
-void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
-	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
-	 realtime_cloud_t* realtime, int rt_flag);
+void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x, int32_t ref_y, int32_t ref_z,
+	 int do_filter, cloud_t* cloud, int dist_ignore_threshold);
 
-void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud);
 
-ALWAYS_INLINE void cloud_insert_point(cloud_t* cloud, int16_t sx, int16_t sy, int16_t sz, int32_t px, int32_t py, int32_t pz)
-{
-	if(cloud->n_points >= MAX_POINTS)
-	{
-		printf("WARNING: Ignoring point, cloud full.\n");
-		return;
-	}
-	//assert(cloud->n_points >= 0);
+void cloud_copy_all_but_points(cloud_t* restrict out, cloud_t* restrict cloud);
+void freespace_filter_cloud(cloud_t* out, cloud_t* cloud);
 
-	cloud->points[cloud->n_points].sx = sx;
-	cloud->points[cloud->n_points].sy = sy;
-	cloud->points[cloud->n_points].sz = sz;
 
-	cloud->points[cloud->n_points].px = px;
-	cloud->points[cloud->n_points].py = py;
-	cloud->points[cloud->n_points].pz = pz;
-
-	cloud->n_points++;
-}
 
 //#include "../robotboard2-fw/tof_process.h" // for sensor_mount_t
 #if 1
@@ -176,3 +501,14 @@ void load_sensor_softcals();
 void transform_cloud(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw);
 void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw);
 
+// translates cloud in and its sources to the reference of out.
+// Tries to find matching sources in in, creates new sources if necessary, changes the source indeces.
+void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in);
+
+// ... but keep the allocations and meta fields
+void cloud_remove_points(cloud_t* cloud);
+void cloud_remove_points_keep_sources(cloud_t* cloud);
+
+
+int cloud_is_init(cloud_t* cloud);
+void cloud_print_sources(cloud_t* cloud, int analyze);

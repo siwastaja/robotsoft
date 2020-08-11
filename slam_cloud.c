@@ -15,14 +15,6 @@
 #include "voxmap.h"
 #include "voxmap_memdisk.h"
 
-
-
-/*
-	50 typical submaps = 
-	400MB, uncompressed
-	147MB, compressed at ZLIB_LEVEL=2
-*/
-
 #define COMPRESS_CLOUDS
 
 #ifdef COMPRESS_CLOUDS
@@ -32,6 +24,164 @@
 	#define ZLIB_LEVEL 2  // from 1 to 9, 9 = slowest but best compression
 #endif
 
+
+void init_cloud(cloud_t* cloud, int flags)
+{
+	cloud->m.n_srcs = 0;
+	cloud->m.n_points = 0;
+	cloud->m.n_poses = 0;
+	
+	if(flags & CLOUD_INIT_SMALL)
+	{
+//		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_SMALL;
+		cloud->alloc_points = INITIAL_POINTS_ALLOC_SMALL;
+		cloud->alloc_freevects = INITIAL_POINTS_ALLOC_SMALL;
+		cloud->alloc_poses = INITIAL_POSES_ALLOC_SMALL;
+	}
+	else
+	{
+//		cloud->alloc_srcs = INITIAL_SRCS_ALLOC_LARGE;
+		cloud->alloc_points = INITIAL_POINTS_ALLOC_LARGE;
+		cloud->alloc_freevects = INITIAL_POINTS_ALLOC_LARGE;
+		cloud->alloc_poses = INITIAL_POSES_ALLOC_LARGE;
+	}
+
+//	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
+//	assert(cloud->srcs);
+	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
+	assert(cloud->points);
+	cloud->freevects = malloc(cloud->alloc_freevects * sizeof (freevect_point_t));
+	assert(cloud->freevects);
+	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
+	assert(cloud->poses);
+}
+
+// You supply a pointer to an otherwise-uninitialized cloud, but you have
+// set the m.n_* fields. This function does the rest of the init: allocates for
+// this exact amount of space.
+void alloc_cloud(cloud_t* cloud)
+{
+//	cloud->alloc_srcs = cloud->m.n_srcs;
+	cloud->alloc_points = cloud->m.n_points;
+	cloud->alloc_poses = cloud->m.n_poses;
+
+//	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
+//	assert(cloud->srcs);
+	cloud->points = malloc(cloud->alloc_points * sizeof (cloud_point_t));
+	assert(cloud->points);
+	cloud->freevects = malloc(cloud->alloc_freevects * sizeof (freevect_point_t));
+	assert(cloud->freevects);
+	cloud->poses = malloc(cloud->alloc_poses * sizeof (hw_pose_t));
+	assert(cloud->poses);
+}
+
+
+// translates cloud in and its sources to the reference of out.
+// Tries to find matching sources in in, creates new sources if necessary, changes the source indeces.
+void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in)
+{
+	uint8_t* src_transl = calloc(in->m.n_srcs, sizeof (uint8_t));
+	assert(src_transl);
+
+	int64_t tx = in->m.ref_x - out->m.ref_x;
+	int64_t ty = in->m.ref_y - out->m.ref_y;
+	int64_t tz = in->m.ref_z - out->m.ref_z;
+	assert(tx > -10000 && tx < 10000);
+	assert(ty > -10000 && ty < 10000);
+	assert(tz > -10000 && tz < 10000);
+
+	for(int i=0; i<in->m.n_srcs; i++)
+	{
+		int newsrc = cloud_find_source(out, CL_P(in->srcs[i].x+tx, in->srcs[i].y+ty, in->srcs[i].z+tz));
+		src_transl[i] = newsrc;
+		printf("cat_cloud: translating in source %d to out source %d\n", i, newsrc);
+	}
+
+	cloud_prepare_fast_add_points(out, in->m.n_points);
+	for(int i=0; i<in->m.n_points; i++)
+	{
+		cloud_point_t newpoint = in->points[i];
+		for(int i=0; i<newpoint.n_srcs; i++)
+		{
+			newpoint.srcs[i] = src_transl[newpoint.srcs[i]];
+			assert(newpoint.srcs[i] < out->m.n_srcs);
+		}
+
+		newpoint.x += tx;
+		newpoint.y += ty;
+		newpoint.z += tz;
+
+		cloud_fast_add_point(out, newpoint);
+	}
+	printf("cat_cloud: added %d points translated by (%d,%d,%d)\n", in->m.n_points, (int)tx, (int)ty, (int)tz);
+	free(src_transl);
+}
+
+// ... but keep the allocations and other meta fields
+void cloud_remove_points(cloud_t* cloud)
+{
+	cloud->m.n_srcs = 0;
+	cloud->m.n_points = 0;
+	cloud->m.n_freevects = 0;
+	cloud->m.n_poses = 0;
+}
+
+void cloud_remove_points_keep_sources(cloud_t* cloud)
+{
+	cloud->m.n_points = 0;
+}
+
+int cloud_is_init(cloud_t* cloud)
+{
+	return (cloud->points != NULL);
+}
+
+void cloud_print_sources(cloud_t* cloud, int analyze)
+{
+	int cnt_srcs[256] = {0};
+
+	if(analyze)
+	{
+		for(int p=0; p<cloud->m.n_points; p++)
+		{
+			for(int i=0; i<cloud->points[p].n_srcs; i++)
+				cnt_srcs[cloud->points[p].srcs[i]]++;
+		}
+	}
+
+	printf("SOURCES [n=%d]:\n", cloud->m.n_srcs);
+	for(int i=0; i<cloud->m.n_srcs; i++)
+	{
+		printf("   %3d: (%+06d,%+06d,%+06d)", i, cloud->srcs[i].x*CLOUD_MM,cloud->srcs[i].y*CLOUD_MM,cloud->srcs[i].z*CLOUD_MM);
+
+		if(analyze)
+			printf("   COUNT = %4d\n", cnt_srcs[i]);
+		else
+			printf("\n");
+	}
+}
+
+void free_cloud(cloud_t* cloud)
+{
+//	free(cloud->srcs);
+	free(cloud->points);
+	free(cloud->poses);
+
+//	cloud->srcs = NULL;
+	cloud->points = NULL;
+	cloud->poses = NULL;
+
+	memset(&cloud->m, 0, sizeof cloud->m);
+}
+
+
+// Format: 
+// cloud->m header as is (inludes number of srcs, points and poses)
+// Optionally, rest is ZLIB compressed:
+// srcs
+// points
+// poses
+
 int save_cloud(cloud_t* cloud, int idx)
 {
 	char fname[1024];
@@ -39,8 +189,7 @@ int save_cloud(cloud_t* cloud, int idx)
 	FILE* f = fopen(fname, "wb");
 	assert(f);
 
-	uint32_t n_points = cloud->n_points;
-	assert(fwrite(&n_points, sizeof(uint32_t), 1, f) == 1);
+	assert(fwrite(&cloud->m, sizeof cloud->m, 1, f) == 1);
 
 	#ifdef COMPRESS_CLOUDS
 		uint8_t outbuf[ZLIB_CHUNK];
@@ -53,7 +202,30 @@ int save_cloud(cloud_t* cloud, int idx)
 			printf("ERROR: ZLIB initialization failed\n");
 			abort();
 		}
-		strm.avail_in = n_points*sizeof(cloud_point_t);
+
+		strm.avail_in = cloud->m.n_srcs*sizeof *cloud->srcs;
+		strm.next_in = (uint8_t*)cloud->srcs;
+
+		do
+		{
+			strm.avail_out = ZLIB_CHUNK;
+			strm.next_out = outbuf;
+
+			int ret = deflate(&strm, Z_FINISH);
+			assert(ret != Z_STREAM_ERROR);
+
+			int produced = ZLIB_CHUNK - strm.avail_out;
+
+			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
+			{
+				printf("ERROR: fwrite failed\n");
+				abort();
+			}
+		} while(strm.avail_out == 0);
+
+		assert(strm.avail_in == 0);
+
+		strm.avail_in = cloud->m.n_points * sizeof *cloud->points;
 		strm.next_in = (uint8_t*)cloud->points;
 
 		do
@@ -75,10 +247,36 @@ int save_cloud(cloud_t* cloud, int idx)
 
 		assert(strm.avail_in == 0);
 
+		strm.avail_in = cloud->m.n_poses * sizeof *cloud->poses;
+		strm.next_in = (uint8_t*)cloud->poses;
+
+		do
+		{
+			strm.avail_out = ZLIB_CHUNK;
+			strm.next_out = outbuf;
+
+			int ret = deflate(&strm, Z_FINISH);
+			assert(ret != Z_STREAM_ERROR);
+
+			int produced = ZLIB_CHUNK - strm.avail_out;
+
+			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
+			{
+				printf("ERROR: fwrite failed\n");
+				abort();
+			}
+		} while(strm.avail_out == 0);
+
+		assert(strm.avail_in == 0);
+
+
 		deflateEnd(&strm);
 
 	#else
-		assert(fwrite(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
+		// untested code:
+		assert(fwrite(cloud->srcs, sizeof *cloud->srcs[0], cloud->m.n_srcs, f) == cloud->m.n_srcs);
+		assert(fwrite(cloud->points, sizeof *cloud->points[0], cloud->m.n_points, f) == cloud->m.n_points);
+		assert(fwrite(cloud->poses, sizeof *cloud->poses[0], cloud->m.n_poses, f) == cloud->m.n_poses);
 	#endif
 
 	fclose(f);
@@ -92,9 +290,9 @@ int load_cloud(cloud_t* cloud, int idx)
 	FILE* f = fopen(fname, "rb");
 	assert(f);
 
-	uint32_t n_points = 0;
-	assert(fread(&n_points, sizeof(uint32_t), 1, f) == 1);
-	cloud->n_points = n_points;
+	assert(fread(&cloud->m, sizeof cloud->m, 1, f) == 1);
+
+	alloc_cloud(cloud);
 
 	#ifdef COMPRESS_CLOUDS
 		uint8_t inbuf[ZLIB_CHUNK];
@@ -112,8 +310,48 @@ int load_cloud(cloud_t* cloud, int idx)
 		}
 
 		int got_bytes = 0;
-		int bytes_left = n_points*sizeof(cloud_point_t);
+		int bytes_left = cloud->m.n_srcs*sizeof cloud->srcs[0];
 		int ret = 0;
+		do
+		{
+			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
+			if(ferror(f))
+			{
+				printf("ERROR reading submap input file\n");
+				abort();
+			}
+			if(strm.avail_in == 0)
+				break;
+
+			strm.next_in = inbuf;
+			do
+			{
+				strm.avail_out = bytes_left;
+				strm.next_out = (uint8_t*)cloud->srcs + got_bytes;
+
+				ret = inflate(&strm, Z_FINISH);
+				assert(ret != Z_STREAM_ERROR);
+
+				switch(ret)
+				{
+					case Z_NEED_DICT:
+					case Z_DATA_ERROR:
+					case Z_MEM_ERROR:
+					{
+						printf("ERROR: submap file decompression error, inflate() returned %d\n", ret);
+						abort();
+					}
+					default: break;
+				}
+
+				got_bytes += bytes_left - strm.avail_out;
+
+			} while(strm.avail_out == 0);
+		} while(ret != Z_STREAM_END);
+
+		got_bytes = 0;
+		bytes_left = cloud->m.n_points*sizeof cloud->points[0];
+		ret = 0;
 		do
 		{
 			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
@@ -151,118 +389,57 @@ int load_cloud(cloud_t* cloud, int idx)
 			} while(strm.avail_out == 0);
 		} while(ret != Z_STREAM_END);
 
+		got_bytes = 0;
+		bytes_left = cloud->m.n_poses*sizeof cloud->poses[0];
+		ret = 0;
+		do
+		{
+			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
+			if(ferror(f))
+			{
+				printf("ERROR reading submap input file\n");
+				abort();
+			}
+			if(strm.avail_in == 0)
+				break;
+
+			strm.next_in = inbuf;
+			do
+			{
+				strm.avail_out = bytes_left;
+				strm.next_out = (uint8_t*)cloud->poses + got_bytes;
+
+				ret = inflate(&strm, Z_FINISH);
+				assert(ret != Z_STREAM_ERROR);
+
+				switch(ret)
+				{
+					case Z_NEED_DICT:
+					case Z_DATA_ERROR:
+					case Z_MEM_ERROR:
+					{
+						printf("ERROR: submap file decompression error, inflate() returned %d\n", ret);
+						abort();
+					}
+					default: break;
+				}
+
+				got_bytes += bytes_left - strm.avail_out;
+
+			} while(strm.avail_out == 0);
+		} while(ret != Z_STREAM_END);
+
+
 		inflateEnd(&strm);
 	#else
-		assert(fread(cloud->points, sizeof(cloud_point_t), n_points, f) == n_points);
+		// untested code
+		assert(fread(cloud->srcs, sizeof *cloud->srcs[0], cloud->m.n_srcs, f) == cloud->m.n_srcs);
+		assert(fread(cloud->points, sizeof *cloud->points[0], cloud->m.n_points, f) == cloud->m.n_points);
+		assert(fread(cloud->poses, sizeof *cloud->poses[0], cloud->m.n_poses, f) == cloud->m.n_poses);
 	#endif
 
 	fclose(f);
 	return 0;
-}
-
-#if 1
-// These DO NOT transform the ray sources
-void transform_cloud(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
-{
-	double cosa = cos(yaw);
-	double sina = sin(yaw);
-
-	for(int p=0; p<cloud->n_points; p++)
-	{
-		double x_in = cloud->points[p].px;
-		double y_in = cloud->points[p].py;
-		double z_in = cloud->points[p].pz;
-
-		double x = x_in*cosa - y_in*sina + transl_x;
-		double y = x_in*sina + y_in*cosa + transl_y;
-		double z = z_in + transl_z;
-
-		cloud->points[p].px = x;
-		cloud->points[p].py = y;
-		cloud->points[p].pz = z;
-	}
-}
-
-void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw)
-{
-	double cosa = cos(yaw);
-	double sina = sin(yaw);
-
-	cloud_out->n_points = cloud_in->n_points;
-	for(int p=0; p<cloud_in->n_points; p++)
-	{
-		double x_in = cloud_in->points[p].px;
-		double y_in = cloud_in->points[p].py;
-		double z_in = cloud_in->points[p].pz;
-
-		double x = x_in*cosa - y_in*sina + transl_x;
-		double y = x_in*sina + y_in*cosa + transl_y;
-		double z = z_in + transl_z;
-
-		cloud_out->points[p].px = x;
-		cloud_out->points[p].py = y;
-		cloud_out->points[p].pz = z;
-	}
-}
-#endif
-
-void rotate_cloud(cloud_t* cloud, double yaw)
-{
-	double cosa = cos(yaw);
-	double sina = sin(yaw);
-
-	for(int p=0; p<cloud->n_points; p++)
-	{
-		double px_in = cloud->points[p].px;
-		double py_in = cloud->points[p].py;
-
-		double px = px_in*cosa - py_in*sina;
-		double py = px_in*sina + py_in*cosa;
-
-		cloud->points[p].px = px;
-		cloud->points[p].py = py;
-
-		double sx_in = cloud->points[p].sx;
-		double sy_in = cloud->points[p].sy;
-
-		double sx = sx_in*cosa - sy_in*sina;
-		double sy = sx_in*sina + sy_in*cosa;
-
-		cloud->points[p].sx = sx;
-		cloud->points[p].sy = sy;
-
-	}
-}
-
-void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw)
-{
-	double cosa = cos(yaw);
-	double sina = sin(yaw);
-
-	for(int p=0; p<cloud->n_points; p++)
-	{
-		double px_in = cloud->points[p].px;
-		double py_in = cloud->points[p].py;
-
-		double px = px_in*cosa - py_in*sina;
-		double py = px_in*sina + py_in*cosa;
-
-		out->points[p].px = px;
-		out->points[p].py = py;
-		out->points[p].pz = cloud->points[p].pz;
-
-		double sx_in = cloud->points[p].sx;
-		double sy_in = cloud->points[p].sy;
-
-		double sx = sx_in*cosa - sy_in*sina;
-		double sy = sx_in*sina + sy_in*cosa;
-
-		out->points[p].sx = sx;
-		out->points[p].sy = sy;
-		out->points[p].sz = cloud->points[p].sz;
-
-	}
-	out->n_points = cloud->n_points;
 }
 
 
@@ -276,36 +453,69 @@ void rotate_cloud_copy(cloud_t* cloud, cloud_t* out, double yaw)
 #define CLOUDFLT_XS 448
 #define CLOUDFLT_YS 448
 #define CLOUDFLT_ZS 96
-#define CLOUDFLT_UNIT 64 //mm
+#define CLOUDFLT_UNIT (64/*mm*/ / CLOUD_MM)
 
-static uint8_t free_cnt[CLOUDFLT_XS][CLOUDFLT_YS][CLOUDFLT_ZS];
+#define MAX_OCCU_CNT 15
+#define MAX_FREE_CNT 15
+
+typedef struct __attribute__((packed))
+{
+	uint8_t free_cnt : 4;
+	uint8_t occu_cnt : 4;
+} flt_vox_t;
+
+static flt_vox_t flt_voxes[CLOUDFLT_XS][CLOUDFLT_YS][CLOUDFLT_ZS];
 
 
 
-#define UNCERT_Z 2
-#define UNCERT 2
+#define UNCERT_Z 1
+#define UNCERT 1
 #define LINE_CONE_SLOPE_XY 1500
 #define LINE_CONE_SLOPE_Z  2000
 
-static inline void output_voxel_cloudflt(int x, int y, int z)
+ALWAYS_INLINE void output_free_voxel(int x, int y, int z)
 {
-//	assert(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1);
-
 	if(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1)
-		if(free_cnt[x][y][z] < 255)
-			free_cnt[x][y][z]++;
+		if(flt_voxes[x][y][z].free_cnt < MAX_FREE_CNT)
+			flt_voxes[x][y][z].free_cnt++;
 
-//	if(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1)
-//		free_cnt[x][y][z] = 1;
 }
 
-static inline uint8_t get_voxel_cloudflt(int x, int y, int z)
+ALWAYS_INLINE void output_occu_voxel(int x, int y, int z)
 {
-//	assert(x >= 0 && x < CLOUDFLT_XS && y >= 0 && y < CLOUDFLT_YS && z > 0 && z <= CLOUDFLT_ZS);
+	if(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1)
+		if(flt_voxes[x][y][z].occu_cnt < MAX_FREE_CNT)
+			flt_voxes[x][y][z].occu_cnt++;
+
+}
+
+ALWAYS_INLINE void output_n_occu_voxel(int x, int y, int z, int n)
+{
+	if(x >= 1 && x < CLOUDFLT_XS-1 && y >= 1 && y < CLOUDFLT_YS-1 && z > 1 && z <= CLOUDFLT_ZS-1)
+	{
+		if(flt_voxes[x][y][z].occu_cnt + n >= MAX_OCCU_CNT)
+			flt_voxes[x][y][z].occu_cnt = MAX_OCCU_CNT;
+		else
+			flt_voxes[x][y][z].occu_cnt+= n;
+	}
+
+}
+
+
+static inline uint8_t get_voxel_free(int x, int y, int z)
+{
 	if(! (x >= 0 && x < CLOUDFLT_XS && y >= 0 && y < CLOUDFLT_YS && z > 0 && z <= CLOUDFLT_ZS))
 		return 0;
 
-	return free_cnt[x][y][z];
+	return flt_voxes[x][y][z].free_cnt;
+}
+
+static inline uint8_t get_voxel_occu(int x, int y, int z)
+{
+	if(! (x >= 0 && x < CLOUDFLT_XS && y >= 0 && y < CLOUDFLT_YS && z > 0 && z <= CLOUDFLT_ZS))
+		return 0;
+
+	return flt_voxes[x][y][z].occu_cnt;
 }
 
 static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
@@ -345,7 +555,7 @@ static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 				int ix=0;
 				for(int iz=-rangez; iz<=rangez; iz++)
 				{
-					output_voxel_cloudflt(px+ix, py+iy, pz+iz);
+					output_free_voxel(px+ix, py+iy, pz+iz);
 				}
 			}
 
@@ -381,7 +591,7 @@ static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 			{
 				for(int iz=-rangez; iz<=rangez; iz++)
 				{
-					output_voxel_cloudflt(px+ix, py+iy, pz+iz);
+					output_free_voxel(px+ix, py+iy, pz+iz);
 				}
 			}
 
@@ -417,7 +627,7 @@ static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 				for(int ix=-rangexy; ix<=rangexy; ix++)
 				{
 					int iz=0;
-					output_voxel_cloudflt(px+ix, py+iy, pz+iz);
+					output_free_voxel(px+ix, py+iy, pz+iz);
 				}
 			}
 
@@ -439,7 +649,7 @@ static void bresenham3d_cloudflt(int x1, int y1, int z1, int x2, int y2, int z2)
 }
 
 /*
-free_cnt is a voxel map where value >0 means that this voxel has been seen empty
+flt_voxes is a voxel map where value >0 means that this voxel has been seen empty
 de-edging makes continuous volume smaller by eating the edges by one voxel
 Without this, sensor noise causes loss of real structures. Consider the example of floor, seen sideways
 
@@ -479,8 +689,9 @@ Without this, sensor noise causes loss of real structures. Consider the example 
 */ 
 // if defined, de-edges 2 blocks wide instead of just 1
 //#define DE_EDGE_2
+#define DONT_DE_EDGE_FROM_ABOVE
 
-static void de_edge_free_cnt()
+static void de_edge_flt_voxes()
 {
 	// along z axis, up and down
 	for(int iy=0; iy < CLOUDFLT_YS; iy++)
@@ -489,29 +700,31 @@ static void de_edge_free_cnt()
 		{
 			for(int iz=2; iz < CLOUDFLT_ZS-1; iz++)
 			{
-				if(!free_cnt[ix][iy][iz-2] && !free_cnt[ix][iy][iz-1] && free_cnt[ix][iy][iz])
+				if(!flt_voxes[ix][iy][iz-2].free_cnt && !flt_voxes[ix][iy][iz-1].free_cnt && flt_voxes[ix][iy][iz].free_cnt)
 				{
-					free_cnt[ix][iy][iz] = 0;
+					flt_voxes[ix][iy][iz].free_cnt = 0;
 					#ifdef DE_EDGE_2
-					free_cnt[ix][iy][iz+1] = 0;
+					flt_voxes[ix][iy][iz+1].free_cnt = 0;
 					iz++;
 					#endif
 					iz+=2; // skip so that the point we just removed does not cause continuous removal of everything
 				}
 			}
 
-			for(int iz=CLOUDFLT_ZS-2-1; iz >= 1; iz--)
-			{
-				if(!free_cnt[ix][iy][iz+2] && !free_cnt[ix][iy][iz+1] && free_cnt[ix][iy][iz])
+			#ifndef DONT_DE_EDGE_FROM_ABOVE
+				for(int iz=CLOUDFLT_ZS-2-1; iz >= 1; iz--)
 				{
-					free_cnt[ix][iy][iz] = 0;
-					#ifdef DE_EDGE_2
-					free_cnt[ix][iy][iz-1] = 0;
-					iz--;
-					#endif
-					iz-=2;
+					if(!flt_voxes[ix][iy][iz+2].free_cnt && !flt_voxes[ix][iy][iz+1].free_cnt && flt_voxes[ix][iy][iz].free_cnt)
+					{
+						flt_voxes[ix][iy][iz].free_cnt = 0;
+						#ifdef DE_EDGE_2
+						flt_voxes[ix][iy][iz-1].free_cnt = 0;
+						iz--;
+						#endif
+						iz-=2;
+					}
 				}
-			}
+			#endif
 
 		}
 	}
@@ -523,11 +736,11 @@ static void de_edge_free_cnt()
 		{
 			for(int ix=2; ix < CLOUDFLT_XS-1; ix++)
 			{
-				if(!free_cnt[ix-2][iy][iz] && !free_cnt[ix-1][iy][iz] && free_cnt[ix][iy][iz])
+				if(!flt_voxes[ix-2][iy][iz].free_cnt && !flt_voxes[ix-1][iy][iz].free_cnt && flt_voxes[ix][iy][iz].free_cnt)
 				{
-					free_cnt[ix][iy][iz] = 0;
+					flt_voxes[ix][iy][iz].free_cnt = 0;
 					#ifdef DE_EDGE_2
-					free_cnt[ix+1][iy][iz] = 0;
+					flt_voxes[ix+1][iy][iz].free_cnt = 0;
 					ix++;
 					#endif
 					ix+=3;
@@ -536,11 +749,11 @@ static void de_edge_free_cnt()
 
 			for(int ix=CLOUDFLT_XS-2-1; ix >= 1; ix--)
 			{
-				if(!free_cnt[ix+2][iy][iz] && !free_cnt[ix+1][iy][iz] && free_cnt[ix][iy][iz])
+				if(!flt_voxes[ix+2][iy][iz].free_cnt && !flt_voxes[ix+1][iy][iz].free_cnt && flt_voxes[ix][iy][iz].free_cnt)
 				{
-					free_cnt[ix][iy][iz] = 0;
+					flt_voxes[ix][iy][iz].free_cnt = 0;
 					#ifdef DE_EDGE_2
-					free_cnt[ix-1][iy][iz] = 0;
+					flt_voxes[ix-1][iy][iz].free_cnt = 0;
 					ix--;
 					#endif
 					ix-=3;
@@ -557,11 +770,11 @@ static void de_edge_free_cnt()
 		{
 			for(int iy=2; iy < CLOUDFLT_YS-1; iy++)
 			{
-				if(!free_cnt[ix][iy-2][iz] && !free_cnt[ix][iy-1][iz] && free_cnt[ix][iy][iz])
+				if(!flt_voxes[ix][iy-2][iz].free_cnt && !flt_voxes[ix][iy-1][iz].free_cnt && flt_voxes[ix][iy][iz].free_cnt)
 				{
-					free_cnt[ix][iy][iz] = 0;
+					flt_voxes[ix][iy][iz].free_cnt = 0;
 					#ifdef DE_EDGE_2
-					free_cnt[ix][iy+1][iz] = 0;
+					flt_voxes[ix][iy+1][iz].free_cnt = 0;
 					iy++;
 					#endif
 					iy+=3; // skip so that the point we just removed does not cause continuous removal of everything
@@ -570,11 +783,11 @@ static void de_edge_free_cnt()
 
 			for(int iy=CLOUDFLT_YS-2-1; iy >= 1; iy--)
 			{
-				if(!free_cnt[ix][iy+2][iz] && !free_cnt[ix][iy+1][iz] && free_cnt[ix][iy][iz])
+				if(!flt_voxes[ix][iy+2][iz].free_cnt && !flt_voxes[ix][iy+1][iz].free_cnt && flt_voxes[ix][iy][iz].free_cnt)
 				{
-					free_cnt[ix][iy][iz] = 0;
+					flt_voxes[ix][iy][iz].free_cnt = 0;
 					#ifdef DE_EDGE_2
-					free_cnt[ix][iy-1][iz] = 0;
+					flt_voxes[ix][iy-1][iz].free_cnt = 0;
 					iy--;
 					#endif
 					iy-=3;
@@ -587,95 +800,156 @@ static void de_edge_free_cnt()
 
 }
 
-void filter_cloud(cloud_t* cloud, cloud_t* out, int32_t transl_x, int32_t transl_y, int32_t transl_z)
+static void flt_vox_midfree()
+{
+	// along z axis, up and down
+	for(int iy=0; iy < CLOUDFLT_YS; iy++)
+	{
+		for(int ix=0; ix < CLOUDFLT_XS; ix++)
+		{
+			int strong_occupied_start = -1;
+			for(int iz=0; iz < CLOUDFLT_ZS-1; iz++) // coming from below...
+			{
+				if( (((int)flt_voxes[ix][iy][iz].occu_cnt+(int)flt_voxes[ix][iy][iz+1].occu_cnt) >= 8))//  &&
+				    //((flt_voxes[ix][iy][iz].free_cnt+flt_voxes[ix][iy][iz+1].free_cnt) <= 0)) // strong case of "occupied" not free, found
+				{
+					// test code to delete everything above first appearance of such case:
+					//for(int i=iz+2; i<CLOUDFLT_ZS; i++)
+					//	flt_voxes[ix][iy][i].free_cnt = 1;
+
+					strong_occupied_start = iz;
+					continue;
+				}
+
+				// test code to delete everything above first appearance and disappearance of such case:
+/*
+				if(strong_occupied_start > -1)
+				{
+					for(int i=iz+2; i<CLOUDFLT_ZS; i++)
+						flt_voxes[ix][iy][i].free_cnt = 1;
+
+				}
+*/
+
+				if(strong_occupied_start > -1 && flt_voxes[ix][iy][iz].free_cnt >= 1) // "free" also found
+				{
+					// test code to delete everything above first appearance and disappearane, if free is also found
+
+					/*
+					for(int i=strong_occupied_start+2; i<CLOUDFLT_ZS; i++)
+					{
+						flt_voxes[ix][iy][i].free_cnt = 1;
+						iz = 999;
+					}
+					*/
+
+					int strong_occupied_end = iz;
+
+					// Look for another free, until last free is found. Any strong occupied stops the process.
+					for(int i=strong_occupied_end; i<CLOUDFLT_ZS-1; i++)
+					{
+						if(flt_voxes[ix][iy][i].free_cnt >= 1)
+						{
+							strong_occupied_end = i;
+						}
+
+						if((((int)flt_voxes[ix][iy][i].occu_cnt+(int)flt_voxes[ix][iy][i+1].occu_cnt) >= 8))
+						{
+							break;
+						}
+					}
+
+					for(int i=strong_occupied_start+2; i<strong_occupied_end; i++)
+						flt_voxes[ix][iy][i].free_cnt = 1; // assume everything inbetween free.
+
+					strong_occupied_start = -1; // continue looking for more
+				}
+
+			}
+		}
+	}
+
+}
+
+void cloud_copy_all_but_points(cloud_t* restrict out, cloud_t* restrict cloud)
+{
+	out->m = cloud->m;
+	out->m.n_points = 0;
+	memcpy(out->srcs, cloud->srcs, sizeof out->srcs);
+}
+
+
+void freespace_filter_cloud(cloud_t* restrict out, cloud_t* restrict cloud)
 {
 //	printf("filter_cloud ref (%d, %d, %d)\n", ref_x, ref_y, ref_z);
-	memset(free_cnt, 0, sizeof(free_cnt));
-
-	// Trace empty space:
-	for(int p=0; p<cloud->n_points; p++)
+	memset(flt_voxes, 0, sizeof(flt_voxes));
+	// Trace empty space to points:
+	for(int p=0; p<cloud->m.n_points; p++)
 	{
-		int sx = (cloud->points[p].sx + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int sy = (cloud->points[p].sy + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int sz = (cloud->points[p].sz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+		int px = cloud->points[p].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = cloud->points[p].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = cloud->points[p].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
-		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+		for(int s=0; s<cloud->points[p].n_srcs; s++)
+		{
+			int sx = cloud->srcs[ cloud->points[p].srcs[s] ].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+			int sy = cloud->srcs[ cloud->points[p].srcs[s] ].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+			int sz = cloud->srcs[ cloud->points[p].srcs[s] ].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
 
-		//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
+			//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
+			bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
+		}
+
+		// If the point is seen from many sources, it's a strong (persistent) point. Add more count.
+		output_n_occu_voxel(px,py,pz,cloud->points[p].n_srcs);
+	}
+
+	// Trace empty space with freevects:
+
+	printf("FILTER: n_freevects = %d\n", cloud->m.n_freevects);
+	for(int p=0; p<cloud->m.n_freevects; p++)
+	{
+		int px = cloud->freevects[p].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = cloud->freevects[p].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = cloud->freevects[p].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
+		int sx = cloud->srcs[cloud->freevects[p].src].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int sy = cloud->srcs[cloud->freevects[p].src].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int sz = cloud->srcs[cloud->freevects[p].src].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
 		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
 	}
 
-	de_edge_free_cnt();
-	out->n_points = 0;
-	int n_p = 0;
-	// Remove points at empty space by only outputting points where there is no free voxel.
-	for(int p=0; p<cloud->n_points; p++)
-	{
-		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+	de_edge_flt_voxes();
+	
+	// Whenever we have a strong case of free voxel, and a strong case of occupied voxel some distance below or above it, assume
+	// everything inbetween as free.
 
-		int val = get_voxel_cloudflt(px, py, pz);
-		if(val < 10)
+	flt_vox_midfree();
+
+	cloud_copy_all_but_points(out, cloud);
+	// The number of points out is typically close to the number of points in. Allocate for full number.
+	cloud_prepare_fast_add_points(out, cloud->m.n_points);
+
+	// Remove points at empty space by only outputting points where there is no free voxel.
+	for(int p=0; p<cloud->m.n_points; p++)
+	{
+		int px = cloud->points[p].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
+		int py = cloud->points[p].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
+		int pz = cloud->points[p].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
+
+		if(get_voxel_free(px, py, pz) < 1)
+//		if(get_voxel_occu(px,py,pz) >= 5)
 		{
-			out->points[n_p] = TRANSLATE_CLOUD_POINT(cloud->points[p], transl_x, transl_y, transl_z);
-			n_p++;
+			cloud_fast_add_point(out, cloud->points[p]);
 		}
 			
 	}
-	out->n_points = n_p;
-
 }
-
-/*
-	Use the same free space buffer as filter_cloud, but only generate said buffer; don't output any points.
-*/
-void generate_cloudflt_free(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z)
-{
-//	printf("filter_cloud ref (%d, %d, %d)\n", ref_x, ref_y, ref_z);
-	memset(free_cnt, 0, sizeof(free_cnt));
-
-	// Trace empty space:
-	for(int p=0; p<cloud->n_points; p++)
-	{
-		int sx = (cloud->points[p].sx + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int sy = (cloud->points[p].sy + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int sz = (cloud->points[p].sz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
-
-		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
-
-		//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
-		bresenham3d_cloudflt(sx, sy, sz, px, py, pz);
-	}
-
-	// Remove free space next to the points
-	for(int p=0; p<cloud->n_points; p++)
-	{
-		int px = (cloud->points[p].px + transl_x)/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
-		int py = (cloud->points[p].py + transl_y)/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
-		int pz = (cloud->points[p].pz + transl_z)/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
-
-		//printf("p=%d, (%d,%d,%d)->(%d,%d,%d)\n", sx,sy,sz, px,py,pz);
-
-		if(px >= 2 && px < CLOUDFLT_XS-2 &&
-		   py >= 2 && py < CLOUDFLT_YS-2 &&
-		   pz >= 2 && pz < CLOUDFLT_ZS-2)
-		{
-			for(int ix=-2; ix<=+2; ix++)
-				for(int iy=-2; iy<=+2; iy++)
-					for(int iz=-2; iz<=+2; iz++)
-						free_cnt[px+ix][py+iy][pz+iz] = 0;
-		}
-	}
-
-}
-
 
 //#define CLOUD_TO_VOXMAP_TRACE_FREE
+
+#if 0
 void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 {
 	printf("cloud_to_voxmap .."); fflush(stdout);
@@ -685,7 +959,7 @@ void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 		printf(" generated free .."); fflush(stdout);
 
 	#endif
-	for(int i=0; i<cloud->n_points; i++)
+	for(int i=0; i<cloud->m.n_points; i++)
 	{
 		for(int rl=0; rl<MAX_RESOLEVELS; rl++)
 		{
@@ -780,479 +1054,12 @@ void cloud_to_voxmap(cloud_t* cloud, int ref_x, int ref_y, int ref_z)
 
 	printf(" done\n");
 }
-
-
-
-void voxfilter_to_cloud(voxfilter_t* voxfilter, cloud_t* cloud)
-{
-	int insert_cnt = 0, uniq_insert_cnt = 0;
-	for(int xx=0; xx<VOXFILTER_XS; xx++)
-	{
-		for(int yy=0; yy<VOXFILTER_YS; yy++)
-		{
-			for(int zz=0; zz<VOXFILTER_ZS; zz++)
-			{
-				voxfilter_point_t* p = &(voxfilter->points[xx][yy][zz]);
-
-				if(p->cnt == 0)
-				{
-					continue;
-				}
-
-				int32_t x = p->x / p->cnt;
-				int32_t y = p->y / p->cnt;
-				int32_t z = p->z / p->cnt;
-
-				// Insert the same point for each source
-				// (Point cloud datatype doesn't have another mean to express
-				// that multiple sources see the same point)
-
-				for(int i=0; i<VOXFILTER_MAX_RAY_SOURCES; i++)
-				{
-					if(p->src_idxs[i] == 0)
-						break;
-
-					assert(p->src_idxs[i] > 0 && p->src_idxs[i] <= voxfilter->n_ray_sources);
-
-					cloud_insert_point(cloud, 
-						voxfilter->ray_sources[p->src_idxs[i]].x, 
-						voxfilter->ray_sources[p->src_idxs[i]].y,
-						voxfilter->ray_sources[p->src_idxs[i]].z, 
-						x, y, z);
-					insert_cnt++;
-				}
-				uniq_insert_cnt++;
-			}
-		}
-	}
-
-	//printf("INFO: voxfilter_to_cloud inserted %d points, %d of which are duplicates due to multiple sources\n", insert_cnt, insert_cnt-uniq_insert_cnt);
-}
-
-
-ALWAYS_INLINE void voxfilter_insert_point(cloud_t* cloud, voxfilter_t* voxfilter, int srcid, 
-	int32_t sx, int32_t sy, int32_t sz, // source coordinates are only used when the point cannot go to voxfilter; otherwise, srcid is stored
-	int32_t x, int32_t y, int32_t z, // the point
-	int32_t ref_x, int32_t ref_y, int32_t ref_z) // Extra translation, so that the voxfilter can live in its own limited space instead of the larger submap span.
-	// Because only voxel selection is translated, not the actual stored coordinates (they fit int32_t accumulation variables just fine),
-	// there is no need to translate points back later, basically we just store at a certain offset to maximize the span.
-{
-	int vox_x = (x+ref_x)/VOXFILTER_STEP + VOXFILTER_XS/2;
-	int vox_y = (y+ref_y)/VOXFILTER_STEP + VOXFILTER_YS/2;
-	int vox_z = (z+ref_z)/VOXFILTER_STEP + VOXFILTER_ZS/2;
-
-	assert(srcid > 0 && srcid <= voxfilter->n_ray_sources);
-
-	if(vox_x < 0 || vox_x > VOXFILTER_XS-1 || vox_y < 0 || vox_y > VOXFILTER_YS-1 || vox_z < 0 || vox_z > VOXFILTER_ZS-1)
-	{
-//		printf("INFO: voxfilter: skipping OOR point %d, %d, %d\n", vox_x, vox_y, vox_z);
-		cloud_insert_point(cloud, sx, sy, sz, x, y, z);
-		return;
-	}
-
-	// If the source index doesn't exist on this voxel, add it.
-
-	for(int i = 0; i < VOXFILTER_MAX_RAY_SOURCES; i++)
-	{
-		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == srcid)
-			goto SOURCE_EXISTS;
-
-		if(voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] == 0)
-		{
-			// Zero terminator found: did not find the srcid, and this is a suitable place for adding it.
-			voxfilter->points[vox_x][vox_y][vox_z].src_idxs[i] = srcid;
-			goto SOURCE_EXISTS; // now it's there
-		}
-	}
-
-	//printf("WARN: voxfilter - no space left to add source, skipping filter\n");
-	// Did not find the source, nor had space to add it. Just insert the point to the cloud, bypassing the filter.	
-	cloud_insert_point(cloud, sx, sy, sz, x, y, z);
-	return;
-
-	SOURCE_EXISTS:;	
-
-	// Accumulate the point
-
-	voxfilter->points[vox_x][vox_y][vox_z].cnt++;
-	voxfilter->points[vox_x][vox_y][vox_z].x += x;
-	voxfilter->points[vox_x][vox_y][vox_z].y += y;
-	voxfilter->points[vox_x][vox_y][vox_z].z += z;
-
-	//printf("point (%d,%d,%d), voxel (%d,%d,%d), cnt now = %d\n", x, y, z, vox_x, vox_y, vox_z, voxfilter->points[vox_x][vox_y][vox_z].cnt);
-
-}
-
+#endif
 
 
 #define DIST_UNDEREXP 0
 #define DIST_OVEREXP 1
 #include "sin_lut.c"
-
-#ifdef REV2A
-
-	typedef struct
-	{
-		int32_t mount_mode;             // mount position 1,2,3 or 4
-		int32_t x_rel_robot;          // zero = robot origin. Positive = robot front (forward)
-		int32_t y_rel_robot;          // zero = robot origin. Positive = to the right of the robot
-		uint16_t ang_rel_robot;        // zero = robot forward direction. positive = ccw
-		uint16_t vert_ang_rel_ground;  // zero = looks directly forward. positive = looks up. negative = looks down
-		int32_t z_rel_ground;         // sensor height from the ground	
-	} sensor_mount_t;
-
-
-	/*
-		Sensor mount position 1:
-		 _ _
-		| | |
-		| |L|
-		|O|L|
-		| |L|
-		|_|_|  (front view)
-
-		Sensor mount position 2:
-		 _ _
-		| | |
-		|L| |
-		|L|O|
-		|L| |
-		|_|_|  (front view)
-
-		Sensor mount position 3:
-
-		-------------
-		|  L  L  L  |
-		-------------
-		|     O     |
-		-------------
-
-		Sensor mount position 4:
-
-		-------------
-		|     O     |
-		-------------
-		|  L  L  L  |
-		-------------
-	*/
-
-
-
-	#define DEGTOANG16(x)  ((uint16_t)((float)(x)/(360.0)*65536.0))
-
-	sensor_mount_t sensor_mounts[N_SENSORS] =
-	{          //      mountmode    x     y       hor ang           ver ang      height    
-	 /*0:                */ { 0,     0,     0, DEGTOANG16(       0), DEGTOANG16( 2),         300 },
-
-	 /*1:                */ { 1,   130,   103, DEGTOANG16(    24.4), DEGTOANG16( 4.4),       310  }, // -1
-	 /*2:                */ { 2,  -235,   215, DEGTOANG16(    66.4), DEGTOANG16( 1.4),       310  }, // -1
-	 /*3:                */ { 2,  -415,   215, DEGTOANG16(    93.5), DEGTOANG16( 1.9),       310  }, // -1
-	 /*4:                */ { 2,  -522,   103, DEGTOANG16(   157.4), DEGTOANG16( 3.9),       280  }, // -1
-	 /*5:                */ { 2,  -522,   -35, DEGTOANG16(   176.0), DEGTOANG16( 4.9),       290  }, // -1
-	 /*6:                */ { 1,  -522,  -103, DEGTOANG16(   206.0), DEGTOANG16( 4.4),       290  }, // -1
-	 /*7:                */ { 1,  -415,  -215, DEGTOANG16(   271.5), DEGTOANG16( 2.4),       280  }, // -1
-	 /*8:                */ { 1,  -235,  -215, DEGTOANG16(   294.9), DEGTOANG16( 4.4),       300  }, // -1
-	 /*9:                */ { 2,   130,  -103, DEGTOANG16(   334.9), DEGTOANG16( -0.9),      320  }  // 0
-	};
-
-	#include "geotables.h"
-
-	// voxfilter_ref_*: difference between the submap origin, and the subsubmap (voxfilter) origin, to maximize the span of the limited voxmap.
-	// E.g., submap is started at ref_* = 10000,0,0. First voxfilter is at voxfilter_ref_* = 0,0,0, so at the same location.
-	// Now the first voxfilter ends, and the robot is at, say 11000,0,0, and we would have already lost half of our voxfilter span available. But
-	// luckily, we can now set voxfilter_ref_* = 1000,0,0, and the new data is again translated near the middle of the voxfilter, internally.
-	// Actual coordinates in the voxfilter accumulation variables are not translated, only voxel selection code uses this information.
-
-	// Old version to deal with the legacy not individually calibrated data:
-
-	void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
-		 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
-		 realtime_cloud_t* realtime, int rt_flag)
-
-	{
-		if(sidx < 0 || sidx >= N_SENSORS)
-		{
-			printf("Invalid sidx\n");
-			return;
-		}
-
-	//	if(sidx != 8)
-	//		return;
-
-		int32_t robot_x = pose.x;
-		int32_t robot_y = pose.y;
-		int32_t robot_z = pose.z;
-
-		uint16_t robot_ang = pose.ang>>16;
-
-		// Rotation: xr = x*cos(a) + y*sin(a)
-		//           yr = -x*sin(a) + y*cos(a)
-		// It seems to me this widely touted formula has inverted y axis, don't understand why, so it should be:
-		// Rotation: xr = x*cos(a) - y*sin(a)
-		//           yr = x*sin(a) + y*cos(a)
-
-
-		uint16_t global_sensor_hor_ang = sensor_mounts[sidx].ang_rel_robot + robot_ang;
-	//	uint16_t global_sensor_ver_ang = sensor_mounts[sidx].vert_ang_rel_ground;
-
-		int16_t pitch_ang = pose.pitch>>16;
-		int16_t roll_ang = pose.roll>>16;
-
-		uint16_t global_sensor_ver_ang = 
-			(int32_t)((int16_t)sensor_mounts[sidx].vert_ang_rel_ground) +
-			((lut_cos_from_u16(sensor_mounts[sidx].ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
-			((lut_sin_from_u16(sensor_mounts[sidx].ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
-
-
-		uint16_t local_sensor_hor_ang = sensor_mounts[sidx].ang_rel_robot;
-		uint16_t local_sensor_ver_ang = sensor_mounts[sidx].vert_ang_rel_ground;
-
-		int32_t  global_sensor_x = robot_x - ref_x +
-				((lut_cos_from_u16(robot_ang)*sensor_mounts[sidx].x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-				((lut_sin_from_u16(robot_ang)*-1*sensor_mounts[sidx].y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
-
-		int32_t  global_sensor_y = robot_y - ref_y + 
-				((lut_sin_from_u16(robot_ang)*sensor_mounts[sidx].x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-				((lut_cos_from_u16(robot_ang)*sensor_mounts[sidx].y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
-
-		int32_t  global_sensor_z = robot_z - ref_z + sensor_mounts[sidx].z_rel_ground;
-
-
-		int32_t  local_sensor_x = sensor_mounts[sidx].x_rel_robot;
-		int32_t  local_sensor_y = sensor_mounts[sidx].y_rel_robot;
-		int32_t  local_sensor_z = sensor_mounts[sidx].z_rel_ground;
-
-
-		int sx = global_sensor_x;
-		int sy = global_sensor_y;
-		int sz = global_sensor_z;
-
-		int voxfilter_ray_src_id = 0;
-
-		if(voxfilter)
-		{
-			for(int i=1; i < voxfilter->n_ray_sources+1; i++)
-			{
-				int64_t sqdist = 
-					sq((int64_t)voxfilter->ray_sources[i].x - (int64_t)sx)	+
-					sq((int64_t)voxfilter->ray_sources[i].y - (int64_t)sy)	+
-					sq((int64_t)voxfilter->ray_sources[i].z - (int64_t)sz);
-
-				if(sqdist < sq(VOXFILTER_SOURCE_COMBINE_THRESHOLD))
-				{
-					// We already have a close enough source, let's use it instead:
-					//printf("Hooray, could optimize source (%d,%d,%d) to earlier source #%d (%d,%d,%d)\n",
-					//	sx, sy, sz, i, voxfilter->ray_sources[i].x, voxfilter->ray_sources[i].y, voxfilter->ray_sources[i].z);
-					voxfilter_ray_src_id = i;
-					// But do not replace sx,sy,sz, we are OK with the more exact actual coordinates
-					// when working outside the voxfilter.
-					goto USE_OLD;
-				}
-			}
-
-			// No appropriate source was found; add a new one.
-
-	 		voxfilter->n_ray_sources++; // Increment first, we want the first one to be at [1], and so on.
-
-			assert(voxfilter->n_ray_sources < VOXFILTER_N_SCANS*N_SENSORS+1);
-
-			voxfilter->ray_sources[voxfilter->n_ray_sources].x = sx;
-			voxfilter->ray_sources[voxfilter->n_ray_sources].y = sy;
-			voxfilter->ray_sources[voxfilter->n_ray_sources].z = sz;
-			voxfilter_ray_src_id = voxfilter->n_ray_sources;
-
-			USE_OLD:;
-		}
-
-		int y_ignore=1;
-		int x_ignore=1;
-
-		// Horrible temporary kludge
-		if(!is_narrow)
-		{
-
-			int32_t nearfield_avg_dist = 0;
-			int nearfield_avg_n = 0;
-			for(volatile int py=10; py<TOF_YS-10; py++)
-			{
-				for(volatile int px=50; px<TOF_XS-50; px++)
-				{
-					int32_t dist = ampldist[(py)*TOF_XS+(px)]&DIST_MASK;
-
-	//				printf("py=%d, px=%d, dist=%d\n", py, px, dist);
-
-					if(dist == DIST_UNDEREXP) dist = 2000>>DIST_SHIFT;
-
-					nearfield_avg_dist += dist; // -O3 segfaults here for no apparent reason - defining loop variables volatile prevents buggy optimization.
-					nearfield_avg_n++;
-				}
-			}	
-
-			nearfield_avg_dist /= nearfield_avg_n;
-			nearfield_avg_dist <<= DIST_SHIFT;
-
-
-
-			// x_ignore: 0 at 1000mm, 66.6 at 0mm
-			// y_ignore: 0 at 500mm, 25 at 0mm
-		//	x_ignore = (1000-nearfield_avg_dist)/15;
-		//	y_ignore = (500-nearfield_avg_dist)/20;
-
-			// x_ignore: 0 at 1400mm, 87.5 at 0mm
-			// y_ignore: 0 at 500mm, 25 at 0mm
-		//	x_ignore = (1400-nearfield_avg_dist)/16;
-		//	y_ignore = (500-nearfield_avg_dist)/20;
-
-			// x_ignore: 0 at 1600mm, 94 at 0mm
-			// y_ignore: 0 at 800mm, 32 at 0mm
-			x_ignore = (1600-nearfield_avg_dist)/13; // /17
-			y_ignore = (800-nearfield_avg_dist)/22; // /25
-
-			if(x_ignore < 1) x_ignore = 1;
-			if(x_ignore > 72) x_ignore = 72;
-
-			if(y_ignore < 1) y_ignore = 1;
-			if(y_ignore > 26) y_ignore = 26;
-
-		//	printf("nearfield_avg_dist = %d, x_ignore=%d, y_ignore=%d\n", nearfield_avg_dist, x_ignore, y_ignore);
-		}
-
-		//printf("x_ignore=%d y_ignore=%d\n", x_ignore, y_ignore);
-		// end kludge
-
-		for(int py=y_ignore; py<TOF_YS-y_ignore; py++)
-	//	for(int py=29; py<32; py++)
-		{
-			for(int px=x_ignore; px<TOF_XS-x_ignore; px++)
-	//		for(int px=75; px<85; px++)
-	//		for(int px=79; px<82; px++)
-			{
-				int32_t avg = 0;
-				int n_conform = 0;
-				if(is_narrow)
-				{
-					int npy, npx;
-					npx=px-TOF_NARROW_X_START;
-					npy=py-TOF_NARROW_Y_START;
-					if(npx < 1 || npy < 1 || npx >= TOF_XS_NARROW-1 || npx >= TOF_YS_NARROW-1)
-						continue;
-
-					int32_t refdist = ampldist[(npy+0)*TOF_XS_NARROW+(npx+0)]&DIST_MASK;
-					if(refdist == DIST_UNDEREXP)
-						continue;
-
-					for(int iy=-1; iy<=1; iy++)
-					{
-						for(int ix=-1; ix<=1; ix++)
-						{
-							int32_t dist = ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK;
-							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(170>>DIST_SHIFT) && dist < refdist+(170>>DIST_SHIFT))
-							{
-								avg+=dist;
-								n_conform++;
-							}
-						
-						}
-					}
-
-				}
-				else
-				{
-					int32_t refdist = ampldist[(py+0)*TOF_XS+(px+0)]&DIST_MASK;
-					if(refdist == DIST_UNDEREXP)
-						continue;
-
-					for(int iy=-1; iy<=1; iy++)
-					{
-						for(int ix=-1; ix<=1; ix++)
-						{
-							int32_t dist = ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
-							if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(170>>DIST_SHIFT) && dist < refdist+(170>>DIST_SHIFT))
-							{
-								avg+=dist;
-								n_conform++;
-							}
-						
-						}
-					}
-				}
-
-				if(n_conform >= 7)
-				{
-					avg <<= DIST_SHIFT;
-					avg /= n_conform;
-
-					int32_t d = avg;
-
-					if(d < dist_ignore_threshold)
-						continue;
-
-					uint16_t hor_ang, ver_ang;
-
-
-					// TODO: This optimizes out once we have sensor-by-sensor geometric tables;
-					// they can be pre-built to the actual mount_mode.
-					switch(sensor_mounts[sidx].mount_mode)
-					{
-						case 1: 
-						hor_ang = -1*geocoords[py*TOF_XS+px].yang;
-						ver_ang = geocoords[py*TOF_XS+px].xang;
-						break;
-
-						case 2: 
-						hor_ang = geocoords[py*TOF_XS+px].yang;
-						ver_ang = -1*geocoords[py*TOF_XS+px].xang;
-						break;
-
-						case 3:
-						hor_ang = -1*geocoords[py*TOF_XS+px].xang;
-						ver_ang = geocoords[py*TOF_XS+px].yang;
-						break;
-
-						case 4:
-						hor_ang = geocoords[py*TOF_XS+px].xang;
-						ver_ang = -1*geocoords[py*TOF_XS+px].yang;
-						break;
-
-						default: return;
-					}
-
-					uint16_t comb_hor_ang = hor_ang + global_sensor_hor_ang;
-					uint16_t comb_ver_ang = ver_ang + global_sensor_ver_ang;
-
-					int32_t x = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_cos_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_x;
-					int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
-					int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
-
-					uint16_t local_comb_hor_ang = hor_ang + local_sensor_hor_ang;
-					uint16_t local_comb_ver_ang = ver_ang + local_sensor_ver_ang;
-
-					int32_t local_x = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_cos_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_x;
-					int32_t local_y = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_sin_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_y;
-					int32_t local_z = (((int64_t)d * (int64_t)lut_sin_from_u16(local_comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + local_sensor_z;
-
-					// VACUUM APP: Ignore the nozzle
-					#define NOZZLE_WIDTH 760
-					if(local_z < 200 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
-						continue;
-
-					// Completely ignore nozzle area obstacles for mapping, but give the floor if visible!
-					if(local_z > 100 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
-						continue;
-
-	//				if(z > 2200)
-	//					continue;
-
-					if(voxfilter && d < voxfilter_threshold)
-						voxfilter_insert_point(cloud, voxfilter, voxfilter_ray_src_id, sx, sy, sz, x, y, z, voxfilter_ref_x, voxfilter_ref_y, voxfilter_ref_z);
-					else
-						cloud_insert_point(cloud, sx, sy, sz, x, y, z);
-
-				}
-			}
-		}
-	}
-#endif
 
 sensor_softcal_t sensor_softcals[N_SENSORS];
 
@@ -1272,18 +1079,45 @@ void load_sensor_softcals()
 	}
 }
 
+//#define SUBPIX // started implementing angular resolution improvement. Feel free to continue. Now enabling this does nothing.
 
-void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pose, int sidx, int32_t ref_x, int32_t ref_y, int32_t ref_z,
-	 voxfilter_t* voxfilter, int32_t voxfilter_ref_x, int32_t voxfilter_ref_y, int32_t voxfilter_ref_z, cloud_t* cloud, int voxfilter_threshold, int dist_ignore_threshold,
-	 realtime_cloud_t* realtime, int rt_flag)
+void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x, int32_t ref_y, int32_t ref_z,
+	 int do_filter, cloud_t* cloud, int dist_ignore_threshold)
 {
+	// Voxel filter divides the near-field area in discrete blocks
+	// On each block, average coordinates of all points hitting that block are calculated
+	// Outputs only one point per block (with the average coordinates)
+
+	#define FILTER_XS 192
+	#define FILTER_YS 192
+	#define FILTER_ZS 128
+	#define FILTER_STEP 32
+	#define FILTER_IDX(x_, y_, z_) ((x_)*FILTER_YS*FILTER_ZS + (y_)*FILTER_ZS + (z_))
+
+	typedef struct
+	{
+		int32_t cnt;
+		int32_t x_acc;
+		int32_t y_acc;
+		int32_t z_acc;
+	} filter_point_t;
+
+	filter_point_t* filter = NULL;
+	
+	if(do_filter)
+	{
+		filter = calloc(FILTER_XS*FILTER_YS*FILTER_ZS, sizeof filter[0]);
+		assert(filter);
+	}
+
+	int sidx = tss->sidx;	
 	assert(sidx >= 0 && sidx < N_SENSORS);
 
-	int32_t robot_x = pose.x;
-	int32_t robot_y = pose.y;
-	int32_t robot_z = pose.z;
+	int32_t robot_x = tss->sets[setnum].pose.x;
+	int32_t robot_y = tss->sets[setnum].pose.y;
+	int32_t robot_z = tss->sets[setnum].pose.z;
 
-	uint16_t robot_ang = pose.ang>>16;
+	uint16_t robot_ang = tss->sets[setnum].pose.ang>>16;
 
 	// Rotation: xr = x*cos(a) - y*sin(a)
 	//           yr = x*sin(a) + y*cos(a)
@@ -1291,115 +1125,104 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 	uint16_t global_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot + robot_ang;
 //	uint16_t global_sensor_ver_ang = sensor_softcals[sidx].mount.vert_ang_rel_ground;
 
-	int16_t pitch_ang = pose.pitch>>16;
-	int16_t roll_ang = pose.roll>>16;
+	int16_t pitch_ang = tss->sets[setnum].pose.pitch>>16;
+	int16_t roll_ang = tss->sets[setnum].pose.roll>>16;
+
+//	printf("pitch=%.2f  roll=%.2f\n", ANGI32TOFDEG(tss->sets[setnum].pose.pitch), ANGI32TOFDEG(tss->sets[setnum].pose.roll));
+
+	// Temporary bodge to "calibrate" the unit on the field I'm writing this for.
+	// Gravitation vector calibration could have been done at the time of sensor calibration very easily but didn't cross mind then.
+	pitch_ang += DEGTOANG16(0.7);
+	roll_ang  += DEGTOANG16(0.7);
 
 	uint16_t global_sensor_ver_ang = 
 		(int32_t)((int16_t)sensor_softcals[sidx].mount.vert_ang_rel_ground) +
 		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
 		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
 
-	uint16_t local_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot;
-	uint16_t local_sensor_ver_ang = sensor_softcals[sidx].mount.vert_ang_rel_ground;
+	// The angle of sensor rotating around it's own normal
+	uint16_t sensor_rota = 
+		((lut_sin_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*-pitch_ang)>>SIN_LUT_RESULT_SHIFT) +
+		((lut_cos_from_u16(sensor_softcals[sidx].mount.ang_rel_robot)*roll_ang)>>SIN_LUT_RESULT_SHIFT);
+
+	int32_t sin_sensor_rota = lut_sin_from_u16(sensor_rota);
+	int32_t cos_sensor_rota = lut_cos_from_u16(sensor_rota);
+
+//	printf("sensor_rota=%u  sin=%d  cos=%d\n", sensor_rota, sin_sensor_rota, cos_sensor_rota);
 
 	int32_t  global_sensor_x = robot_x - ref_x +
-			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-			((lut_sin_from_u16(robot_ang)*-1*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
+			(((int64_t)lut_cos_from_u16(pitch_ang)*(int64_t)lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT)) +
+			(((int64_t)lut_cos_from_u16(roll_ang)*(int64_t)lut_sin_from_u16(robot_ang)*-sensor_softcals[sidx].mount.y_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT));
 
 	int32_t  global_sensor_y = robot_y - ref_y + 
-			((lut_sin_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
-			((lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
+			(((int64_t)lut_cos_from_u16(pitch_ang)*(int64_t)lut_sin_from_u16(robot_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT)) +
+			(((int64_t)lut_cos_from_u16(roll_ang)*(int64_t)lut_cos_from_u16(robot_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>(2*SIN_LUT_RESULT_SHIFT));
 
-	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground;
+	int32_t  global_sensor_z = robot_z - ref_z + sensor_softcals[sidx].mount.z_rel_ground +
+			((lut_sin_from_u16(pitch_ang)*sensor_softcals[sidx].mount.x_rel_robot)>>SIN_LUT_RESULT_SHIFT) +
+			((lut_sin_from_u16(roll_ang)*sensor_softcals[sidx].mount.y_rel_robot)>>SIN_LUT_RESULT_SHIFT);
 
+	#ifdef VACUUM_APP
+		uint16_t local_sensor_hor_ang = sensor_softcals[sidx].mount.ang_rel_robot;
+		uint16_t local_sensor_ver_ang = sensor_softcals[sidx].mount.vert_ang_rel_ground;
 
-	int32_t  local_sensor_x = sensor_softcals[sidx].mount.x_rel_robot;
-	int32_t  local_sensor_y = sensor_softcals[sidx].mount.y_rel_robot;
-	int32_t  local_sensor_z = sensor_softcals[sidx].mount.z_rel_ground;
-
+		int32_t  local_sensor_x = sensor_softcals[sidx].mount.x_rel_robot;
+		int32_t  local_sensor_y = sensor_softcals[sidx].mount.y_rel_robot;
+		int32_t  local_sensor_z = sensor_softcals[sidx].mount.z_rel_ground;
+	#endif
 
 	int sx = global_sensor_x;
 	int sy = global_sensor_y;
 	int sz = global_sensor_z;
 
-	int voxfilter_ray_src_id = 0;
+	// cloud_find_source reuses an old source if close enough, or creates a new one:
+	int src_idx = cloud_find_source(cloud, CL_P_MM(sx, sy, sz));
 
-	if(voxfilter)
+	// Corner ignore:
+
+	#define X_EDGE_IGNORE 8
+	static const int px_ignore[TOF_YS] =
 	{
-		for(int i=1; i < voxfilter->n_ray_sources+1; i++)
-		{
-			int64_t sqdist = 
-				sq((int64_t)voxfilter->ray_sources[i].x - (int64_t)sx)	+
-				sq((int64_t)voxfilter->ray_sources[i].y - (int64_t)sy)	+
-				sq((int64_t)voxfilter->ray_sources[i].z - (int64_t)sz);
+		50, 45, 41, 37, 33, 
+		30, 27, 24, 21, 18,
+		16, 14, 12, 10,  8,
+		 7,  6,  5,  4,  3,
+		 2,  2,  1,  1,  0,
+		 0,  0,  0,  0,  0,
 
-			if(sqdist < sq(VOXFILTER_SOURCE_COMBINE_THRESHOLD))
-			{
-				// We already have a close enough source, let's use it instead:
-				//printf("Hooray, could optimize source (%d,%d,%d) to earlier source #%d (%d,%d,%d)\n",
-				//	sx, sy, sz, i, voxfilter->ray_sources[i].x, voxfilter->ray_sources[i].y, voxfilter->ray_sources[i].z);
-				voxfilter_ray_src_id = i;
-				// But do not replace sx,sy,sz, we are OK with the more exact actual coordinates
-				// when working outside the voxfilter.
-				goto USE_OLD;
-			}
-		}
+		 0,  0,  0,  0,  0,
+		 0,  1,  1,  2,  2,
+		 3,  4,  5,  6,  7,
+		 8, 10, 12, 14, 16,
+		18, 21, 24, 27, 30,
+		33, 37, 41, 45, 50
+	};
 
-		// No appropriate source was found; add a new one.
-
- 		voxfilter->n_ray_sources++; // Increment first, we want the first one to be at [1], and so on.
-
-		assert(voxfilter->n_ray_sources < VOXFILTER_N_SCANS*N_SENSORS+1);
-
-		voxfilter->ray_sources[voxfilter->n_ray_sources].x = sx;
-		voxfilter->ray_sources[voxfilter->n_ray_sources].y = sy;
-		voxfilter->ray_sources[voxfilter->n_ray_sources].z = sz;
-		voxfilter_ray_src_id = voxfilter->n_ray_sources;
-
-		USE_OLD:;
-	}
-
-
-	for(int py=5; py<TOF_YS-5; py++)
+	// Generate points
+	for(int py=1; py<TOF_YS-1; py++)
 	{
-		int px_start = 10;
-		int px_end = TOF_XS-10;
+		int px_start = X_EDGE_IGNORE;
+		int px_end = TOF_XS-X_EDGE_IGNORE;
 
-		if(py < 4 || py > TOF_YS-4)
-		{
-			px_start += 9;
-			px_end -= 9;
-		}
-		if(py < 8 || py > TOF_YS-8)
-		{
-			px_start += 8;
-			px_end -= 8;
-		}
-		if(py < 12 || py > TOF_YS-12)
-		{
-			px_start += 6;
-			px_end -= 6;
-		}
-		if(py < 16 || py > TOF_YS-16)
-		{
-			px_start += 4;
-			px_end -= 4;
-		}
-		if(py < 20 || py > TOF_YS-20)
-		{
-			px_start += 3;
-			px_end -= 3;
-		}
-		if(py < 24 || py > TOF_YS-24)
-		{
-			px_start += 2;
-			px_end -= 2;
-		}
+		px_start += px_ignore[py];
+		px_end   -= px_ignore[py];
 
 		for(int px=px_start; px<px_end; px++)
 		{
-			int32_t avg = 0;
+			// Start by looking at 3x3 pixels. Middle pixel is refdist. Any of the 9 pixels must be
+			// close enough to that refdist. If they are too different, they are ignored. If acceptable, they
+			// are averaged together to form the final reading (placed at the mid pixel). If too many
+			// are ignored, no point is generated.
+			// This obviously improves accuracy by averaging, but also removes "mid-lier" pixels caused by
+			// exposing a single pixel to a combination of different distances.
+			int_fast32_t avg = 0;
 			int n_conform = 0;
+			int_fast32_t refdist;
+
+			#ifdef SUBPIX
+			int_fast32_t ix_sum = 0, iy_sum = 0;
+			#endif
+
 			if(is_narrow)
 			{
 				int npy, npx;
@@ -1408,23 +1231,27 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				if(npx < 1 || npy < 1 || npx >= TOF_XS_NARROW-1 || npy >= TOF_YS_NARROW-1)
 					continue;
 
-				int32_t refdist = ampldist[(npy+0)*TOF_XS_NARROW+(npx+0)]&DIST_MASK;
+				refdist = tss->sets[setnum].ampldist[(npy+0)*TOF_XS_NARROW+(npx+0)]&DIST_MASK;
 				if(refdist == DIST_UNDEREXP)
 					continue;
 
+				// Acceptance limit depends on the refdist; when further away, larger differences within the 3x3 block
+				// are accepted. This is because the further we are, the further the pixels are from each other sideways, now a wall
+				// which isn't perpendicular to a sensor has expected larger differences per pixel.
+				// This  is done by dividing refdist by 16 then adding 130mm, so that:
 				// At refdist = zero-ish, accept everything +/-130mm
-				// At refdist = 5m, accept +/-286mm
-				// At refdist = 10m, accept +/- 442mm
-				// This gets angular walls through.
+				// At refdist = 5m, accept +/-442mm (5000mm * sin 1 degree * tan 79 degrees = 449mm)
+				// At refdist = 10m, accept +/- 755mm (10000mm * sin 1 degree * tan 77 degrees = 755mm)
+				// This way, non-perpendicular surfaces are not filtered out.
 				for(int iy=-1; iy<=1; iy++)
 				{
 					for(int ix=-1; ix<=1; ix++)
 					{
-						int32_t dist = ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK;
-						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT) && dist < refdist+(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT))
+						int32_t dist = tss->sets[setnum].ampldist[(npy+iy)*TOF_XS_NARROW+(npx+ix)]&DIST_MASK;
+						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(((refdist<<DIST_SHIFT)/16+130)>>DIST_SHIFT) && dist < refdist+(((refdist<<DIST_SHIFT)/16+130)>>DIST_SHIFT))
 						{
 							avg+=dist;
-							n_conform++;
+							n_conform++;							
 						}
 					
 					}
@@ -1432,7 +1259,7 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 			}
 			else
 			{
-				int32_t refdist = ampldist[(py+0)*TOF_XS+(px+0)]&DIST_MASK;
+				refdist = tss->sets[setnum].ampldist[(py+0)*TOF_XS+(px+0)]&DIST_MASK;
 				if(refdist == DIST_UNDEREXP)
 					continue;
 
@@ -1440,8 +1267,8 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				{
 					for(int ix=-1; ix<=1; ix++)
 					{
-						int32_t dist = ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
-						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT) && dist < refdist+(((refdist<<DIST_SHIFT)/32+130)>>DIST_SHIFT))
+						int32_t dist = tss->sets[setnum].ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
+						if(dist != DIST_UNDEREXP && dist != DIST_OVEREXP && dist > refdist-(((refdist<<DIST_SHIFT)/16+130)>>DIST_SHIFT) && dist < refdist+(((refdist<<DIST_SHIFT)/16+130)>>DIST_SHIFT))
 						{
 							avg+=dist;
 							n_conform++;
@@ -1451,17 +1278,26 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				}
 			}
 
-			if(n_conform >= 6)
+			if(n_conform >= TOF_N_CONFORM_REQUIRED)
 			{
-				avg <<= DIST_SHIFT;
+				avg <<= DIST_SHIFT; // Convert to mm
 				avg /= n_conform;
+				int64_t d = avg;
 
-				int32_t d = avg;
+				//refdist <<= DIST_SHIFT;  // if you ever need refdist, convert to mm first
+
+				int16_t h_ang = -sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
+				int16_t v_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
+
+				// Rotate the pixel angles according to the sensor rotation
+				// Rotation: xr = x*cos(a) - y*sin(a)
+				//           yr = x*sin(a) + y*cos(a)
 
 				uint16_t hor_ang, ver_ang;
-
-				hor_ang = -sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
-				ver_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
+				hor_ang = ((int32_t)h_ang*cos_sensor_rota - (int32_t)v_ang*sin_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+				ver_ang = ((int32_t)h_ang*sin_sensor_rota + (int32_t)v_ang*cos_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+				//hor_ang = h_ang;
+				//ver_ang = v_ang;
 
 				uint16_t comb_hor_ang = hor_ang + global_sensor_hor_ang;
 				uint16_t comb_ver_ang = ver_ang + global_sensor_ver_ang;
@@ -1470,14 +1306,17 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 				int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
 				int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
 
-				uint16_t local_comb_hor_ang = hor_ang + local_sensor_hor_ang;
-				uint16_t local_comb_ver_ang = ver_ang + local_sensor_ver_ang;
-
-				int32_t local_x = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_cos_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_x;
-				int32_t local_y = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_sin_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_y;
-				int32_t local_z = (((int64_t)d * (int64_t)lut_sin_from_u16(local_comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + local_sensor_z;
+				if(is_narrow && z < 0)
+					continue;
 
 				#ifdef VACUUM_APP
+					uint16_t local_comb_hor_ang = hor_ang + local_sensor_hor_ang;
+					uint16_t local_comb_ver_ang = ver_ang + local_sensor_ver_ang;
+
+					int32_t local_x = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_cos_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_x;
+					int32_t local_y = (((int64_t)d * (int64_t)lut_cos_from_u16(local_comb_ver_ang) * (int64_t)lut_sin_from_u16(local_comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + local_sensor_y;
+					int32_t local_z = (((int64_t)d * (int64_t)lut_sin_from_u16(local_comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + local_sensor_z;
+
 					// VACUUM APP: Ignore the nozzle
 					#define NOZZLE_WIDTH 760
 					if(local_z < 200 && local_x < 520 && local_x > 120 && local_y > -(NOZZLE_WIDTH/2) && local_y < (NOZZLE_WIDTH/2))
@@ -1488,40 +1327,150 @@ void tof_to_voxfilter_and_cloud(int is_narrow, uint16_t* ampldist, hw_pose_t pos
 						continue;
 				#endif
 
-//				if(z > 2200)
-//					continue;
-
-				if(realtime)
-				{
-					assert(realtime->n_points < MAX_REALTIME_N_POINTS);
-					small_cloud_t new_point = set_small_cloud(rt_flag, sx, sy, sz, x, y, z);
-					realtime->points[realtime->n_points] = new_point;
-					realtime->n_points++;
-				}
 
 				if(d < dist_ignore_threshold)
 					continue;
+				
+				if(filter)
+				{
+					int fltx = FILTER_XS/2 + x/FILTER_STEP;
+					int flty = FILTER_YS/2 + y/FILTER_STEP;
+					int fltz = FILTER_ZS/2 + z/FILTER_STEP;
 
-				if(voxfilter && d < voxfilter_threshold)
-					voxfilter_insert_point(cloud, voxfilter, voxfilter_ray_src_id, sx, sy, sz, x, y, z, voxfilter_ref_x, voxfilter_ref_y, voxfilter_ref_z);
+					if(fltx < 0 || fltx >= FILTER_XS || flty < 0 || flty >= FILTER_YS || fltz < 0 || fltz >= FILTER_ZS)
+						cloud_add_point(cloud, CL_SRCP_MM(src_idx, x, y, z));
+					else
+					{
+						filter[FILTER_IDX(fltx, flty, fltz)].cnt++;
+						filter[FILTER_IDX(fltx, flty, fltz)].x_acc += x;
+						filter[FILTER_IDX(fltx, flty, fltz)].y_acc += y;
+						filter[FILTER_IDX(fltx, flty, fltz)].z_acc += z;
+					}
+					
+				}
 				else
-					cloud_insert_point(cloud, sx, sy, sz, x, y, z);
-
-
+					cloud_add_point(cloud, CL_SRCP_MM(src_idx, x, y, z));
 			}
 		}
 	}
+
+	// Per each filter voxel, create only one output point, which is the average of the points falling inside each voxel
+	if(filter)
+	{
+		for(int xx=0; xx<FILTER_XS; xx++)
+		{
+			for(int yy=0; yy<FILTER_YS; yy++)
+			{
+				for(int zz=0; zz<FILTER_ZS; zz++)
+				{
+					int cnt = filter[FILTER_IDX(xx, yy, zz)].cnt;
+					if(cnt == 0)
+						continue;
+
+					int x = filter[FILTER_IDX(xx, yy, zz)].x_acc / cnt;
+					int y = filter[FILTER_IDX(xx, yy, zz)].y_acc / cnt;
+					int z = filter[FILTER_IDX(xx, yy, zz)].z_acc / cnt;
+
+					cloud_add_point(cloud, CL_SRCP_MM(src_idx, x, y, z));
+				}
+
+			}
+
+		}
+
+		free(filter);
+	}
+
+
+	#define FREEVECT_PIXEL_SKIP 3
+	#define FREEVECT_PIXEL_AREA 2
+
+	#define ASSUMED_SENSOR_RANGE 2500.0f // going over 2000 is risky, black objects may end up removed
+
+
+	// Generate freevects.
+	// Require that all pixels within square of 2*FREEVECT_PIXEL_AREA x 2*FREEVECT_PIXEL_AREA are underexposed
+	// Freevect is an imaginary point where we can assume we have somewhat guaranteed sensor range even under worst cases
+	// If we read "underexposed" for multiple pixels, we can assume that, for example, if there is anything there, it
+	// has to be further than, say, 1 meter away, otherwise we would have seen it, even if it was a wall covered in black
+	// leather.
+	if(!is_narrow) for(int py=1; py<TOF_YS-1; py+=FREEVECT_PIXEL_SKIP)
+	{
+		int px_start = X_EDGE_IGNORE + 2;
+		int px_end = TOF_XS-X_EDGE_IGNORE - 2;
+
+		px_start += px_ignore[py]+2;
+		px_end   -= px_ignore[py]+2;
+
+		for(int px=px_start; px<px_end; px+=FREEVECT_PIXEL_SKIP)
+		{
+			for(int iy=-FREEVECT_PIXEL_AREA; iy<=FREEVECT_PIXEL_AREA; iy++)
+			{
+				for(int ix=-FREEVECT_PIXEL_AREA; ix<=FREEVECT_PIXEL_AREA; ix++)
+				{
+					int_fast32_t dist = tss->sets[setnum].ampldist[(py+iy)*TOF_XS+(px+ix)]&DIST_MASK;
+					if(dist != DIST_UNDEREXP)
+						goto NOT_FREEVECT;
+				}
+			}
+
+			// Assumed worst-case sensor range:
+			int64_t d;
+			if(px > 50 && px < TOF_XS-50)
+				d = ASSUMED_SENSOR_RANGE*1.0;
+			else if(px > 40 && px < TOF_XS-40)
+				d = ASSUMED_SENSOR_RANGE*0.9;
+			else if(px > 30 && px < TOF_XS-30)
+				d = ASSUMED_SENSOR_RANGE*0.75;
+			else
+				d = ASSUMED_SENSOR_RANGE*0.6;
+
+			if(py > 15 && py < TOF_YS-15)
+				d += ASSUMED_SENSOR_RANGE*0.05;
+
+			int16_t h_ang = -sensor_softcals[sidx].hor_angs[py*TOF_XS+px];
+			int16_t v_ang = sensor_softcals[sidx].ver_angs[py*TOF_XS+px];
+
+			uint16_t hor_ang, ver_ang;
+			hor_ang = ((int32_t)h_ang*cos_sensor_rota - (int32_t)v_ang*sin_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+			ver_ang = ((int32_t)h_ang*sin_sensor_rota + (int32_t)v_ang*cos_sensor_rota)>>SIN_LUT_RESULT_SHIFT;
+			uint16_t comb_hor_ang = hor_ang + global_sensor_hor_ang;
+			uint16_t comb_ver_ang = ver_ang + global_sensor_ver_ang;
+
+			int32_t x = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_cos_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_x;
+			int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
+			int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
+
+			cloud_add_freevect(cloud, CL_FREEVECT_MM(src_idx, x, y, z));
+
+
+			NOT_FREEVECT:;
+		}
+	}
+
+
 }
 
 
-void cloud_to_xyz_file(cloud_t* cloud, char* fname)
+void cloud_to_xyz_file(cloud_t* cloud, char* fname, int use_local_coords)
 {
 	FILE* f = fopen(fname, "w");
 	assert(f);
-	for(int i=0; i<cloud->n_points; i++)
+
+	if(use_local_coords)
 	{
-		fprintf(f, "%d %d %d\n", cloud->points[i].px, cloud->points[i].py, cloud->points[i].pz);
+		for(int i=0; i<cloud->m.n_points; i++)
+			fprintf(f, "%d %d %d\n", cloud->points[i].x*CLOUD_MM, cloud->points[i].y*CLOUD_MM, cloud->points[i].z*CLOUD_MM);
 	}
+	else
+	{
+		for(int i=0; i<cloud->m.n_points; i++)
+			fprintf(f, "%" PRIi64 " %" PRIi64 " %" PRIi64"\n", 
+				(cloud->m.ref_x+(int64_t)cloud->points[i].x)*CLOUD_MM, 
+				(cloud->m.ref_y+(int64_t)cloud->points[i].y)*CLOUD_MM, 
+				(cloud->m.ref_z+(int64_t)cloud->points[i].z)*CLOUD_MM);
+	}
+
 	fclose(f);
 }
 

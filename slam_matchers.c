@@ -1,5 +1,5 @@
 /*
-	Matching functions for SLAM.
+	Coarse matching functions for SLAM.
 
 	These are the low-level core of the SLAM.
 	We have quite some many different types of functions, reducing code readability, sorry for that.
@@ -63,6 +63,7 @@
 #include "voxmap_memdisk.h"
 
 
+// Binary heap data structure is used to collect k best scores during matching
 #define HEAP_PARENT(i) (((i) - 1) >> 1)
 #define HEAP_LEFT(i)   (((i) << 1) + 1)
 #define HEAP_RIGHT(i) (((i) << 1) + 2)
@@ -93,14 +94,14 @@ typedef struct __attribute__((packed))
 } ref_fine_matchmap_unit_t;
 
 
-#define MATCHMAP_UNIT 256 //mm
+#define MATCHMAP_UNIT (256/CLOUD_MM)
 
 #define MATCHMAP_XS 256
 #define MATCHMAP_YS 256
 #define MATCHMAP_ZS 64
 
 
-#define FINE_MATCHMAP_UNIT 128 //mm
+#define FINE_MATCHMAP_UNIT (128/CLOUD_MM)
 
 #define FINE_MATCHMAP_XS 256
 #define FINE_MATCHMAP_YS 256
@@ -1079,22 +1080,22 @@ static void bresenham3d_ref_fine_matchmap(int x1, int y1, int z1, int x2, int y2
 // Returns number of occupied voxels, for later calculation of relative score (percentage of matches)
 static int cloud_to_cmp_matchmap_even(cloud_t* cloud, cmp_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
-//	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->n_points);
+//	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->m.n_points);
 
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
 
 	int vox_cnt = 0;
-	for(int p=0; p<cloud->n_points; p+=2) // using a variable in p+=x instead of literal 1 slows down by about 15%
+	for(int p=0; p<cloud->m.n_points; p+=2) // using a variable in p+=x instead of literal 1 slows down by about 15%
 	{
-		float x_in = cloud->points[p].px;
-		float y_in = cloud->points[p].py;
+		float x_in = cloud->points[p].x;
+		float y_in = cloud->points[p].y;
 
 		float x = x_in*cosa - y_in*sina + x_corr;
 		float y = x_in*sina + y_in*cosa + y_corr;
 
 		// Using integer math for z instead of float: 3.4ms --> 2.9ms
-		int z = cloud->points[p].pz + z_corr;
+		int z = cloud->points[p].z + z_corr;
 
 		int px = x/MATCHMAP_UNIT + MATCHMAP_XS/2;
 		int py = y/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -1119,22 +1120,22 @@ static int cloud_to_cmp_matchmap_even(cloud_t* cloud, cmp_matchmap_t* matchmap, 
 
 static int cloud_to_cmp_matchmap_odd(cloud_t* cloud, cmp_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
-//	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->n_points);
+//	printf("cloud_to_cmp_matchmap, adding %d points\n", cloud->m.n_points);
 
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
 
 	int vox_cnt = 0;
-	for(int p=1; p<cloud->n_points; p+=2) // using a variable in p+=x instead of literal 1 slows down by about 15%
+	for(int p=1; p<cloud->m.n_points; p+=2) // using a variable in p+=x instead of literal 1 slows down by about 15%
 	{
-		float x_in = cloud->points[p].px;
-		float y_in = cloud->points[p].py;
+		float x_in = cloud->points[p].x;
+		float y_in = cloud->points[p].y;
 
 		float x = x_in*cosa - y_in*sina + x_corr;
 		float y = x_in*sina + y_in*cosa + y_corr;
 
 		// Using integer math for z instead of float: 3.4ms --> 2.9ms
-		int z = cloud->points[p].pz + z_corr;
+		int z = cloud->points[p].z + z_corr;
 
 		int px = x/MATCHMAP_UNIT + MATCHMAP_XS/2;
 		int py = y/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -1160,21 +1161,21 @@ static int cloud_to_cmp_matchmap_odd(cloud_t* cloud, cmp_matchmap_t* matchmap, f
 
 static int cloud_to_cmp_fine_matchmap(cloud_t* cloud, cmp_fine_matchmap_t* matchmap, float x_corr, float y_corr, int z_corr, float yaw_corr)
 {
-//	printf("cloud_to_cmp_fine_matchmap, adding %d points\n", cloud->n_points);
+//	printf("cloud_to_cmp_fine_matchmap, adding %d points\n", cloud->m.n_points);
 
 	float cosa = cosf(yaw_corr);
 	float sina = sinf(yaw_corr);
 
 	int vox_cnt = 0;
 	int oor = 0;
-	for(int p=0; p<cloud->n_points; p+=1)
+	for(int p=0; p<cloud->m.n_points; p+=1)
 	{
-		float x_in = cloud->points[p].px;
-		float y_in = cloud->points[p].py;
+		float x_in = cloud->points[p].x;
+		float y_in = cloud->points[p].y;
 
 		float x = x_in*cosa - y_in*sina + x_corr;
 		float y = x_in*sina + y_in*cosa + y_corr;
-		int z = cloud->points[p].pz + z_corr;
+		int z = cloud->points[p].z + z_corr;
 
 		int px = x/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
 		int py = y/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
@@ -1196,9 +1197,9 @@ static int cloud_to_cmp_fine_matchmap(cloud_t* cloud, cmp_fine_matchmap_t* match
 		matchmap->units[py][px].occu |= 1ULL<<pz;
 	}
 
-	if(oor > cloud->n_points/20)
+	if(oor > cloud->m.n_points/20)
 	{
-		printf("cloud_to_cmp_fine_matchmap: WARN: %d%% OOR points\n", (100*oor)/cloud->n_points);
+		printf("cloud_to_cmp_fine_matchmap: WARN: %d%% OOR points\n", (100*oor)/cloud->m.n_points);
 	}
 	return vox_cnt;
 }
@@ -1243,21 +1244,21 @@ static void cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* matchmap,
 	float sina = sinf(yaw_corr);
 
 	// Trace empty space:
-	for(int p=0; p<cloud->n_points; p++)
+	for(int p=0; p<cloud->m.n_points; p++)
 	{
-		float sx_in = cloud->points[p].sx;
-		float sy_in = cloud->points[p].sy;
+		float sx_in = cloud->srcs[cloud->points[p].srcs[0]].x;
+		float sy_in = cloud->srcs[cloud->points[p].srcs[0]].y;
 
 		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
 		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
-		int   mmsz = cloud->points[p].sz + z_corr;
+		int   mmsz = cloud->srcs[cloud->points[p].srcs[0]].z + z_corr;
 
-		float px_in = cloud->points[p].px;
-		float py_in = cloud->points[p].py;
+		float px_in = cloud->points[p].x;
+		float py_in = cloud->points[p].y;
 
 		float mmpx = px_in*cosa - py_in*sina + x_corr;
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
-		int   mmpz = cloud->points[p].pz + z_corr;
+		int   mmpz = cloud->points[p].z + z_corr;
 
 		int sx = mmsx/MATCHMAP_UNIT + MATCHMAP_XS/2;
 		int sy = mmsy/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -1271,7 +1272,7 @@ static void cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* matchmap,
 
 		#ifdef ASSUME_FREE_ABOVE_FLOOR
 			// Pointcloud zero is at the average robot pose; robot Z origin is at the floor level
-			if(cloud->points[p].pz > -500 && cloud->points[p].pz < 300)
+			if(cloud->points[p].z > -500 && cloud->points[p].z < 300)
 			{
 				// Seven free voxels is 1792mm high 
 				if(px > 0 && px < MATCHMAP_XS && py > 0 && py < MATCHMAP_YS)
@@ -1290,14 +1291,14 @@ static void cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* matchmap,
 
 	// Add points (to neighbor cells as well), and remove empty space around them.
 
-	for(int p=0; p<cloud->n_points; p++)
+	for(int p=0; p<cloud->m.n_points; p++)
 	{
-		float px_in = cloud->points[p].px;
-		float py_in = cloud->points[p].py;
+		float px_in = cloud->points[p].x;
+		float py_in = cloud->points[p].y;
 
 		float mmpx = px_in*cosa - py_in*sina + x_corr;
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
-		int   mmpz = cloud->points[p].pz + z_corr;
+		int   mmpz = cloud->points[p].z + z_corr;
 
 
 		#if REF_BOLD_MODE==1 || REF_BOLD_MODE==2
@@ -1404,21 +1405,21 @@ static void decim_cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* mat
 	float sina = sinf(yaw_corr);
 
 	// Trace empty space:
-	for(int p=0; p<cloud->n_points; p+=3)
+	for(int p=0; p<cloud->m.n_points; p+=3)
 	{
-		float sx_in = cloud->points[p].sx;
-		float sy_in = cloud->points[p].sy;
+		float sx_in = cloud->srcs[cloud->points[p].srcs[0]].x;
+		float sy_in = cloud->srcs[cloud->points[p].srcs[0]].y;
 
 		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
 		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
-		int   mmsz = cloud->points[p].sz + z_corr;
+		int   mmsz = cloud->srcs[cloud->points[p].srcs[0]].z + z_corr;
 
-		float px_in = cloud->points[p].px;
-		float py_in = cloud->points[p].py;
+		float px_in = cloud->points[p].x;
+		float py_in = cloud->points[p].y;
 
 		float mmpx = px_in*cosa - py_in*sina + x_corr;
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
-		int   mmpz = cloud->points[p].pz + z_corr;
+		int   mmpz = cloud->points[p].z + z_corr;
 
 		int sx = mmsx/MATCHMAP_UNIT + MATCHMAP_XS/2;
 		int sy = mmsy/MATCHMAP_UNIT + MATCHMAP_YS/2;
@@ -1432,7 +1433,7 @@ static void decim_cloud_to_ref_matchmap_free(cloud_t* cloud, ref_matchmap_t* mat
 
 		#ifdef ASSUME_FREE_ABOVE_FLOOR
 			// Pointcloud zero is at the average robot pose; robot Z origin is at the floor level
-			if(cloud->points[p].pz > -500 && cloud->points[p].pz < 300)
+			if(cloud->points[p].z > -500 && cloud->points[p].z < 300)
 			{
 				// Seven free voxels is 1792mm high 
 				if(px > 0 && px < MATCHMAP_XS && py > 0 && py < MATCHMAP_YS)
@@ -1449,14 +1450,14 @@ static void decim_cloud_to_ref_matchmap_occu(cloud_t* cloud, ref_matchmap_t* mat
 
 	// Add points (to neighbor cells as well), and remove empty space around them.
 
-	for(int p=0; p<cloud->n_points; p+=3)
+	for(int p=0; p<cloud->m.n_points; p+=3)
 	{
-		float px_in = cloud->points[p].px;
-		float py_in = cloud->points[p].py;
+		float px_in = cloud->points[p].x;
+		float py_in = cloud->points[p].y;
 
 		float mmpx = px_in*cosa - py_in*sina + x_corr;
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
-		int   mmpz = cloud->points[p].pz + z_corr;
+		int   mmpz = cloud->points[p].z + z_corr;
 
 
 		#if REF_BOLD_MODE==1 || REF_BOLD_MODE==2
@@ -1565,21 +1566,21 @@ static void cloud_to_ref_fine_matchmap_free(cloud_t* cloud, ref_fine_matchmap_t*
 	float sina = sinf(yaw_corr);
 
 	// Trace empty space:
-	for(int p=0; p<cloud->n_points; p++)
+	for(int p=0; p<cloud->m.n_points; p++)
 	{
-		float sx_in = cloud->points[p].sx;
-		float sy_in = cloud->points[p].sy;
+		float sx_in = cloud->srcs[cloud->points[p].srcs[0]].x;
+		float sy_in = cloud->srcs[cloud->points[p].srcs[0]].y;
 
 		float mmsx = sx_in*cosa - sy_in*sina + x_corr;
 		float mmsy = sx_in*sina + sy_in*cosa + y_corr;
-		int   mmsz = cloud->points[p].sz + z_corr;
+		int   mmsz = cloud->srcs[cloud->points[p].srcs[0]].z + z_corr;
 
-		float px_in = cloud->points[p].px;
-		float py_in = cloud->points[p].py;
+		float px_in = cloud->points[p].x;
+		float py_in = cloud->points[p].y;
 
 		float mmpx = px_in*cosa - py_in*sina + x_corr;
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
-		int   mmpz = cloud->points[p].pz + z_corr;
+		int   mmpz = cloud->points[p].z + z_corr;
 
 		int sx = mmsx/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_XS/2;
 		int sy = mmsy/FINE_MATCHMAP_UNIT + FINE_MATCHMAP_YS/2;
@@ -1593,7 +1594,7 @@ static void cloud_to_ref_fine_matchmap_free(cloud_t* cloud, ref_fine_matchmap_t*
 
 		#ifdef ASSUME_FREE_ABOVE_FLOOR
 			// Pointcloud zero is at the average robot pose; robot Z origin is at the floor level
-			if(cloud->points[p].pz > -500 && cloud->points[p].pz < 300)
+			if(cloud->points[p].z > -500 && cloud->points[p].z < 300)
 			{
 				// 14 free voxels is 1792mm high 
 				if(px > 0 && px < FINE_MATCHMAP_XS && py > 0 && py < FINE_MATCHMAP_YS)
@@ -1614,14 +1615,14 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 	// Add points (to neighbor cells as well), and remove empty space around them.
 
 	int oor = 0;
-	for(int p=0; p<cloud->n_points; p++)
+	for(int p=0; p<cloud->m.n_points; p++)
 	{
-		float px_in = cloud->points[p].px;
-		float py_in = cloud->points[p].py;
+		float px_in = cloud->points[p].x;
+		float py_in = cloud->points[p].y;
 
 		float mmpx = px_in*cosa - py_in*sina + x_corr;
 		float mmpy = px_in*sina + py_in*cosa + y_corr;
-		int   mmpz = cloud->points[p].pz + z_corr;
+		int   mmpz = cloud->points[p].z + z_corr;
 
 		#if REF_FINE_BOLD_MODE==1 || REF_FINE_BOLD_MODE==2
 			int px = mmpx/(FINE_MATCHMAP_UNIT/2) + FINE_MATCHMAP_XS;
@@ -1708,7 +1709,7 @@ static void cloud_to_ref_fine_matchmap_occu(cloud_t* cloud, ref_fine_matchmap_t*
 
 	}
 
-	if(oor > cloud->n_points/20)
+	if(oor > cloud->m.n_points/20)
 	{
 		printf("WARN: cloud_to_ref_fine_matchmap_occu: more than 5%% out-of-range voxels\n");
 	}
