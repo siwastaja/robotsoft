@@ -83,6 +83,11 @@ float main_robot_middle_to_origin = -120.0;
 #include <signal.h>
 
 #include "datatypes.h"
+
+#define DEFINE_STATE_VECT_NAMES
+#include "statevect.h"
+#undef DEFINE_STATE_VECT_NAMES
+
 #include "map_memdisk.h"
 #include "tcp_comm.h"
 #include "tcp_parser.h"
@@ -112,7 +117,7 @@ int max_speedlim = DEFAULT_SPEEDLIM;
 int cur_speedlim = DEFAULT_SPEEDLIM;
 
 int32_t move_run;
-int32_t move_id;
+int32_t move_id = -1;
 int32_t move_remaining;
 
 
@@ -171,7 +176,6 @@ int the_route_len = 0;
 
 int do_follow_route = 0;
 int route_finished_for_charger = 0;
-int route_finished_or_notfound = 0;
 int route_pos = 0;
 int start_route = 0;
 int partial_route = 0;
@@ -194,7 +198,7 @@ int32_t search_thread_dest_x, search_thread_dest_y;
 static volatile sig_atomic_t search_thread_running;
 static volatile sig_atomic_t search_thread_retval;
 int search_instructed;
-
+int charger_run_search_result_got;
 
 pthread_t thread_search;
 void* search_thread()
@@ -218,7 +222,6 @@ int run_search(int32_t dest_x, int32_t dest_y, int dont_map_lidars)
 	}
 
 	do_follow_route = 0;
-	route_finished_or_notfound = 0;
 
 	send_info(INFO_STATE_THINK);
 
@@ -309,7 +312,7 @@ int poll_search_status(int act_as_well)
 		int new_early = dist/10.0;
 		if(new_early < 30) new_early = 30;
 		else if(new_early > 250) new_early = 250;
-		printf("[%d]=(%d,%d), [%d]=(%d,%d), dist=%.1f, new_early = %d\n", i-1, the_route[i-1].x, the_route[i-1].y, i, the_route[i].x, the_route[i].y, dist, new_early);
+		//printf("[%d]=(%d,%d), [%d]=(%d,%d), dist=%.1f, new_early = %d\n", i-1, the_route[i-1].x, the_route[i-1].y, i, the_route[i].x, the_route[i].y, dist, new_early);
 		the_route[i].take_next_early = new_early;
 	}
 
@@ -326,17 +329,22 @@ int poll_search_status(int act_as_well)
 		do_follow_route = 1;
 		start_route = 1;
 		route_pos = 0;
-		route_finished_or_notfound = 0;
 		id_cnt++; if(id_cnt > 7) id_cnt = 1;
 	}
 	else
 	{
 		do_follow_route = 0;
-		route_finished_or_notfound = 1;
 		send_info(INFO_STATE_IDLE);
-		retval = 99;
+		if(retval == 0)
+		{
+			// found route, but zero length (already there)
+			route_finished_for_charger = 1;
+		}
+
 	}
 
+	charger_run_search_result_got = 1;
+	//printf("poll, charger_run_search_result_got = %d, do_follow_route = %d, retval=%d\n", charger_run_search_result_got, do_follow_route, retval);
 	return retval;
 
 }
@@ -650,7 +658,6 @@ void route_fsm()
 							send_info(INFO_STATE_IDLE);
 							micronavi_stops = 0;
 							do_follow_route = 0;
-							route_finished_or_notfound = 1;
 							route_finished_for_charger = 1;
 							send_route_end_status(TCP_RC_ROUTE_STATUS_SUCCESS);
 						}
@@ -727,10 +734,10 @@ void conf_charger_pos()  // call when the robot is *in* the charger.
 
 
 	printf("Set charger pos at ang=%d, x=%d, y=%d\n", cha_ang, cha_x, cha_y);
-	charger_first_x = (float)cha_x - cos(ANG32TORAD(cha_ang))*(float)CHARGER_FIRST_DIST;
-	charger_first_y = (float)cha_y - sin(ANG32TORAD(cha_ang))*(float)CHARGER_FIRST_DIST;	
-	charger_second_x = (float)cha_x - cos(ANG32TORAD(cha_ang))*(float)CHARGER_SECOND_DIST;
-	charger_second_y = (float)cha_y - sin(ANG32TORAD(cha_ang))*(float)CHARGER_SECOND_DIST;
+	charger_first_x = (float)cha_x + cos(ANG32TORAD(cha_ang))*(float)CHARGER_FIRST_DIST;
+	charger_first_y = (float)cha_y + sin(ANG32TORAD(cha_ang))*(float)CHARGER_FIRST_DIST;	
+	charger_second_x = (float)cha_x + cos(ANG32TORAD(cha_ang))*(float)CHARGER_SECOND_DIST;
+	charger_second_y = (float)cha_y + sin(ANG32TORAD(cha_ang))*(float)CHARGER_SECOND_DIST;
 	charger_fwd = CHARGER_SECOND_DIST-CHARGER_THIRD_DIST;
 	charger_ang = cha_ang;
 
@@ -797,7 +804,7 @@ volatile int cmd_send_to_robot;
 
 int new_stop_movement()
 {
-	printf("STOP MOVEMENT\n");
+//	printf("STOP MOVEMENT\n");
 	s2b_stop_movement_t *p_msg = spi_init_cmd(CMD_STOP_MOVEMENT);
 
 	if(!p_msg)
@@ -815,7 +822,7 @@ int new_stop_movement()
 
 int new_mount_charger()
 {
-	printf("MOUNT CHARGER\n");
+//	printf("MOUNT CHARGER\n");
 	s2b_mount_charger_t *p_msg = spi_init_cmd(CMD_MOUNT_CHARGER);
 
 	if(!p_msg)
@@ -833,7 +840,7 @@ int new_mount_charger()
 
 int new_self_calib_request(int n_turns, int speed)
 {
-	printf("SELF_CALIB_REQUEST\n");
+//	printf("SELF_CALIB_REQUEST\n");
 	s2b_self_calib_request_t *p_msg = spi_init_cmd(CMD_SELF_CALIB_REQUEST);
 
 	if(!p_msg)
@@ -874,6 +881,7 @@ void calc_corrcorr_for_movement(int32_t dst_x, int32_t dst_y)
 static int move_to_prev_x, move_to_prev_y, move_to_prev_id, move_to_prev_backmode, move_to_prev_speedlimit, move_to_prev_accurate_turn;
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn)
 {
+//	printf("NEW_MOVE_TO\n");
 	move_to_prev_x = x;
 	move_to_prev_y = y;
 	move_to_prev_backmode = backmode;
@@ -895,7 +903,7 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	memset(p_msg, 0, sizeof(*p_msg));
 	p_msg->x = x - corr_x - (corrcorr_for_movement_x>>16);
 	p_msg->y = y - corr_y - (corrcorr_for_movement_y>>16);
-	printf("RQ: %d, %d\n", p_msg->x, p_msg->y);
+//	printf("RQ: %d, %d\n", p_msg->x, p_msg->y);
 	p_msg->id = id;
 	p_msg->backmode = backmode;
 
@@ -973,6 +981,8 @@ void load_inject_gyrocal()
 
 int new_move_rel(int32_t ang, int32_t fwd)
 {
+//	printf("NEW_MOVE_REL\n");
+
 	s2b_move_rel_t *p_msg = spi_init_cmd(CMD_MOVE_REL);
 
 	if(!p_msg)
@@ -1023,6 +1033,8 @@ int ext_vacuum_cmd(int power, int nozzle)
 
 int motor_enable_keepalive(int enabled)
 {
+//	printf("MOTOR_ENABLE_KEEPALIVE\n");
+
 	s2b_motors_t *p_msg = spi_init_cmd(CMD_MOTORS);
 
 	if(!p_msg)
@@ -1042,6 +1054,8 @@ int motor_enable_keepalive(int enabled)
 
 int new_correct_pos(int32_t da, int32_t dx, int32_t dy)
 {
+//	printf("NEW_CORRECT_POS\n");
+
 	s2b_corr_pos_t *p_msg = spi_init_cmd(CMD_CORR_POS);
 
 	if(!p_msg)
@@ -1194,6 +1208,8 @@ void process_new_voxmaps(voxmap_t* vm)
 
 	voxmap_to_routing_pages(vm);
 }
+
+int32_t cur_move_cmd_id = 1;
 
 void* main_thread()
 {
@@ -1641,6 +1657,7 @@ void* main_thread()
 							drive_diag_t* dd = &p_data[offs];
 							fix_pose_drive_diag(dd);
 							move_run = dd->run; 
+							//printf("move_run = %d\n", move_run);
 							move_id = dd->id;
 							move_remaining = dd->remaining;
 							micronavi_stop_flags = dd->micronavi_stop_flags;
@@ -1654,6 +1671,7 @@ void* main_thread()
 								fix_pose(&tss->sets[0].pose);
 							if((tss->flags & TOF_SLAM_SET_FLAG_SET1_NARROW) || (tss->flags & TOF_SLAM_SET_FLAG_SET1_WIDE))
 								fix_pose(&tss->sets[1].pose);
+
 							#include "slam_matchers.h"
 							result_t corr;
 
@@ -1669,11 +1687,11 @@ void* main_thread()
 									int32_t da = RADTOANGI32(corr.yaw);
 									int32_t dx = -corr.x;
 									int32_t dy = -corr.y;
-									printf("Correcting by yaw=%d, x=%d, y=%d\n", da/ANG_0_1_DEG, dx, dy);
-									sw_correct_pos(da, dx, dy);
+									//printf("Correcting by yaw=%d, x=%d, y=%d\n", da/ANG_0_1_DEG, dx, dy);
+									//sw_correct_pos(da, dx, dy);
 
-									do_something_to_changed_pages(process_new_voxmaps);
-									do_something_to_stored_pages(process_new_voxmaps);
+									//do_something_to_changed_pages(process_new_voxmaps);
+									//do_something_to_stored_pages(process_new_voxmaps);
 								}
 							}
 						}
@@ -1759,10 +1777,10 @@ void* main_thread()
 			}
 			if(cmd == 'l')
 			{
-				new_mount_charger();
+//				new_mount_charger();
 
-//				read_charger_pos();
-//				find_charger_state = 1;
+				read_charger_pos();
+				find_charger_state = 1;
 			}
 			if(cmd == 'v')
 			{
@@ -1817,6 +1835,9 @@ void* main_thread()
 
 		}
 
+		static int micronavi_stop_flags_printed = 0;
+
+
 		if(tcp_client_sock >= 0 && FD_ISSET(tcp_client_sock, &fds))
 		{
 			int ret = handle_tcp_client();
@@ -1846,7 +1867,12 @@ void* main_thread()
 //				}
 //				else
 				{
-					new_move_to(msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode, 0, cur_speedlim, 1);
+					cur_move_cmd_id++;
+					if(cur_move_cmd_id > 2000000000)
+						cur_move_cmd_id = 0;
+
+					new_move_to(msg_cr_dest.x, msg_cr_dest.y, msg_cr_dest.backmode, cur_move_cmd_id, cur_speedlim, 1);
+					//micronavi_stop_flags_printed = 0;
 				}
 				find_charger_state = 0;
 				do_follow_route = 0;
@@ -2098,14 +2124,15 @@ void* main_thread()
 			}
 		}
 
-		static int micronavi_stop_flags_printed = 0;
 		static int prev_move_remaining;
 
-		if(micronavi_stop_flags)
+		if(cur_move_cmd_id == move_id)
 		{
-			if(!micronavi_stop_flags_printed)
+			//printf("%d  %d\n", cur_move_cmd_id, move_id);
+
+			if(micronavi_stop_flags)
 			{
-				micronavi_stop_flags_printed = 1;
+				assert(move_run == 0);
 				printf("MCU-level micronavigation: STOP. Reason flags:\n");
 				for(int i=0; i<32; i++)
 				{
@@ -2133,11 +2160,33 @@ void* main_thread()
 
 					cmd_state = 0;
 				}
+
+				cur_move_cmd_id++;
+				if(cur_move_cmd_id > 2000000000)
+					cur_move_cmd_id = 0;
+				move_id = -1;
+
+			}
+			else if(move_run == 0)
+			{
+				printf(" MOVEMENT FINISHED !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+				msg_rc_movement_status.cur_ang = cur_ang>>16;
+				msg_rc_movement_status.cur_x = cur_x;
+				msg_rc_movement_status.cur_y = cur_y;
+				msg_rc_movement_status.status = TCP_RC_MOVEMENT_STATUS_SUCCESS;
+				msg_rc_movement_status.obstacle_flags = 0;
+				tcp_send_msg(&msgmeta_rc_movement_status, &msg_rc_movement_status);
+				send_info(INFO_STATE_IDLE);
+
+				cmd_state = 0;
+
+				cur_move_cmd_id++;
+				if(cur_move_cmd_id > 2000000000)
+					cur_move_cmd_id = 0;
+				move_id = -1;
+
 			}
 		}
-		else
-			micronavi_stop_flags_printed = 0;
-
 
 
 		//latest_action_timestamp = subsec_timestamp();
@@ -2153,30 +2202,30 @@ void* main_thread()
 			{
 				// do something
 			}
+
+			static int prev_charger_input_mv = 50000;
+			if(latest_pwr_status.charger_input_mv > 30000 && prev_charger_input_mv < 15000)
+			{
+				conf_charger_pos();
+			}
+
+			prev_charger_input_mv = latest_pwr_status.charger_input_mv;
 		}
+/*
+		static int32_t prev_move_run;
 
 		if(cmd_state == TCP_CR_DEST_MID && tcp_client_sock >= 0)
 		{
-			static int32_t prev_move_run;
 
 			if(prev_move_run && (!move_run))
 			{
 			
-//				printf(" MOVEMENT FINISHED !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
-				msg_rc_movement_status.cur_ang = cur_ang>>16;
-				msg_rc_movement_status.cur_x = cur_x;
-				msg_rc_movement_status.cur_y = cur_y;
-				msg_rc_movement_status.status = TCP_RC_MOVEMENT_STATUS_SUCCESS;
-				msg_rc_movement_status.obstacle_flags = 0;
-				tcp_send_msg(&msgmeta_rc_movement_status, &msg_rc_movement_status);
-				send_info(INFO_STATE_IDLE);
-
-				cmd_state = 0;
 			}
 			prev_move_remaining = move_remaining;
-			prev_move_run = move_run;
 		}
-	
+		prev_move_run = move_run;
+	*/
+
 		if(find_charger_state < 4)
 			live_obstacle_checking_on = 1;
 		else
@@ -2194,18 +2243,23 @@ void* main_thread()
 				find_charger_state = 0;
 			}
 			else
+			{
 				find_charger_state++;
+				charger_run_search_result_got = 0;
+			}
 		}
 		else if(find_charger_state == 2)
 		{
+			//printf("state2, route_finished_for_charger=%d, charger_run_search_result_got = %d, do_follow_route = %d, retval=%d\n", route_finished_for_charger, charger_run_search_result_got, do_follow_route, retval);
+
 			if(route_finished_for_charger)
 			{
 				printf("Search succeeded, route followed.\n");
 				find_charger_state++;
 			}
-			else if(route_finished_or_notfound)
+			else if(charger_run_search_result_got && !do_follow_route)
 			{
-				printf("Finding charger (first point) failed\n");
+				printf("Going to (by routing) to charger (first point) failed; initial routing succeeded, fails during route following.\n");
 				find_charger_state = 0;
 			}
 
@@ -2237,13 +2291,13 @@ void* main_thread()
 			{
 				printf("Going to second charger point.\n");
 				send_info(INFO_STATE_FWD);
-				new_move_to(charger_second_x, charger_second_y, 1, 0x7f, 20, 1);
+				new_move_to(charger_second_x, charger_second_y, 1, 12345678, 20, 1);
 				find_charger_state++;
 			}
 		}
 		else if(find_charger_state == 5)
 		{
-			if(move_id == 0x7f && move_remaining < 40)
+			if(move_id == 12345678 && move_remaining < 40 && !move_run)
 			{
 				if(sq(cur_x-charger_second_x) + sq(cur_y-charger_second_y) > sq(180))
 				{
@@ -2264,7 +2318,7 @@ void* main_thread()
 		{
 			if(!(latest_pwr_status.flags & PWR_STATUS_FLAG_CHARGING) && !(latest_pwr_status.flags & PWR_STATUS_FLAG_FULL))
 			{
-				if(subsec_timestamp() > chafind_timestamp+180.0)
+				if(subsec_timestamp() > chafind_timestamp+111.111)
 				{
 					printf("WARNING: Not charging (charger mount failure?). Retrying driving to charger.\n");
 					find_charger_state = 1;
@@ -2397,13 +2451,19 @@ void* main_thread()
 
 				if(spi_init_cmd_queue() < 0)
 				{
-					printf("WARNING: spi_init_cmd_queue error\n");
-					usleep(200000);
+					printf("WARNING: spi_init_cmd_queue needs some waiting\n");
+					usleep(500000);
 
 					if(spi_init_cmd_queue() < 0)
 					{
-						printf("ERROR: spi_init_cmd_queue error\n");
-						abort();
+						printf("WARNING: spi_init_cmd_queue needs A LOT of waiting\n");
+						usleep(500000);
+
+						if(spi_init_cmd_queue() < 0)
+						{
+							printf("ERROR: spi_init_cmd_queue error\n");
+							abort();
+						}
 					}
 				}
 			}
@@ -2428,7 +2488,12 @@ int main(int argc, char** argv)
 
 	int ret;
 
-	if( (ret = pthread_create(&thread_spi, NULL, spi_comm_thread, NULL)) )
+	int tracefile = 0;
+
+	if(argc >= 2 && argv[1][0] == 't')
+		tracefile = 1;
+
+	if( (ret = pthread_create(&thread_spi, NULL, tracefile?tracefile_comm_thread:spi_comm_thread, NULL)) )
 	{
 		printf("ERROR: spi access thread creation, ret = %d\n", ret);
 		return -1;

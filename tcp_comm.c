@@ -139,7 +139,7 @@ int handle_tcp_listener()
 {
 	int new_fd;
 	struct sockaddr_in clientname;
-	size_t size = sizeof(clientname);
+	socklen_t size = sizeof(clientname);
 	new_fd = accept(tcp_listener_sock, (struct sockaddr *) &clientname, &size);
 	if(new_fd < 0)
 	{

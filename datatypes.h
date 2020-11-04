@@ -19,8 +19,7 @@
 
 */
 
-#ifndef DATATYPES_H
-#define DATATYPES_H
+#pragma once
 
 #include <math.h>
 #ifndef M_PI
@@ -150,55 +149,4 @@ typedef enum
 	INFO_STATE_DAIJUING = 7
 } info_state_t;
 
-#define USER_IN_COMMAND 0
-#define EXPLORATION     1
 
-#define STATE_VECT_LEN 16
-typedef union __attribute__((packed))
-{
-	struct __attribute__((packed))
-	{
-		uint8_t keep_position;
-		uint8_t loca_3d;
-		uint8_t mapping_3d;
-		uint8_t mapping_collisions;
-		uint8_t command_source;
-		uint8_t vacuum_on;
-		uint8_t reserved3;
-		uint8_t reserved4;
-		uint8_t reserved5;
-		uint8_t reserved6;
-		uint8_t reserved7;
-		uint8_t reserved8;
-		uint8_t reserved9;
-		uint8_t reserved10;
-		uint8_t reserved11;
-		uint8_t reserved12;
-	} v;
-
-	uint8_t table[STATE_VECT_LEN];
-} state_vect_t; // if the length changes, tcp_parser.c requires modification
-
-static const char* state_vect_names[STATE_VECT_LEN] =
-{
-	"motors on",
-	"3D localization",
-	"3D mapping",
-	"collision mapping",
-	"autonomous exploration",
-	"vacuum app",
-	"reserved",
-	"reserved",
-	"reserved",
-	"reserved",
-	"reserved",
-	"reserved",
-	"reserved",
-	"reserved",
-	"reserved",
-	"reserved"
-};
-
-extern state_vect_t state_vect;
-
-#endif

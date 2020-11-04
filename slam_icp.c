@@ -260,7 +260,7 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 	#ifdef KDTREE_STATS
 	printf("%d branches, avg len = %d, max len = %d\n", n_branch, (int)(branch_len_cumul/(int64_t)n_branch), max_branch_len);
 	#endif
-	printf("cloud_to_kd %.2fms  build_tree %.2fms\n", t_cloud_to_kd*1000.0, t_make_tree*1000.0);
+	//printf("cloud_to_kd %.2fms  build_tree %.2fms\n", t_cloud_to_kd*1000.0, t_make_tree*1000.0);
 
 	double t_total_total = 0.0;
 
@@ -396,7 +396,7 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 			yaw_corr -= yaw;
 		}
 
-		printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%), transl=(%+6.0f,%+6.0f,%+6.0f), yaw=%.2f deg, corr=(%+6.0f,%+6.0f,%+6.0f; %.2f deg)\n",
+		if(iter == max_iters-1) printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%), transl=(%+6.0f,%+6.0f,%+6.0f), yaw=%.2f deg, corr=(%+6.0f,%+6.0f,%+6.0f; %.2f deg)\n",
 			iter, a_n_points, b_n_points, n_associations,
 			100.0*(float)n_associations/(float)a_n_points, 100.0*(float)n_associations/(float)b_n_points,
 			mean_diff.x, mean_diff.y, mean_diff.z, RADTODEG(yaw), x_corr, y_corr, z_corr, RADTODEG(yaw_corr));
@@ -410,7 +410,7 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 		t_total_total += t_search;
 	}
 
-	printf("total time = %.1f ms\n", t_total_total*1000.0);
+	//printf("total time = %.1f ms\n", t_total_total*1000.0);
 
 	if(combined_cloud_out)
 	{
@@ -678,6 +678,7 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 			freevect_point_t p = transform_freevect(cloud_b->freevects[i], x_corr+(float)tx, y_corr+(float)ty, z_corr+(float)tz, yaw_corr);
 			p.src = matching_srcs[p.src];
 			cloud_add_freevect(combined_cloud_out, p);
+
 		}
 
 		free(matching_srcs);

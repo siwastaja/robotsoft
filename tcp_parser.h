@@ -83,7 +83,7 @@ extern tcp_cr_charge_t   msg_cr_charge;
 #define TCP_CR_MODE_MID    358
 typedef struct __attribute__ ((packed))
 {
-	uint8_t mode;
+	uint8_t mode; // 8
 } tcp_cr_mode_t;
 
 extern tcp_cr_mode_t   msg_cr_mode;

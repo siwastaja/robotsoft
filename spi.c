@@ -54,6 +54,9 @@
 
 
 
+volatile int dummy_spi;
+
+
 extern volatile int verbose_mode;
 
 static int spi_fd;
@@ -253,6 +256,9 @@ int ack_error()
 
 int spi_init_cmd_queue()
 {
+	if(dummy_spi)
+		return 0;
+
 	//printf("spi_init_cmd_queue()\n");
 	if(send_pending)
 	{
@@ -273,6 +279,9 @@ int spi_init_cmd_queue()
 */
 void* spi_init_cmd(uint8_t msgid)
 {
+	if(dummy_spi)
+		return &spi_tx_frame[S2B_HEADER_LEN+sizeof(s2b_cmdheader_t)];
+
 	if(send_pending)
 	{
 		printf("WARN: spi_init_cmd: send is already pending.\n");
@@ -605,5 +614,56 @@ void* spi_comm_thread()
 	deinit_spi();
 
 	return NULL;
+}
+
+// Use instead of spi_comm_thread(), to play back trace from files
+void* tracefile_comm_thread()
+{
+	dummy_spi = 1;
+	char fname[1024];
+	int file_idx = 0;
+	while(running)
+	{
+		//sleep(1);
+		//usleep(100000);
+
+		snprintf(fname, 1024, "/home/hrst/pulu/tut_trace/trace%08d.rb2", file_idx);
+		file_idx++;
+
+		FILE* fil = fopen(fname, "rb");
+		if(!fil)
+		{
+			printf("tracefile_comm_thread can't find file %s\n", fname);
+			break;
+		}
+
+		uint8_t* buf = spi_rx_fifo[rx_fifo_wr];
+
+		int n_bytes_read = fread(buf, 1, B2S_MAX_LEN, fil);
+		fclose(fil);
+
+		if(n_bytes_read < B2S_TOTAL_OVERHEAD_WITHOUT_CRC)
+		{
+			printf("ERROR: tracefile %s is too short.\n", fname);
+			break;
+		}
+
+		int expected_size = ((b2s_header_t*)buf)->payload_len + B2S_TOTAL_OVERHEAD_WITHOUT_CRC;
+
+		if(n_bytes_read != expected_size)
+		{
+			printf("ERROR: %s tracefile size vs. header information mismatch, bytes_read=%d, expected_size=%d\n", fname, n_bytes_read, expected_size);
+			break;
+		}
+
+		rx_fifo_wr++; if(rx_fifo_wr >= SPI_RX_FIFO_DEPTH) rx_fifo_wr = 0;
+
+		// don't let the FIFO grow. Wait and read the next file only when the FIFO is empty again.
+		while(running && rx_fifo_wr != rx_fifo_rd)
+			usleep(10000);
+
+
+	}
+	printf("tracefile_comm_thread() end\n");
 }
 

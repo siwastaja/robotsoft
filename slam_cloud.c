@@ -30,6 +30,7 @@ void init_cloud(cloud_t* cloud, int flags)
 	cloud->m.n_srcs = 0;
 	cloud->m.n_points = 0;
 	cloud->m.n_poses = 0;
+	cloud->m.n_freevects = 0;
 	
 	if(flags & CLOUD_INIT_SMALL)
 	{
@@ -75,6 +76,20 @@ void alloc_cloud(cloud_t* cloud)
 	assert(cloud->poses);
 }
 
+// Translates all cloud points, sources and freevects.
+// Note that the cloud operates on limited numerical range. Use this function to re-reference the cloud, or similar.
+// If you just want to move the cloud around, think about adjusting the cloud.m.ref_* fields.
+void translate_cloud(cloud_t * cloud, int tx, int ty, int tz)
+{
+	for(int i=0; i<cloud->m.n_points; i++)
+		cloud->points[i] = transform_point(cloud->points[i], tx, ty, tz, 0.0);
+
+	for(int i=0; i<cloud->m.n_srcs; i++)
+		cloud->srcs[i] = transform_point(cloud->srcs[i], tx, ty, tz, 0.0);
+
+	for(int i=0; i<cloud->m.n_freevects; i++)
+		cloud->freevects[i] = transform_freevect(cloud->freevects[i], tx, ty, tz, 0.0);
+}
 
 // translates cloud in and its sources to the reference of out.
 // Tries to find matching sources in in, creates new sources if necessary, changes the source indeces.
@@ -94,7 +109,7 @@ void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in)
 	{
 		int newsrc = cloud_find_source(out, CL_P(in->srcs[i].x+tx, in->srcs[i].y+ty, in->srcs[i].z+tz));
 		src_transl[i] = newsrc;
-		printf("cat_cloud: translating in source %d to out source %d\n", i, newsrc);
+		//printf("cat_cloud: translating in source %d to out source %d\n", i, newsrc);
 	}
 
 	cloud_prepare_fast_add_points(out, in->m.n_points);
@@ -113,7 +128,7 @@ void cat_cloud(cloud_t * const restrict out, const cloud_t * const restrict in)
 
 		cloud_fast_add_point(out, newpoint);
 	}
-	printf("cat_cloud: added %d points translated by (%d,%d,%d)\n", in->m.n_points, (int)tx, (int)ty, (int)tz);
+	//printf("cat_cloud: added %d points translated by (%d,%d,%d)\n", in->m.n_points, (int)tx, (int)ty, (int)tz);
 	free(src_transl);
 }
 
@@ -450,9 +465,9 @@ int load_cloud(cloud_t* cloud, int idx)
 #define CLOUDFLT_UNIT 32 //mm
 */
 
-#define CLOUDFLT_XS 448
-#define CLOUDFLT_YS 448
-#define CLOUDFLT_ZS 96
+#define CLOUDFLT_XS 800 // 448
+#define CLOUDFLT_YS 800 // 448
+#define CLOUDFLT_ZS 64  // 96
 #define CLOUDFLT_UNIT (64/*mm*/ / CLOUD_MM)
 
 #define MAX_OCCU_CNT 15
@@ -892,6 +907,8 @@ void freespace_filter_cloud(cloud_t* restrict out, cloud_t* restrict cloud)
 
 		for(int s=0; s<cloud->points[p].n_srcs; s++)
 		{
+			if(cloud->points[p].srcs[s] == CLOUD_GENERAL_SRC)
+				continue;
 			int sx = cloud->srcs[ cloud->points[p].srcs[s] ].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
 			int sy = cloud->srcs[ cloud->points[p].srcs[s] ].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
 			int sz = cloud->srcs[ cloud->points[p].srcs[s] ].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;
@@ -909,6 +926,9 @@ void freespace_filter_cloud(cloud_t* restrict out, cloud_t* restrict cloud)
 	printf("FILTER: n_freevects = %d\n", cloud->m.n_freevects);
 	for(int p=0; p<cloud->m.n_freevects; p++)
 	{
+		if(cloud->freevects[p].src == CLOUD_GENERAL_SRC)
+			continue;
+
 		int px = cloud->freevects[p].x/CLOUDFLT_UNIT + CLOUDFLT_XS/2;
 		int py = cloud->freevects[p].y/CLOUDFLT_UNIT + CLOUDFLT_YS/2;
 		int pz = cloud->freevects[p].z/CLOUDFLT_UNIT + CLOUDFLT_ZS/2;

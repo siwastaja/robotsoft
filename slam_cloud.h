@@ -432,6 +432,7 @@ ALWAYS_INLINE void cloud_add_pose(cloud_t* cloud, hw_pose_t p)
 
 ALWAYS_INLINE void cloud_add_freevect(cloud_t* cloud, freevect_point_t p)
 {
+//	printf("add_freevect n=%d, alloc=%d\n", cloud->m.n_freevects, cloud->alloc_freevects);
 	if(UNLIKELY(cloud->m.n_freevects >= cloud->alloc_freevects))
 	{
 		cloud->alloc_freevects <<= 1;
@@ -497,9 +498,10 @@ typedef struct __attribute__((packed))
 
 void load_sensor_softcals();
 
-
-void transform_cloud(cloud_t* cloud, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw);
-void transform_cloud_copy(cloud_t* cloud_in, cloud_t* cloud_out, int32_t transl_x, int32_t transl_y, int32_t transl_z, double yaw);
+// Translates all cloud points, sources and freevects.
+// Note that the cloud operates on limited numerical range. Use this function to re-reference the cloud, or similar.
+// If you just want to move the cloud around, think about adjusting the cloud.m.ref_* fields.
+void translate_cloud(cloud_t * cloud, int tx, int ty, int tz);
 
 // translates cloud in and its sources to the reference of out.
 // Tries to find matching sources in in, creates new sources if necessary, changes the source indeces.

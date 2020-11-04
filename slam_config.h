@@ -36,6 +36,8 @@
 #define DY_LIMIT 8000
 #define DZ_LIMIT 1000
 
+#define SCAN_LIMIT 100
+
 // Cumulative linear travel limit; after exceeded, a new submap is started. In mm.
 // Difference to the D*_LIMITs is that this limit can force a new submap even when the robot is
 // just moving (back and forth, for example) inside a small area.

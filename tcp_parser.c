@@ -31,6 +31,7 @@
 #include <zlib.h>
 
 #include "datatypes.h"
+#include "statevect.h"
 #include "tcp_comm.h"
 #include "tcp_parser.h"
 #include "utlist.h"

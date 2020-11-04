@@ -1232,7 +1232,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 	while(start_ang < 0.0) start_ang += 2.0*M_PI;
 	int start_dir = (start_ang/(2.0*M_PI) * 32.0)+0.5;
 
-//	printf("Start %d,%d,  end %d,%d  start_ang=%f  start_dir=%d\n", s_x, s_y, e_x, e_y, start_ang, start_dir);
+	//printf("Start %d,%d,  end %d,%d  start_ang=%f  start_dir=%d\n", s_x, s_y, e_x, e_y, start_ang, start_dir);
 
 
 	search_unit_t* p_start = (search_unit_t*) malloc(sizeof(search_unit_t));
@@ -1293,7 +1293,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 		if(distsq <= acceptsq)
 		{
 
-			//printf("Solution found, cnt = %d\n", cnt);
+			printf("Solution found, cnt = %d\n", cnt);
 
 			// solution found.
 
@@ -1313,7 +1313,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 			{
 				if(line_of_sight(rt->loc, rt->next->next->loc))
 				{
-//					printf("Deleting.\n");
+					//printf("Deleting.\n");
 					route_unit_t *tmp = rt->next;
 					DL_DELETE(*route, tmp); // crash
 					free(tmp);
@@ -1449,7 +1449,7 @@ static int search(route_unit_t **route, float start_ang, int start_x_mm, int sta
 				{
 					if(!test_robot_turn(p_cur->loc.x, p_cur->loc.y, start_ang, ((float)direction/32.0)*2.0*M_PI))
 					{
-//						printf("Robot cannot turn to direction %d\n", direction);
+						//printf("Robot cannot turn to direction %d\n", direction);
 						continue;
 					}
 				}
@@ -1574,7 +1574,23 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 	int ret = search(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, change_to_normal, accept_dist_blocks);
 
 	if(ret == 0)
+	{
+/*		printf("search2(): search() returned 0 (success). Route:\n");
+
+		route_unit_t *rt;
+		DL_FOREACH(*route, rt)
+		{
+			if(rt->backmode)
+				printf(" REVERSE ");
+			else
+				printf("         ");
+
+			printf("to %d,%d\n", rt->loc.x, rt->loc.y);
+		}
+*/
+
 		return 0;
+	}
 
 	if(ret == 1)
 	{
@@ -1627,6 +1643,8 @@ int search2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_m
 		}
 		return 1;
 	}
+
+	printf("search2(): search() returned %d, search2() fails with rc=3\n", ret);
 
 	return 3;
 

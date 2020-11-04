@@ -2,7 +2,13 @@
 #include <stdint.h>
 
 void spi_comm_thread_quit();
+
 void* spi_comm_thread();
+
+// Start this thread instead to skip initializing SPI and read trace files instead
+void* tracefile_comm_thread();
+
+
 uint8_t* spi_rx_pop();
 int subscribe_to(uint64_t* subs_vector);
 
