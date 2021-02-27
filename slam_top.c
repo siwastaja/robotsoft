@@ -27,6 +27,7 @@
 
 #include "tcp_parser.h"
 
+#include "statevect.h"
 
 
 
@@ -374,6 +375,20 @@ small_cloud_t* convert_cloud_to_small_cloud(cloud_t* in)
 	return out;
 }
 
+small_cloud_t* convert_cloud_to_small_cloud_decimate(cloud_t* in, int min_z, int max_z, int decimate, int *n_points_out)
+{
+	small_cloud_t* out = malloc(sizeof(small_cloud_t) * in->m.n_points);
+	assert(out);
+	int o = 0;
+	for(int i=0; i<in->m.n_points; i+=decimate)
+	{
+		if(in->points[i].z >= min_z/CLOUD_MM && in->points[i].z <= max_z/CLOUD_MM)
+			out[o++] = set_small_cloud_native_units(0, 0, 0, 0, in->points[i].x, in->points[i].y, in->points[i].z);
+	}
+	*n_points_out = o;
+	return out;
+}
+
 #ifdef SLAM_STANDALONE
 
 int32_t corr_x, corr_y, corr_z;
@@ -435,6 +450,136 @@ extern int sw_correct_pos(int32_t da, int32_t dx, int32_t dy, int32_t dz);
 extern void fix_pose(hw_pose_t* pose);
 #endif
 
+// points are collected in the_map_cloud_a
+// the_map_cloud_a is used for localization when still mapping, or when the filtering still isn't finished. the_map_cloud points to _a.
+// when mapping is finished, and filtering is done, the_map_cloud_b (the filtered cloud) is used for localization. the_map_cloud points to _b.
+
+static cloud_t the_map_cloud_a, the_map_cloud_b;
+static cloud_t *the_map_cloud = NULL;
+
+pthread_t themap_postproc_thread;
+
+// Postprocesses the map, this takes long. Ran as a thread.
+void* do_postproc_themap()
+{
+	printf("                           POSTPROC THREAD: START PROCESSING\n");
+
+	if(cloud_is_init(&the_map_cloud_b))
+		free_cloud(&the_map_cloud_b);
+
+	init_cloud(&the_map_cloud_b, 0);
+
+	freespace_filter_cloud(&the_map_cloud_b, &the_map_cloud_a);
+	#include "routing.h"
+	printf("                           POSTPROC THREAD: FILTER_CLOUD done, start generating routing pages...\n");
+	cloud_to_routing_pages(&the_map_cloud_b);
+	printf("                           POSTPROC THREAD: FILTER_CLOUD done, save routing pages and map...\n");
+	save_routing_pages();
+	save_cloud(&the_map_cloud_b, 420420);
+	printf("                           POSTPROC THREAD: DONE!!!!!!!!!\n");
+	the_map_cloud = &the_map_cloud_b;
+	return NULL;
+}
+
+
+#if 0
+void dummy_test()
+{
+	cloud_t cloud;
+	init_cloud(&cloud, CLOUD_INIT_SMALL);
+	cloud_add_point(&cloud, CL_P_MM(+123, +456, 512));
+	cloud_add_point(&cloud, CL_P_MM(-789, -1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(-1234, -2345, 512));
+	cloud_add_point(&cloud, CL_P_MM(+5432, +3210, 512));
+	cloud_add_point(&cloud, CL_P_MM(+500, +0, 512));
+	cloud_add_point(&cloud, CL_P_MM(+1000, +0, 512));
+	cloud_add_point(&cloud, CL_P_MM(+1500, +0, 512));
+	cloud_add_point(&cloud, CL_P_MM(+2000, +0, 512));
+	cloud_add_point(&cloud, CL_P_MM(+3000, +0, 512));
+	cloud_add_point(&cloud, CL_P_MM(+4000, +0, 512));
+	cloud_add_point(&cloud, CL_P_MM(+500,  +1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+1000, +1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+1500, +1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+2000, +1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+3000, +1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+4000, +1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+500,  -1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+1000, -1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+1500, -1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+2000, -1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+3000, -1000, 512));
+	cloud_add_point(&cloud, CL_P_MM(+4000, -1000, 512));
+
+	{
+		small_cloud_t* sc = convert_cloud_to_small_cloud(&cloud);
+		tcp_send_small_cloud(0,0,0,
+			cloud.m.n_points, sc);
+		free(sc);
+	}
+
+	free_cloud(&cloud);
+}
+#endif
+
+// Run-time configuration:
+struct
+{
+	int semimap_match_interval;     // Number of sensor scan rounds accumulated into a temporary "semimap"
+	int semimap_iters;              // Max ICP iteration rounds when matching said sensor rounds to the semimap
+	double semimap_match_threshold; // ICP correspondence threshold for sensor scan -> semimap matching. Unit: mm
+	double semimap_comb_threshold;  // Point combining threshold. Unit: mm
+
+	int map_iters;                  // Max ICP iteration rounds when matching the temporary semimap to the map
+	double map_match_threshold;     // ICP corresponcence threshold. Unit: mm
+	double map_comb_threshold;      // Point combining threshold. Unit: mm
+
+	double xy_corr_coeff;           // Multiplier for correcting the x, y components of map matching to the robot pose
+	double z_corr_coeff;            // Same but for z.
+	double yaw_corr_coeff;          // Same but for yaw angle.
+
+} rtconf;
+
+void load_rtconf()
+{
+	FILE* f = fopen("slam_conf.txt", "rt");
+	if(!f)
+	{
+		printf("slam_conf.txt missing or unreadable. It's required. Will quit.\n");
+		exit(1);
+	}
+
+	if(fscanf(f, "%d %d %lf %lf %d %lf %lf %lf %lf %lf",
+		&rtconf.semimap_match_interval,
+		&rtconf.semimap_iters,
+		&rtconf.semimap_match_threshold,
+		&rtconf.semimap_comb_threshold,
+		&rtconf.map_iters,
+		&rtconf.map_match_threshold,
+		&rtconf.map_comb_threshold,
+		&rtconf.xy_corr_coeff,
+		&rtconf.z_corr_coeff,
+		&rtconf.yaw_corr_coeff) != 10)
+	{
+		printf("slam_conf.txt has illegal content. Fix the file. Will quit.\n");
+		exit(1);
+	}
+
+	fclose(f);
+
+	printf("slam_conf.txt read ok, will sanity-check the values.\n");
+	assert(rtconf.semimap_match_interval >= 1 && rtconf.semimap_match_interval <= 20);
+	assert(rtconf.semimap_iters >= 0 && rtconf.semimap_iters <= 200);
+	assert(rtconf.semimap_match_threshold >= 10.0 && rtconf.semimap_match_threshold <= 2000.0);
+	assert(rtconf.semimap_comb_threshold >= 0.0 && rtconf.semimap_comb_threshold <= 2000.0);
+	assert(rtconf.map_iters >= 0 && rtconf.map_iters <= 200);
+	assert(rtconf.map_match_threshold >= 20.0 && rtconf.map_match_threshold <= 2500.0);
+	assert(rtconf.map_comb_threshold >= 0.0 && rtconf.map_comb_threshold <= 2500.0);
+	assert(rtconf.xy_corr_coeff >= -10.0 && rtconf.xy_corr_coeff <= 10.0);
+	assert(rtconf.z_corr_coeff >= -10.0 && rtconf.z_corr_coeff <= 10.0);
+	assert(rtconf.yaw_corr_coeff >= -10.0 && rtconf.yaw_corr_coeff <= 10.0);
+}
+
+
 int ignoring = 0;
 int input_tof_slam_set(tof_slam_set_t* tss)
 {
@@ -455,8 +600,8 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 	static cloud_t clouds[N_SENSORS];
 	static int cur_sidx = FIRST_SIDX;
 
-	printf("input_tof_slam_set sidx = %d  ", cur_sidx);
-	printf("set0 "); print_hw_pose(&tss->sets[0].pose);
+//	printf("input_tof_slam_set exp_sidx %d  got sidx %d ", cur_sidx, tss->sidx);
+//	printf("set0 "); print_hw_pose(&tss->sets[0].pose);
 //	printf("set1 "); print_hw_pose(&tss->sets[1].pose);
 
 	if(cur_sidx != tss->sidx)
@@ -465,26 +610,66 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		return -1;
 	}
 
-	static cloud_t submap;
+
+	if(the_map_cloud == NULL)
+		the_map_cloud = &the_map_cloud_a;
 
 
-	if(cur_sidx == FIRST_SIDX)
+	// Once mapping_3d state is turned off, map is considered finished.
+	// Filter the whole cloud, generating the final map
+	static int prev_mapping_3d;
+	if(prev_mapping_3d && !state_vect.v.mapping_3d)
 	{
-		if(!cloud_is_init(&submap))
+		printf("FINISHED MAP\n");
+
+		int ret; 
+		if( ( ret = pthread_create(&themap_postproc_thread, NULL, do_postproc_themap, NULL) ) )
 		{
-			printf("init submap.."); fflush(stdout);
-			init_cloud(&submap, 0);
-			printf("ok\n");
-			submap.m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
-			submap.m.ref_y = tss->sets[0].pose.y/CLOUD_MM;
-			submap.m.ref_z = tss->sets[0].pose.z/CLOUD_MM;
+			printf("ERROR creating thread, ret=%d\n", ret);
+			abort();
 		}
+	}
+	
+	// once mapping_3d state is turned on, any existing map is cleared; start from scratch
+	if(!prev_mapping_3d && state_vect.v.mapping_3d)
+	{
+		printf("CLEAR MAP\n");
+		if(cloud_is_init(&the_map_cloud_a))
+		{
+			printf("free a\n");
+			free_cloud(&the_map_cloud_a);
+		}
+
+		//if(cloud_is_init(&the_map_cloud_b))
+		//{
+		//	printf("free b\n");
+		//	free_cloud(&the_map_cloud_b);
+		//}
+
+		delete_routing_pages();
+		clear_routing_pages();
+
+		the_map_cloud = &the_map_cloud_a;
+	}
+
+	prev_mapping_3d = state_vect.v.mapping_3d;
+
+
+
+	if(!cloud_is_init(&the_map_cloud_a))
+	{
+		printf("init the_map_cloud_a.."); fflush(stdout);
+		init_cloud(&the_map_cloud_a, 0);
+		printf("ok\n");
+		the_map_cloud_a.m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
+		the_map_cloud_a.m.ref_y = tss->sets[0].pose.y/CLOUD_MM;
+		the_map_cloud_a.m.ref_z = tss->sets[0].pose.z/CLOUD_MM;
 	}
 
 
-	//printf("init clouds[%d]..", cur_sidx); fflush(stdout);
+//	printf("init clouds[%d]..", cur_sidx); fflush(stdout);
 	init_cloud(&clouds[cur_sidx], CLOUD_INIT_SMALL);
-	//printf("ok\n");
+//	printf("ok\n");
 
 
 	clouds[cur_sidx].m.ref_x = tss->sets[0].pose.x/CLOUD_MM;
@@ -494,14 +679,14 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 	//printf("ref (%d,%d,%d)\n", (int)clouds[cur_sidx].m.ref_x,(int)clouds[cur_sidx].m.ref_y,(int)clouds[cur_sidx].m.ref_z);
 	// Set 0 is always there
 
-	//printf("tof_to_cloud.."); fflush(stdout);
+//	printf("tof_to_cloud.."); fflush(stdout);
 
 	tof_to_cloud(0, 0, tss,
 		tss->sets[0].pose.x, tss->sets[0].pose.y, tss->sets[0].pose.z,
 		1, 
 		&clouds[cur_sidx], 0);
 
-	//printf("ok\n");
+//	printf("ok\n");
 
 
 	// Set 1, if available, contains either a narrow beam image, or a longer-range wide beam image 
@@ -575,6 +760,7 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 
 
 
+
 	if(cur_sidx == LAST_SIDX)
 	{
 		cur_sidx = FIRST_SIDX;
@@ -586,12 +772,15 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		// from 2 input points, keeping the areas of sensor overlap clean, having equivalent point density to
 		// the areas of no overlap.
 
+		//printf("init combined_scan\n");
 		cloud_t combined_scan;
 		init_cloud(&combined_scan, 0);
-		combined_scan.m.ref_x = clouds[FIRST_SIDX].m.ref_x;
-		combined_scan.m.ref_y = clouds[FIRST_SIDX].m.ref_y;
-		combined_scan.m.ref_z = clouds[FIRST_SIDX].m.ref_z;
+		combined_scan.m.ref_x = clouds[MID_SIDX].m.ref_x;
+		combined_scan.m.ref_y = clouds[MID_SIDX].m.ref_y;
+		combined_scan.m.ref_z = clouds[MID_SIDX].m.ref_z;
 
+
+		printf("cat_cloud\n");
 		cat_cloud(&combined_scan, &clouds[FIRST_SIDX]);
 		for(int sidx=FIRST_SIDX+1; sidx<=LAST_SIDX; sidx++)
 		{
@@ -609,163 +798,179 @@ int input_tof_slam_set(tof_slam_set_t* tss)
 		}
 
 
-		// Output realtime view on tcp:
+		// If enabled, combined_scan will be re-centered by calculating the average (x,y) of all points
+		// to find the "center of gravity" of the cloud. By moving this "weight center" to (0, 0), ICP
+		// will find yaw rotation around this, possibly yielding less mixup between translation and rotation.
+		// Otherwise, the center of rotation will be the one used when combined_scan was initialized, this is,
+		// the robot position.
+		//#define ROTATE_AROUND_WEIGHT_CENTER
+
+		#ifdef ROTATE_AROUND_WEIGHT_CENTER
+			int64_t x_acc = 0, y_acc = 0;
+			for(int i=0; i<combined_scan.m.n_points; i++)
+			{
+				x_acc += combined_scan.points[i].x;
+				y_acc += combined_scan.points[i].y;
+			}
+
+			x_acc /= combined_scan.m.n_points;
+			y_acc /= combined_scan.m.n_points;
+
+			printf("recentered combined_scan, translated by (%d, %d)\n", (int)x_acc, (int)y_acc);
+
+			cloud_t combined_scan2;
+			init_cloud(&combined_scan2, 0);
+			combined_scan2.m.ref_x = combined_scan.m.ref_x - x_acc;
+			combined_scan2.m.ref_y = combined_scan.m.ref_y - y_acc;
+			combined_scan2.m.ref_z = combined_scan.m.ref_z;
+
+			cat_cloud(&combined_scan2, &combined_scan);
+
+		#else
+			#define combined_scan2 combined_scan
+		#endif
+
+
+		if(!state_vect.v.mapping_3d && !state_vect.v.loca_3d)
 		{
+			printf("realtime view tcp output\n");
+
+			// Output realtime view on tcp:
 			small_cloud_t* sc = convert_cloud_to_small_cloud(&combined_scan);
 			tcp_send_small_cloud(combined_scan.m.ref_x*CLOUD_MM, combined_scan.m.ref_y*CLOUD_MM, combined_scan.m.ref_x*CLOUD_MM,
 				combined_scan.m.n_points, sc);
 			free(sc);
 		}
 
-
-
-		// Now one full sensor scan is in combined_scan. ICP match it to the submap cloud.
-		// Here, ICP iterations are used to register the new scan to the existing submap.
-		// After registration, sensor scan is combined with the existing submap, again averaging overlapping points,
-		// keeping point density acceptable.
-		// ICP provides pose correction, which is given to the sw_correct_pos function, which adjusts correction parameters
-		// that will correct all incoming data afterwards, making this an "on-line" slam.
-		// If loop closures are needed later, it's best to treat this on-line adjusted hw_pose as the pose estimate, forgetting/overwriting
-		// the "raw" original hw_poses, because the ICP seems to do quite good job.
-
-		assert(cloud_is_init(&submap));
-		if(submap.m.n_points < 1000)
+		if(state_vect.v.mapping_3d || state_vect.v.loca_3d)
 		{
-			cat_cloud(&submap, &combined_scan);
-		}
-		else
-		{
-			float cx=0.0, cy=0.0, cz=0.0, cyaw=0.0;
-			match_by_closest_points(&submap, &combined_scan, &submap,
-				0.0f, 0.0f, 0.0f, 0.0f,
-				30, // n iters
-				200.0, // match threshold
-				300.0, // points can't be combined if further away
-				100.0, 0.025, // points can't be combined if perpendicularly further away from the sensor->point line,
-					    // than 20mm + 4% of the distance (sensor to point)
-					    // At 4000mm distance, this is 180.0mm
-				&cx,&cy,&cz,&cyaw, ICP_USE_COMB); // correction results
+			static int semimap_cnt;
+			static cloud_t semimap;
 
-				sw_correct_pos(RADTOANGI32(cyaw), cx, cy, cz);
+			if(semimap_cnt < rtconf.semimap_match_interval)
+			{
+				semimap_cnt++;
 
-		}		
+				printf("match combined_cloud to semimap\n");
 
-		free_cloud(&combined_scan);
+				if(!cloud_is_init(&semimap))
+				{
+					printf("init semimap, cat combined_scan2->semimap\n");
+					init_cloud(&semimap, 0);
+					semimap.m.ref_x = combined_scan2.m.ref_x;
+					semimap.m.ref_y = combined_scan2.m.ref_y;
+					semimap.m.ref_z = combined_scan2.m.ref_z;
 
-
-		static int32_t min_x = INT32_MAX, min_y = INT32_MAX, min_z = INT32_MAX;
-		static int32_t max_x = INT32_MIN, max_y = INT32_MIN, max_z = INT32_MIN;
-		static int64_t avg_x = 0, avg_y = 0, avg_z = 0;
-		static double cumul_travel = 0.0, cumul_yaw = 0.0;
-		static int32_t prev_x = INT32_MIN, prev_y = INT32_MIN, prev_z = INT32_MIN;
-		static double prev_yaw;
-		static int n_scans;
-
-
-		hw_pose_t cur_pose = tss->sets[0].pose;
-
-		if(prev_x != INT32_MIN) // prev_x,y,z valid
-		{
-			cumul_travel += sqrt(VECTSQ_I64(cur_pose.x, cur_pose.y, cur_pose.z, prev_x, prev_y, prev_z));
-			double dyaw = ANG32TORAD(cur_pose.ang) - prev_yaw;
-			WRAP_RAD_BIPO(dyaw); // dyaw will be -pi .. pi. Small actual rotation never gives a large value after this.
-			cumul_yaw += fabs(dyaw);
-			
-		}
-
-		prev_x = cur_pose.x;
-		prev_y = cur_pose.y;
-		prev_z = cur_pose.z;
-		prev_yaw = ANG32TORAD(cur_pose.ang);
-
-		TRACK_MIN(cur_pose.x, min_x);
-		TRACK_MIN(cur_pose.y, min_y);
-		TRACK_MIN(cur_pose.z, min_z);
-
-		TRACK_MAX(cur_pose.x, max_x);
-		TRACK_MAX(cur_pose.y, max_y);
-		TRACK_MAX(cur_pose.z, max_z);
-
-		avg_x += cur_pose.x;
-		avg_y += cur_pose.y;
-		avg_z += cur_pose.z;
-		n_scans++;
-
-		int dx = max_x - min_x;
-		int dy = max_y - min_y;
-		int dz = max_z - min_z;
+					cat_cloud(&semimap, &combined_scan2);
+				}
+				else
+				{
+					match_by_closest_points(
+						&semimap, &combined_scan2,   // inputs
+						&semimap,  // output
+						0.0f, 0.0f, 0.0f, 0.0f,
+						rtconf.semimap_iters, // n iters
+						rtconf.semimap_match_threshold, // match threshold
+						rtconf.semimap_comb_threshold, // points can't be combined if further away
+						rtconf.semimap_comb_threshold/2.0, 0.025, // points can't be combined if perpendicularly further away from the sensor->point line,
+						NULL,NULL,NULL,NULL, ICP_USE_COMB); // correction results
+				}
 
 /*
-		// Check if we need to finish the current submap:
-		if(	n_scans > SCAN_LIMIT || 
-			abso(dx) > DX_LIMIT || abso(dy) > DY_LIMIT || abso(dz) > DZ_LIMIT ||
-			cumul_travel > CUMUL_TRAVEL_LIMIT || cumul_yaw > CUMUL_YAW_LIMIT)
-		{
-			n_scans = 0;
+				{
+					printf("tcp send map\n");
 
-			int64_t new_ref_x = avg_x/n_scans;
-			int64_t new_ref_y = avg_y/n_scans;
-			int64_t new_ref_z = avg_z/n_scans;
-
-			// We only know the midpoint of the submap now that it's finished.
-			// Our original reference is in submap.m.ref_*
-			// Translate the finished cloud to get the origin at avg_*.
-
-			int transl_x = new_ref_x - submap.m.ref_x;
-			int transl_y = new_ref_y - submap.m.ref_y;
-			int transl_z = new_ref_z - submap.m.ref_z;
-
-			submap.m.ref_x = new_ref_x;
-			submap.m.ref_y = new_ref_y;
-			submap.m.ref_z = new_ref_z;
-
-			assert(abs(transl_x) < 10000);
-			assert(abs(transl_y) < 10000);
-			assert(abs(transl_z) < 10000);
-
-			translate_cloud(&submap, transl_x, transl_y, transl_z);
-
-
-			// Zero accumulation:
-			min_x = min_y = min_z = INT32_MAX;
-			max_x = max_y = max_z = INT32_MIN;
-			avg_x = avg_y = avg_z = 0;
-			cumul_travel = 0.0;
-			cumul_yaw = 0.0;
-			n_scans = 0;
-			prev_x = prev_y = prev_z = INT32_MIN; // invalid value
+					// Output map on tcp:
+					small_cloud_t* sc = convert_cloud_to_small_cloud(&semimap);
+					tcp_send_small_cloud(semimap.m.ref_x*CLOUD_MM, semimap.m.ref_y*CLOUD_MM, semimap.m.ref_x*CLOUD_MM,
+						semimap.m.n_points, sc);
+					free(sc);
+				}
 */
 
-			{
-				small_cloud_t* sc = convert_cloud_to_small_cloud(&submap);
-				save_small_cloud("cla.smallcloud", 0,0,0, submap.m.n_points, sc);
-				free(sc);
 			}
-
-
-			static int cnt;
-
-			if(++cnt == 16)
+			
+			if(semimap_cnt == rtconf.semimap_match_interval)
 			{
-				cnt = 0;
-				cloud_t filtered_submap;
-				init_cloud(&filtered_submap, 0);
-
-				freespace_filter_cloud(&filtered_submap, &submap);
-				//free_cloud(&submap);
+				semimap_cnt = 0;
 
 
+				printf("match semimap to the_map_cloud\n");
+
+				assert(cloud_is_init(the_map_cloud));
+				if(the_map_cloud->m.n_points < 1000)
+				{
+					if(state_vect.v.mapping_3d)
+						cat_cloud(the_map_cloud, &semimap);
+				}
+				else
+				{
+					float cx=0.0, cy=0.0, cz=0.0, cyaw=0.0;
+					match_by_closest_points(
+						the_map_cloud, &semimap,   // inputs
+						state_vect.v.mapping_3d ? the_map_cloud : NULL,  // output
+						0.0f, 0.0f, 0.0f, 0.0f,
+						rtconf.map_iters, // n iters
+						rtconf.map_match_threshold, // match threshold
+						rtconf.map_comb_threshold, // points can't be combined if further away
+						rtconf.map_comb_threshold/2.0, 0.040, // points can't be combined if perpendicularly further away from the sensor->point line,
+						&cx,&cy,&cz,&cyaw, ICP_USE_COMB); // correction results
+
+						if(state_vect.v.loca_3d)
+							sw_correct_pos(RADTOANGI32(cyaw*rtconf.yaw_corr_coeff), cx*rtconf.xy_corr_coeff, cy*rtconf.xy_corr_coeff, cz*rtconf.z_corr_coeff);
+				}		
+
+				free_cloud(&semimap);
 
 				{
-					small_cloud_t* sc = convert_cloud_to_small_cloud(&filtered_submap);
-					save_small_cloud("clb.smallcloud", 0,0,0, filtered_submap.m.n_points, sc);
+					printf("tcp send map\n");
+
+					// Output map on tcp:
+					small_cloud_t* sc = convert_cloud_to_small_cloud(the_map_cloud);
+					int n_points_decimated = the_map_cloud->m.n_points;
+					//small_cloud_t* sc = convert_cloud_to_small_cloud_decimate(the_map_cloud, -256, 1800, 3, &n_points_decimated);
+
+					tcp_send_small_cloud(the_map_cloud->m.ref_x*CLOUD_MM, the_map_cloud->m.ref_y*CLOUD_MM, the_map_cloud->m.ref_x*CLOUD_MM,
+						n_points_decimated, sc);
 					free(sc);
 				}
 
-				free_cloud(&filtered_submap);
 			}
-//		}
 
+
+
+			// Now one full sensor scan is in combined_scan. ICP match it to the the_map_cloud cloud.
+			// Here, ICP iterations are used to register the new scan to the existing the_map_cloud.
+			// After registration, sensor scan is combined with the existing the_map_cloud, again averaging overlapping points,
+			// keeping point density acceptable.
+			// ICP provides pose correction, which is given to the sw_correct_pos function, which adjusts correction parameters
+			// that will correct all incoming data afterwards, making this an "on-line" slam.
+			// If loop closures are needed later, it's best to treat this on-line adjusted hw_pose as the pose estimate, forgetting/overwriting
+			// the "raw" original hw_poses, because the ICP seems to do quite good job.
+
+
+
+//			static int map_send_cnt;
+//			if(++map_send_cnt >= 1) // BACKEN: 3)
+
+/*
+			{
+				small_cloud_t* sc = convert_cloud_to_small_cloud(&the_map_cloud);
+				save_small_cloud("cla.smallcloud", 0,0,0, the_map_cloud.m.n_points, sc);
+				free(sc);
+			}
+*/
+		}
+
+		free_cloud(&combined_scan);
+
+		#ifdef ROTATE_AROUND_WEIGHT_CENTER
+			free_cloud(&combined_scan2);
+		#else
+			#undef combined_scan2
+		#endif
+
+		
 	}
 	else
 	{
@@ -1413,6 +1618,19 @@ void init_slam()
 //	p_prev_prev_cloud = &filtered_clouds[2];
 
 	assert(sizeof (cloud_point_t) == 16);
+
+	load_rtconf();
+
+
+	if(load_cloud(&the_map_cloud_b, 420420) == 0)
+	{
+		printf("INFO: Magic happened: succesfully loaded old map, turning localization on, mapping off, using the map\n");
+		assert(load_cloud(&the_map_cloud_a, 420420) == 0);
+
+		state_vect.v.mapping_3d = 0;
+		state_vect.v.loca_3d = 1;
+		the_map_cloud = &the_map_cloud_b;
+	}
 }
 
 

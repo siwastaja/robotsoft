@@ -43,6 +43,9 @@ struct route_unit_t
 void clear_route(route_unit_t **route);
 int search_route(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int end_x_mm, int end_y_mm, int reverse);
 
+int vacuum_route(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, int reverse);
+
+
 #define MINIMAP_SIZE 768
 #define MINIMAP_MIDDLE 384
 extern uint32_t minimap[MINIMAP_SIZE][MINIMAP_SIZE/32 + 1];
@@ -61,9 +64,15 @@ int check_direct_route_hitcnt_mm(int32_t start_ang, int start_x, int start_y, in
 
 #include "voxmap.h"
 void voxmap_to_routing_pages(voxmap_t* vm);
+#include "slam_cloud.h"
+void cloud_to_routing_pages(cloud_t const * const cloud);
 
 void load_routing_pages();
+void save_routing_pages();
 void manage_routing_page_saves();
+void clear_routing_pages();
+void delete_routing_pages();
+
 
 void routing_unit_coords(int mm_x, int mm_y, int* unit_x, int* unit_y);
 void mm_from_routing_unit_coords(int unit_x, int unit_y, int* mm_x, int* mm_y);

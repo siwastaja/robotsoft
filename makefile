@@ -31,6 +31,10 @@ CFLAGS += -I../raspilibs/usr/include -I/home/hrst/pulu/raspilibs/usr/include/arm
 CFLAGS += -march=armv8-a -mfloat-abi=hard -mfpu=neon-fp-armv8
 endif
 
+ifdef noncross
+CFLAGS += -DDISABLE_SPI
+endif
+
 #CFLAGS += -g
 
 # Application-specific defines

@@ -53,8 +53,11 @@
 #undef DEFINE_API_VARIABLES
 
 
-
+#ifdef DISABLE_SPI
+volatile int dummy_spi = 1;
+#else
 volatile int dummy_spi;
+#endif
 
 
 extern volatile int verbose_mode;
@@ -622,12 +625,15 @@ void* tracefile_comm_thread()
 	dummy_spi = 1;
 	char fname[1024];
 	int file_idx = 0;
+
+	sleep(5);
+
 	while(running)
 	{
 		//sleep(1);
 		//usleep(100000);
 
-		snprintf(fname, 1024, "/home/hrst/pulu/tut_trace/trace%08d.rb2", file_idx);
+		snprintf(fname, 1024, "/home/hrst/pulu/eetu_trace2/trace%08d.rb2", file_idx);
 		file_idx++;
 
 		FILE* fil = fopen(fname, "rb");

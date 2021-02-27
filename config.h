@@ -8,5 +8,8 @@
 
 #define ROBOTBOARD_REV2B
 
-//#define MAP_DIR "/home/pulu/maps/"
-#define MAP_DIR "/home/hrst/maps/"
+#ifdef DISABLE_SPI
+#define MAP_DIR "/home/hrst/pulu/robotsoft/maps/"
+#else
+#define MAP_DIR "/home/pulu/maps/"
+#endif

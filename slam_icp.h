@@ -3,7 +3,7 @@
 #define ICP_USE_A  1
 #define ICP_USE_B  2 
 #define ICP_USE_COMB 0
-int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * combined_cloud_out,
+int match_by_closest_points(cloud_t * cloud_a, cloud_t const * const cloud_b, cloud_t * combined_cloud_out,
 	float x_corr, float y_corr, float z_corr, float yaw_corr,
 	int max_iters,
 	float match_threshold_mm, float combine_threshold_mm, float perpendicular_combine_threshold_mm,

@@ -201,9 +201,8 @@ static void nearest(kd_node_t *root, kd_node_t *node, int i, kd_node_t **best, k
 // longer. Z axis is most accurate, and large errors mostly exist on X,Y axes. Using Z_SPREAD > 1
 // makes sure there are not too many points where the low wall point is incorrectly matched to the floor
 // point near that wall.
+// NOTE: This doesn't work properly now, use 1.
 #define Z_SPREAD 1
-
-
 
 kd_node_t* cloud_to_kd(cloud_t* cloud)
 {
@@ -224,11 +223,37 @@ kd_node_t* cloud_to_kd(cloud_t* cloud)
 // the first match might not be the best possible. If you define COMBINE_ONE_TO_TWO, matching is prevented only if BOTH A_closest and
 // A_2ndclosest have both already been matched to another point. This quite well prevents massive clumping where a single B point is matched to a huge
 // number of A points.
-// 
-//#define COMBINE_ONE_TO_ONE
-#define COMBINE_ONE_TO_TWO
 
-int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * combined_cloud_out,
+//#define COMBINE_ONE_TO_ONE   // if defined: combining is very careful, point clouds tend to grow in size
+#define COMBINE_ONE_TO_TWO     // if defined instead: combining is less careful, but still careful enough, recommend using this.
+// If both are undefined, points are combined willy-nilly, resulting in clumping.
+
+/*
+	ASSO_TWO:
+
+	If defined, in standard ICP association step, instead of finding the closest point, closest and 2nd closest are found.
+	Then, the weighed average of the transformation of these two points are used.
+	Graphical example of this idea:
+
+
+	+x right
+	+y down
+
+	         a1     a2    a3    a4    a5
+                        b1       b2     b3 
+
+
+	b1: closest is a2. second closest is a3, but it's much further away -> the transformation mostly b1->a2
+        b2: closest and second closes, a3 and a4, are equally close. -> transformation is the average. x translation is zero!
+        b3: a4 contributes a bit, mostly a5
+
+	This makes the ICP behave a bit more Iterative Closest Line, hoping to avoid false translation with straight wall segments.
+	
+*/
+
+//#define ASSO_TWO
+
+int match_by_closest_points(cloud_t * cloud_a, cloud_t const * const cloud_b, cloud_t * combined_cloud_out,
 	float x_corr, float y_corr, float z_corr, float yaw_corr,
 	int max_iters,
 	float match_threshold_mm, float combine_threshold_mm, float perpendicular_combine_threshold_mm,
@@ -295,13 +320,16 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 
 	int64_t tx = cloud_b->m.ref_x - cloud_a->m.ref_x;
 	int64_t ty = cloud_b->m.ref_y - cloud_a->m.ref_y;
-	int64_t tz = cloud_b->m.ref_z - cloud_a->m.ref_z;
+	int64_t tz = (cloud_b->m.ref_z - cloud_a->m.ref_z)*Z_SPREAD;
 	assert(tx > -10000 && tx < 10000);
 	assert(ty > -10000 && ty < 10000);
 	assert(tz > -10000 && tz < 10000);
 	
-	int n_associations = 0;
+	int n_associations = 0, n_dual_associations = 0;
 	int n_sole_best=0, n_sole_secbest=0, n_both_best_secbest=0;
+
+	double prev_avg_err = 9999999999999.9;
+	int n_no_improvement = 0;
 
 	for(int iter=0; iter<max_iters; iter++)
 	{
@@ -316,6 +344,7 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 		ts = subsec_timestamp();
 
 		n_associations = 0;
+		n_dual_associations = 0;
 
 		#ifdef KDTREE_STATS
 			int max_visited = -1;
@@ -323,11 +352,11 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 			int64_t visited_acc = 0;
 		#endif
 
-
+		uint64_t best_dist_accum = 0;
 		for(int bi=0; bi<b_n_points; bi++)
 		{
-			kd_unit_tmpsq_t best_dist = KD_UNIT_TMPSQ_T_MAX;
-			kd_node_t* p_best_a;
+			kd_unit_tmpsq_t best_dist[2] = {KD_UNIT_TMPSQ_T_MAX, KD_UNIT_TMPSQ_T_MAX}; // best and second best
+			kd_node_t* p_best_a[2]; // best and second best
 
 			cloud_point_t b_point = transform_point(cloud_b->points[bi], x_corr+(float)tx, y_corr+(float)ty, z_corr+(float)tz, yaw_corr);
 
@@ -338,7 +367,14 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 			#ifdef KDTREE_STATS
 				visited=0;
 			#endif
-			nearest(root, &test_node, 0, &p_best_a, &best_dist);
+
+			#ifdef ASSO_TWO
+				nearest_two(root, &test_node, 0, &p_best_a[0], &best_dist[0], &p_best_a[1], &best_dist[1]);
+			#else
+				nearest    (root, &test_node, 0, &p_best_a[0], &best_dist[0]);
+			#endif
+
+
 
 			#ifdef KDTREE_STATS
 				visited_cnt++;
@@ -350,7 +386,7 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 			#endif
 
 			// Accumulate the mean transformation
-			if(best_dist < sq_match_th)
+			if(best_dist[0] < sq_match_th)
 			{
 
 				//printf("closest to bi%d (%.1f %.1f %.1f) is (%.1f %.1f %.1f)\n", bi,
@@ -358,23 +394,71 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 				//	p_best_a->coords[0], p_best_a->coords[1], p_best_a->coords[2]);
 
 				n_associations++;
+				best_dist_accum += best_dist[0];
 
-				mean_diff.x += b_point.x - p_best_a->point.x;
-				mean_diff.y += b_point.y - p_best_a->point.y;
-				mean_diff.z += b_point.z - p_best_a->point.z;
 
-				int sax = p_best_a->point.x;
-				int say = p_best_a->point.y;
-				//int saz = p_best_a->point.z;
-				int sbx = b_point.x;
-				int sby = b_point.y;
-				//int sbz = b_point.z;
+				#ifdef ASSO_TWO
+					if(best_dist[1] < sq_match_th && best_dist[1] < 8*best_dist[0])
+				#else
+					if(0)
+				#endif
+					{
+						n_dual_associations++;
 
-				int_fast64_t dot = sax*sbx + say*sby;
-				int_fast64_t det = sax*sby - say*sbx;
+						//  best  secbest   weights
+						//  10    10        0.5, 0.5
+						//  10    15        0.6, 0.4
+						//  10    40        0.8, 0.2
 
-				dot_accum += dot;
-				det_accum += det;
+						double weight_secbest = (double)best_dist[0] / ((double)best_dist[0] + (double)best_dist[1]);
+						double weight_best = 1.0 - weight_secbest;
+
+						assert(weight_best > 0.49 && weight_secbest < 0.51);
+
+						mean_diff.x += b_point.x - (weight_best*p_best_a[0]->point.x + weight_secbest*p_best_a[1]->point.x);
+						mean_diff.y += b_point.y - (weight_best*p_best_a[0]->point.y + weight_secbest*p_best_a[1]->point.y);
+						mean_diff.z += b_point.z - (weight_best*p_best_a[0]->point.z + weight_secbest*p_best_a[1]->point.z);
+
+						int sax = p_best_a[0]->point.x;
+						int say = p_best_a[0]->point.y;
+
+						int sbx = b_point.x;
+						int sby = b_point.y;
+
+						int_fast64_t dot = sax*sbx + say*sby;
+						int_fast64_t det = sax*sby - say*sbx;
+
+						dot_accum += (16.0*weight_best)*dot;
+						det_accum += (16.0*weight_best)*det;
+
+						sax = p_best_a[1]->point.x;
+						say = p_best_a[1]->point.y;
+
+						dot = sax*sbx + say*sby;
+						det = sax*sby - say*sbx;
+
+						dot_accum += (16.0*weight_secbest)*dot;
+						det_accum += (16.0*weight_secbest)*det;
+					}
+					else
+					{
+						mean_diff.x += b_point.x - p_best_a[0]->point.x;
+						mean_diff.y += b_point.y - p_best_a[0]->point.y;
+						mean_diff.z += b_point.z - p_best_a[0]->point.z;
+
+						int sax = p_best_a[0]->point.x;
+						int say = p_best_a[0]->point.y;
+
+						int sbx = b_point.x;
+						int sby = b_point.y;
+
+						int_fast64_t dot = sax*sbx + say*sby;
+						int_fast64_t det = sax*sby - say*sbx;
+
+						dot_accum += dot;
+						det_accum += det;
+					}
+
 			}
 
 		}
@@ -390,15 +474,24 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 			mean_diff.z /= (float)n_associations;
 
 
-			x_corr -= mean_diff.x;
-			y_corr -= mean_diff.y;
-			z_corr -= mean_diff.z;
-			yaw_corr -= yaw;
+			//if(iter%2 == 0)
+			{
+				x_corr -= mean_diff.x;
+				y_corr -= mean_diff.y;
+				z_corr -= mean_diff.z;
+			}
+			//else
+			{
+				yaw_corr -= yaw;
+			}
 		}
 
-		if(iter == max_iters-1) printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%), transl=(%+6.0f,%+6.0f,%+6.0f), yaw=%.2f deg, corr=(%+6.0f,%+6.0f,%+6.0f; %.2f deg)\n",
+		double avg_err = sqrt(best_dist_accum)/(double)n_associations;
+		/*if(iter == max_iters-1)*/ printf("ICP iter=%2d points=%6d,%6d,asso=%6d (%3.0f%%,%3.0f%%) (duals %6d (%3.0f%%)), avg_err=%7.4f, transl=(%+7.1f,%+7.1f,%+7.1f), yaw=%.2f deg, corr=(%+7.1f,%+7.1f,%+7.1f; %.2f deg)\n",
 			iter, a_n_points, b_n_points, n_associations,
 			100.0*(float)n_associations/(float)a_n_points, 100.0*(float)n_associations/(float)b_n_points,
+			n_dual_associations, 100.0*(float)n_dual_associations/(float)n_associations,
+			avg_err,
 			mean_diff.x, mean_diff.y, mean_diff.z, RADTODEG(yaw), x_corr, y_corr, z_corr, RADTODEG(yaw_corr));
 
 		#ifdef KDTREE_STATS
@@ -406,8 +499,24 @@ int match_by_closest_points(cloud_t * cloud_a, cloud_t * cloud_b, cloud_t * comb
 			printf("Performance:  search %.2f ms  \n\n", t_search*1000.0);
 		#endif
 
-
 		t_total_total += t_search;
+
+
+		if(avg_err > prev_avg_err*0.99)
+		{
+			if(++n_no_improvement > 5)
+			{
+				printf("Terminated for no significant improvement\n");
+				break;
+			}
+		}
+		else
+		{
+			n_no_improvement = 0;
+		}
+
+		prev_avg_err = avg_err;
+
 	}
 
 	//printf("total time = %.1f ms\n", t_total_total*1000.0);

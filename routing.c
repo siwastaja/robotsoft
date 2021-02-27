@@ -77,14 +77,14 @@ float routing_robot_middle_to_origin = -183.0;
 #endif
 */
 
-#define MARGIN (100.0)
+#define MARGIN (50.0)
 
 //static float routing_robot_xs = 850.0+(MARGIN*2.0);
 //static float routing_robot_ys = 600.0+(MARGIN*2.0);
-static float routing_robot_xs = 600.0+(MARGIN*2.0);
-static float routing_robot_ys = 450.0+(MARGIN*2.0);
+static float routing_robot_xs = 1100.0+(MARGIN*2.0);
+static float routing_robot_ys = 700.0+(MARGIN*2.0);
 
-static float routing_robot_middle_to_origin = -100.0;
+static float routing_robot_middle_to_origin = 0; // -100.0;
 
 static void wide_search_mode();
 static void normal_search_mode();
@@ -142,9 +142,21 @@ typedef struct __attribute__((packed))
 routing_page_t* routing_pages[MAX_PAGES_X][MAX_PAGES_Y]; // size from voxmap_memdisk.h
 
 // Obstacle ranges in mm
-#define ROUTING_Z_MIN 128
+#define ROUTING_Z_MIN 192
 #define ROUTING_Z_MAX 1600
 
+
+void clear_routing_pages()
+{
+	for(int xx=0; xx<MAX_PAGES_X; xx++)
+	{
+		for(int yy=0; yy<MAX_PAGES_Y; yy++)
+		{
+			if(routing_pages[xx][yy])
+				free(routing_pages[xx][yy]);
+		}
+	}
+}
 
 static void save_routing_page(int px, int py)
 {
@@ -238,6 +250,41 @@ void load_routing_pages()
 	}
 }
 
+void delete_routing_pages()
+{
+	DIR *d;
+	struct dirent *dir;
+	d = opendir("./current_routing");
+
+	if(d)
+	{
+		while( (dir = readdir(d)) != 0)
+		{
+			uint32_t px, py;
+
+			if(sscanf(dir->d_name, "routing_%u_%u.routing", &px, &py) == 2)
+			{
+				int rc;
+				char joo[4096];
+				snprintf(joo, 4095, "./current_routing/%s", dir->d_name);
+				joo[4095] = '\0';
+				if( (rc = unlink(joo)) < 0)
+				{
+					printf("WARNING: cannot delete routing file %s: %s\n", joo, strerror(errno));
+				}
+			}
+		}
+
+		closedir(d);
+	}
+	else
+	{
+		printf("ERROR: directory ./current_routing doesn't exists! Please create it.\n");
+		abort();
+	}
+
+}
+
 /*
 	Call whenever you have time. Saves non-saved routing pages, but not too many at once, preventing long blocking.
 */
@@ -269,6 +316,19 @@ void manage_routing_page_saves()
 			}
 		}
 	}
+}
+
+void save_routing_pages()
+{
+	for(int xx = 0; xx < MAX_PAGES_X; xx++)
+	{
+		for(int yy=0; yy < MAX_PAGES_Y; yy++)
+		{
+			if(routing_pages[xx][yy])
+				save_routing_page(xx, yy);
+		}
+	}
+		
 }
 
 /*
@@ -399,6 +459,55 @@ void voxmap_to_routing_pages(voxmap_t* vm)
 	}
 }
 
+#include "slam_cloud.h"
+void cloud_to_routing_pages(cloud_t const * const cloud)
+{
+
+	for(int i=0; i<cloud->m.n_points; i++)
+	{
+		int x_mm =(cloud->m.ref_x+(int)cloud->points[i].x)*CLOUD_MM;
+		int y_mm = (cloud->m.ref_y+(int)cloud->points[i].y)*CLOUD_MM;
+		int z_mm = (cloud->m.ref_z+(int)cloud->points[i].z)*CLOUD_MM;
+
+
+		if(z_mm >= ROUTING_Z_MIN && z_mm <= ROUTING_Z_MAX)
+		{
+			po_coords_t po = po_coords(x_mm, y_mm, z_mm, ROUTING_RL);
+
+			if(!routing_pages[po.px][po.py])
+			{
+				routing_pages[po.px][po.py] = calloc(1, sizeof(routing_page_t));
+				assert(routing_pages[po.px][po.py]);
+			}
+
+			// Routing algorithm needs one extra y stride per routing page for efficiency; this is just a copy
+			// of the stride on the "actual" page. Say page (10,10) has something at offset (123, 0). Copy of this
+			// needs to be in page (10, 9) offset (123, 256/32 (last+1))
+			if(!routing_pages[po.px][po.py-1])
+			{
+				routing_pages[po.px][po.py-1] = calloc(1, sizeof(routing_page_t));
+				assert(routing_pages[po.px][po.py-1]);
+			}
+
+			
+			int y_whole = po.oy/32;
+			int y_remain = po.oy%32;
+
+			assert(po.ox >= 0 && po.ox < ROUTING_MAP_PAGE_W);
+			assert(y_whole >= 0 && y_whole < ROUTING_MAP_PAGE_W/32 + 1);
+
+			routing_pages[po.px][po.py]->routing[po.ox][y_whole] |= 1<<y_remain;
+
+			if(y_whole == 0)
+			{
+				// Duplicated Y stride on the lower y-index routing page:
+				routing_pages[po.px][po.py-1]->routing[po.ox][ROUTING_MAP_PAGE_W/32] |= 1<<y_remain;
+			}
+		}
+	}
+
+}
+
 
 #define MAX_F 99999999999999999.9
 
@@ -414,7 +523,8 @@ ALWAYS_INLINE int check_hit(int x, int y, int direction)
 //	if(kakka > 1) abort();
 
 	#ifdef SEARCH_DBGPRINTS
-		printf("check_hit(%d, %d, %d): ", x, y, direction);
+		int retval = 0;
+		printf("check_hit(%d, %d, %d): \n", x, y, direction);
 	#endif
 	for(int chk_x=0; chk_x<ROBOT_SHAPE_WINDOW; chk_x++)
 	{
@@ -448,7 +558,6 @@ ALWAYS_INLINE int check_hit(int x, int y, int direction)
 		#ifdef SEARCH_DBGPRINTS
 //			printf("\nshape: ");
 //			for(int i = 64; i>=0; i--){ if(shape&(1ULL<<i)) putchar('#'); else putchar('-');}
-			printf("\nmap  : ");
 			for(int i = 64; i>=0; i--)
 			{
 				if((map&(1ULL<<i)) && (shape&(1ULL<<i)))
@@ -461,26 +570,32 @@ ALWAYS_INLINE int check_hit(int x, int y, int direction)
 					putchar(' ');
 
 			}
+	
 		#endif
 
 		if(map & shape)
 		{
 			#ifdef SEARCH_DBGPRINTS
-//				printf("   --> ### 1 ###\n");
+				printf(" --> HITS!\n");
+				retval = 1;
+			#else
+				return 1;
 			#endif
-			return 1;
 		}
-
 		#ifdef SEARCH_DBGPRINTS
-//			printf("   --> 0\n");
+		else
+			printf("\n");
 		#endif
-
 	}
 
 	#ifdef SEARCH_DBGPRINTS
-		printf("### 0 ###\n");
+		if(!retval)
+			printf(" --> no hit!\n");
+
+		return retval;
+	#else
+		return 0;
 	#endif
-	return 0;
 }
 
 
@@ -524,9 +639,6 @@ static int test_robot_turn(int x, int y, float start, float end)
 #endif
 		if(check_hit(x, y, dir_cur))
 		{
-#ifdef SEARCH_DBGPRINTS
-			printf(" HITS!\n");
-#endif
 			return 0;
 		}
 
@@ -564,7 +676,7 @@ static int line_of_sight(route_xy_t p1, route_xy_t p2)
 	if(dir < 0) dir = 0; else if(dir > 31) dir = 31;
 
 #ifdef SEARCH_DBGPRINTS
-	printf("line_of_sight ang = %.1f  dir = %d\n", RADTODEG(ang), dir);
+	printf("line_of_sight (%d,%d)->(%d,%d), dx=%d, dy=%d, ang = %.1f  dir = %d, step=%.1f, len=%.1f\n", p1.x, p1.y, p2.x, p2.y, dx, dy, RADTODEG(ang), dir, step, len);
 #endif
 	while(1)
 	{
@@ -573,6 +685,9 @@ static int line_of_sight(route_xy_t p1, route_xy_t p2)
 
 //		printf("check_hit(%d, %d, %d) = ", x, y, dir);
 
+#ifdef SEARCH_DBGPRINTS
+		printf("LOS pos=%.2f: ", pos);
+#endif		
 		if(check_hit(x, y, dir))
 		{
 //			printf("1 !\n");
@@ -1053,8 +1168,8 @@ static void draw_robot_shape(int a_idx, float ang)
 	}
 	else // wide
 	{
-		robot_xs = (routing_robot_xs + 200.0 + extra_x);
-		robot_ys = (routing_robot_ys + 200.0 + extra_y);
+		robot_xs = (routing_robot_xs + 160.0 + extra_x);
+		robot_ys = (routing_robot_ys + 160.0 + extra_y);
 	}
 
 	robot_shape_x_len = robot_xs;
@@ -1138,7 +1253,8 @@ static void gen_robot_shapes()
 	{
 		draw_robot_shape(a, ((float)a*2.0*M_PI)/32.0);
 
-/*		if(f_dbg_shapes)
+/*
+		if(f_dbg_shapes)
 		{
 			fprintf(f_dbg_shapes, "a = %d, tight_shapes = %d\n", a, tight_shapes);
 
@@ -1187,6 +1303,9 @@ static void extra_tight_search_mode()
 
 void clear_route(route_unit_t **route)
 {
+	if(*route == NULL)
+		return;
+
 	route_unit_t *elt, *tmp;
 	DL_FOREACH_SAFE(*route,elt,tmp)
 	{
@@ -1661,8 +1780,8 @@ int search_route(route_unit_t **route, float start_ang, int start_x_mm, int star
 
 	printf("Searching with wide limits...\n");
 
-	//wide_search_mode();
-	normal_search_mode();
+	wide_search_mode();
+	//normal_search_mode();
 	if(search2(route, start_ang, start_x_mm, start_y_mm, end_x_mm, end_y_mm, 0, 0))
 	{
 		normal_search_mode();
@@ -1706,6 +1825,278 @@ int search_route(route_unit_t **route, float start_ang, int start_x_mm, int star
 	tight_search_mode();
 	return retval;
 }
+
+/*
+
+	1>>2  1>>2
+	^  v  ^  v
+	^  v  ^  .
+	^  v  ^  .
+	0  v  ^  .
+	   v  ^
+	   v  ^
+	   v  ^
+	   3>>0
+
+	* = start_x, start_y, start_ang required to check if the robot can turn initially
+	advance_ang = denoted by >
+	first_ang = denoted by ^
+	back_ang  = denoted by v
+
+*/
+int vacuum_route2(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, float advance_ang, int reverse, int* end_x_mm, int* end_y_mm, float* end_ang)
+{
+	int s_x, s_y;
+	routing_unit_coords(start_x_mm, start_y_mm, &s_x, &s_y);
+
+	float first_ang = advance_ang + M_PI/2.0;
+
+	if(first_ang > 2.0*M_PI) first_ang -= 2.0*M_PI;
+
+	float back_ang = advance_ang - M_PI/2.0;
+	if(back_ang < 0.0) back_ang += 2.0*M_PI;
+
+
+	normal_search_mode();
+
+	route_xy_t now = {s_x, s_y};
+
+	int advance_len = 7;
+	int advance_beneficial_len = advance_len - 5;
+	if(advance_beneficial_len < 0) advance_beneficial_len = 0;
+
+	if(!test_robot_turn(s_x, s_y, start_ang, first_ang))
+	{
+		printf("vacuum_route: robot cannot initially turn\n");
+		if(end_x_mm != NULL) *end_x_mm = start_x_mm;
+		if(end_y_mm != NULL) *end_y_mm = start_y_mm;
+		if(end_ang != NULL) *end_ang = start_ang;
+		return -1;
+	}
+
+	int retval = 0;
+
+	int do_partial = 0;
+	float ang1, ang2;
+	for(int stride = 0; stride < 100; stride++)
+	{
+		// binary search
+
+		int max_len = 2000; // that doesn't work
+		int min_len = 0;    // that works
+
+		while(1)
+		{
+			int now_len = (min_len + max_len)/2;
+
+			//printf("now_len = %d ", now_len);
+
+			ang1 = (stride&1)?back_ang:first_ang;
+			ang2 = (stride&1)?first_ang:back_ang;
+
+			route_xy_t p0 = now;
+			route_xy_t p1 = {p0.x + cos(ang1)*now_len, p0.y + sin(ang1)*now_len};
+			route_xy_t p2 = {p1.x + cos(advance_ang)*advance_len, p1.y + sin(advance_ang)*advance_len};
+
+			if(now_len <= min_len) // can't be improved further
+			{
+				//printf("can't be improved further\n");
+
+				if(now_len >= 3)
+				{
+					{
+						route_unit_t* point = malloc(sizeof(route_unit_t));
+						point->loc = p1;
+						point->backmode = 0; // done by the original caller later
+						DL_APPEND(*route, point);
+						retval += now_len;
+					}
+
+					if(!do_partial)
+					{
+						route_unit_t* point = malloc(sizeof(route_unit_t));
+						point->loc = p2;
+						point->backmode = 0; // done by the original caller later
+						DL_APPEND(*route, point);
+
+						retval += advance_beneficial_len;
+					}
+					else
+						goto STOP_ROUTE;
+
+					now = p2;
+					break;
+				}
+				else
+				{
+					if(!do_partial)
+					{
+						// Try the same again, without going further in advance_ang
+						do_partial = 1;
+						stride--; // keep the same stride number
+						break;
+					}
+					else
+					{
+						goto STOP_ROUTE;
+					}
+				}
+			}
+
+			//printf("(%d,%d)->(%d,%d)->(%d,%d)\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
+
+			if(
+				line_of_sight(p0, p1) &&
+				(do_partial || 
+				(test_robot_turn(p1.x, p1.y, ang1, advance_ang) &&
+				line_of_sight(p1, p2) &&
+				test_robot_turn(p2.x, p2.y, advance_ang, ang2)))
+			  )
+			{
+				// now_len works out
+				//printf("works\n");
+				min_len = now_len;
+			}
+			else
+			{
+				// now_len doesn't work out
+				//printf("doesn't work\n");
+				max_len = now_len;
+			}
+		}
+
+	}
+
+	STOP_ROUTE:;
+
+	if(end_x_mm != NULL && end_y_mm != NULL)
+		mm_from_routing_unit_coords(now.x, now.y, end_x_mm, end_y_mm);
+
+	if(end_ang != NULL)
+		*end_ang = do_partial?ang1:ang2;
+
+	tight_search_mode();
+
+	return retval;
+}
+
+int vacuum_route_combo(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm, float advance_ang, int reverse)
+{
+	route_unit_t* route1 = NULL;
+	route_unit_t* route2 = NULL;
+	route_unit_t* route3 = NULL;
+	route_unit_t* route4 = NULL;
+
+	int vac_end_x, vac_end_y;
+	float vac_end_ang;
+
+	// vacuum path from start_*_mm to wherever it takes
+	printf("generate vacuum route1 from %d,%d in advance_ang=%.1f deg\n", start_x_mm, start_y_mm, RADTODEG(advance_ang));
+	int len1 = vacuum_route2(&route1, start_ang, start_x_mm, start_y_mm, advance_ang, reverse, &vac_end_x, &vac_end_y, &vac_end_ang);
+	printf("len1=%d\n", len1);
+
+	// route finding from the end of the vacuum path back to start_*_mm
+	printf("find route2 back to start\n");
+	if(search2(&route2, vac_end_ang, vac_end_x, vac_end_y, start_x_mm, start_y_mm, 0, 0))
+	{
+		printf("can't find route2 back to start\n");
+		return -1;		
+	}
+
+	DL_CONCAT(*route, route1);
+	DL_CONCAT(*route, route2);
+
+
+	// vacuum path from start_*_mm to wherever it takes - in opposite direction
+	advance_ang += M_PI;
+	if(advance_ang > 2.0*M_PI)
+		advance_ang -= 2.0*M_PI;
+
+	printf("generate vacuum route3 from %d,%d in advance_ang=%.1f deg\n", start_x_mm, start_y_mm, RADTODEG(advance_ang));
+	int len3 = vacuum_route2(&route3, start_ang, start_x_mm, start_y_mm, advance_ang, reverse, &vac_end_x, &vac_end_y, &vac_end_ang);
+	printf("len3=%d\n", len3);
+
+	// find route back to the start
+//	printf("find route2 back to start\n");
+//	if(search2(&route4, vac_end_ang, vac_end_x, vac_end_y, start_x_mm, start_y_mm, 0, 0))
+//	{
+//		printf("can't find route4 back to start\n");
+//		return -1;		
+//	}
+
+	DL_CONCAT(*route, route3);
+//	DL_CONCAT(*route, route4);
+
+	int total_len = len1+len3;
+	printf("total len = %d\n", total_len);
+
+	return total_len;
+
+}
+
+int vacuum_route(route_unit_t **route, float start_ang, int start_x_mm, int start_y_mm,int reverse)
+{
+	int s_x, s_y;
+	int best_len = -1;
+	float advance_ang = 0.0, best_ang = 0.0;
+
+	int backoff_start_x_mm = start_x_mm, backoff_start_y_mm = start_y_mm;
+
+	for(int backoff = 1000; backoff >= 200; backoff -= 50)
+	{
+		double test_backoff = backoff + 600;
+		routing_unit_coords(start_x_mm, start_y_mm, &s_x, &s_y);
+		route_xy_t start = {s_x, s_y};
+		routing_unit_coords(start_x_mm + cos(start_ang)*test_backoff, start_y_mm + sin(start_ang)*test_backoff, &s_x, &s_y);
+		route_xy_t end = {s_x, s_y};
+
+		if(line_of_sight(start, end))
+		{
+			printf("vacuum_route(): can backoff %.0f mm, will back off %d mm\n", test_backoff, backoff);
+			backoff_start_x_mm = start_x_mm + cos(start_ang)*test_backoff;
+			backoff_start_y_mm = start_y_mm + sin(start_ang)*test_backoff;
+			break;
+		}
+		else
+		{
+			printf("vacuum_route(): can't backoff %.0f mm\n", test_backoff);
+		}
+	}
+
+
+	for(int i=0; i<32; i++)
+	{
+		advance_ang += 2.0*M_PI/32.0;
+		if(advance_ang > 2.0*M_PI)
+			advance_ang -= 2.0*M_PI;
+
+		clear_route(route);
+		int cur_len = vacuum_route_combo(route, start_ang, backoff_start_x_mm, backoff_start_y_mm, advance_ang, reverse);
+		if(cur_len > best_len)
+		{
+			best_len = cur_len;
+			best_ang = advance_ang;
+		}
+	}
+
+	printf("best ang = %.1f deg with len=%d, doing that.\n", best_ang, best_len);
+
+	clear_route(route);
+
+	if(backoff_start_x_mm != start_x_mm || backoff_start_y_mm != start_y_mm)
+	{
+		route_unit_t* point = malloc(sizeof(route_unit_t));
+		routing_unit_coords(backoff_start_x_mm, backoff_start_y_mm, &s_x, &s_y);
+		route_xy_t p1 = {s_x, s_y};
+		point->loc = p1;
+		point->backmode = 1; 
+		DL_APPEND(*route, point);
+	}
+
+	vacuum_route_combo(route, start_ang, backoff_start_x_mm, backoff_start_y_mm, best_ang, reverse);
+
+}
+
 
 int check_direct_route(int32_t start_ang, int start_x, int start_y, int end_x, int end_y)
 {

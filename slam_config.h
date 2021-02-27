@@ -9,6 +9,8 @@
 #else
 	#define FIRST_SIDX 0
 #endif
+
+#define MID_SIDX 4
 #define LAST_SIDX 9
 
 //#define USE_NARROWS

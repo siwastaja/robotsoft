@@ -68,6 +68,7 @@
 #define RADTOANG32(x) ( (int32_t)((((double)(x)) / (2.0*M_PI)) * 4294967296.0))
 
 #define DEGTOANG16(x)  ((uint16_t)((float)(x)/(360.0)*65536.0))
+#define DEGTOANG32(x)  ((uint16_t)((float)(x)/(360.0)*4294967296.0))
 
 
 #define ANG32TORAD(x) ( ((double)((uint32_t)(x)))/683565275.576432)

@@ -45,7 +45,7 @@
 
 int tcp_listener_sock;
 volatile int tcp_client_sock = -1; // One client at the time is allowed. Volatile because accessed in SIGPIPE signal handler.
-#define MAX_MSG_LEN (1024*1024)
+#define MAX_MSG_LEN (4096*1024)
 #define MAX_CRITICAL_MSG_LEN (8*1024)
 #define MAX_PAYLEN_PER_MESSAGE ((MAX_MSG_LEN)-5)
 #define TCP_WRITE_BUF_LEN ((MAX_PAYLEN_PER_MESSAGE+5)*3)

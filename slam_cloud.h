@@ -1,6 +1,7 @@
 #pragma once
 
 #include <inttypes.h>
+#include <assert.h>
 #include "api_board_to_soft.h"
 #include "misc.h"
 #include "slam_config.h"

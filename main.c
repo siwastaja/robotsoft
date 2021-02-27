@@ -157,6 +157,7 @@ int cmd_state;
 #define BUFLEN 2048
 
 int32_t cur_ang, cur_x, cur_y;
+//int32_t cur_ang = DEGTOANG32(70), cur_x = 3000, cur_y = -6000;
 double robot_pos_timestamp;
 int32_t cur_compass_ang;
 int compass_round_active;
@@ -203,13 +204,22 @@ int charger_run_search_result_got;
 pthread_t thread_search;
 void* search_thread()
 {
-	int ret = search_route(&some_route, ANG32TORAD(cur_ang), cur_x, cur_y, search_thread_dest_x, search_thread_dest_y, route_reverse);
+	int ret;
+	if(search_thread_dest_x == 999999 && search_thread_dest_y == 999999)
+	{
+		ret = vacuum_route(&some_route, ANG32TORAD(cur_ang), cur_x, cur_y, 1);
+	}
+	else
+	{
+		ret = search_route(&some_route, ANG32TORAD(cur_ang), cur_x, cur_y, search_thread_dest_x, search_thread_dest_y, route_reverse);
+	}
 
 	search_thread_retval = ret;
 	search_thread_running = 0;
 
 	return NULL;
 }
+
 
 // Call from sequential main thread only.
 // Check search_thread_running first.
@@ -259,7 +269,7 @@ int poll_search_status(int act_as_well)
 	if(running)
 		return 12345;
 
-	if(!act_as_well)
+	if(!act_as_well || !state_vect.v.keep_position)
 	{
 		// not running, in other words, is finished, return:
 		return retval;
@@ -520,6 +530,8 @@ void do_live_obstacle_checking()
 }
 #endif
 
+int find_charger_state = 0;
+
 void route_fsm()
 {
 	static int micronavi_stops = 0;
@@ -575,6 +587,7 @@ void route_fsm()
 				if(reret != 12345 && reret > 0)
 				{
 					printf("Routing failed.\n");
+					do_follow_route = 0;
 					send_route_end_status(4);
 				}
 			}
@@ -621,6 +634,8 @@ void route_fsm()
 						route_pos++;
 
 						// Check if we can skip some points:
+
+						/*
 						while(the_route[route_pos].backmode == 0 && route_pos < the_route_len-1)
 						{
 							if( (sq(cur_x-the_route[route_pos+1].x)+sq(cur_y-the_route[route_pos+1].y) < sq(800) )
@@ -635,6 +650,9 @@ void route_fsm()
 								break;
 							}
 						}
+
+						*/
+
 						printf("cur id=%d, remaining = %d -> take the next with id=%d!\n", id, move_remaining, (id_cnt<<4) | ((route_pos)&0b1111));
 						new_move_to(the_route[route_pos].x, the_route[route_pos].y, the_route[route_pos].backmode, (id_cnt<<4) | ((route_pos)&0b1111), cur_speedlim, 0);
 						send_info(the_route[route_pos].backmode?INFO_STATE_REV:INFO_STATE_FWD);
@@ -660,6 +678,13 @@ void route_fsm()
 							do_follow_route = 0;
 							route_finished_for_charger = 1;
 							send_route_end_status(TCP_RC_ROUTE_STATUS_SUCCESS);
+
+							if(prev_search_dest_x == 999999 && prev_search_dest_y == 999999)
+							{
+								state_vect.v.vacuum_on = 0;
+								read_charger_pos();
+								find_charger_state = 1;
+							}
 						}
 					}
 				}
@@ -864,6 +889,9 @@ uint32_t corr_yaw, corr_pitch, corr_roll;
 
 int64_t corrcorr_for_movement_x = INT64_MIN, corrcorr_for_movement_y;
 
+int64_t corrcorr_for_movement_cmd_x = INT64_MIN, corrcorr_for_movement_cmd_y;
+
+
 void calc_corrcorr_for_movement(int32_t dst_x, int32_t dst_y)
 {
 	double fcorr_yaw = ANG32TORAD(corr_yaw);
@@ -871,12 +899,34 @@ void calc_corrcorr_for_movement(int32_t dst_x, int32_t dst_y)
 	int32_t dx = dst_x - cur_x;
 	int32_t dy = dst_y - cur_y;
 
+
 	corrcorr_for_movement_x = corrcorr_x;
 	corrcorr_for_movement_y = corrcorr_y;
 	corrcorr_for_movement_x += 65536.0*((double)(dx) * cos(fcorr_yaw) - (double)(dy) * sin(fcorr_yaw)  - (double)(dx));
 	corrcorr_for_movement_y += 65536.0*((double)(dx) * sin(fcorr_yaw) + (double)(dy) * cos(fcorr_yaw)  - (double)(dy));
+
+	printf("fcorr_yaw=%.2f deg, cur (%d,%d), dst (%d,%d), d (%d,%d), corrcorr_for_movement (%d,%d)mm\n",
+		RADTODEG(fcorr_yaw), cur_x, cur_y, dst_x, dst_y, dx, dy, (int)(corrcorr_for_movement_x>>16), (int)(corrcorr_for_movement_y>>16));
+
 }
 
+void calc_corrcorr_for_movement_cmd(int32_t dst_x, int32_t dst_y)
+{
+	double fcorr_yaw = -1.0 * ANG32TORAD(corr_yaw);
+
+	int32_t dx = dst_x - cur_x;
+	int32_t dy = dst_y - cur_y;
+
+
+	corrcorr_for_movement_cmd_x = -corrcorr_x;
+	corrcorr_for_movement_cmd_y = -corrcorr_y;
+	corrcorr_for_movement_cmd_x += 65536.0*((double)(dx) * cos(fcorr_yaw) - (double)(dy) * sin(fcorr_yaw)  - (double)(dx));
+	corrcorr_for_movement_cmd_y += 65536.0*((double)(dx) * sin(fcorr_yaw) + (double)(dy) * cos(fcorr_yaw)  - (double)(dy));
+
+	printf("fcorr_yaw=%.2f deg, cur (%d,%d), dst (%d,%d), d (%d,%d), corrcorr_for_movement (%d,%d)mm\n",
+		RADTODEG(fcorr_yaw), cur_x, cur_y, dst_x, dst_y, dx, dy, (int)(corrcorr_for_movement_x>>16), (int)(corrcorr_for_movement_y>>16));
+
+}
 
 static int move_to_prev_x, move_to_prev_y, move_to_prev_id, move_to_prev_backmode, move_to_prev_speedlimit, move_to_prev_accurate_turn;
 int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, int accurate_turn)
@@ -889,7 +939,7 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	move_to_prev_speedlimit = speedlimit;
 	move_to_prev_accurate_turn = accurate_turn;
 
-	calc_corrcorr_for_movement(x, y);
+	calc_corrcorr_for_movement_cmd(x, y);
 
 	s2b_move_abs_t *p_msg = spi_init_cmd(CMD_MOVE_ABS);
 
@@ -901,8 +951,10 @@ int new_move_to(int32_t x, int32_t y, int8_t backmode, int id, int speedlimit, i
 	}
 
 	memset(p_msg, 0, sizeof(*p_msg));
-	p_msg->x = x - corr_x - (corrcorr_for_movement_x>>16);
-	p_msg->y = y - corr_y - (corrcorr_for_movement_y>>16);
+	p_msg->x = x - corr_x + (corrcorr_for_movement_cmd_x>>16);
+	p_msg->y = y - corr_y + (corrcorr_for_movement_cmd_y>>16);
+
+	printf("move_to request (%d,%d), corrected (%d,%d)\n", x,y, p_msg->x, p_msg->y);
 //	printf("RQ: %d, %d\n", p_msg->x, p_msg->y);
 	p_msg->id = id;
 	p_msg->backmode = backmode;
@@ -1219,8 +1271,6 @@ void* main_thread()
 
 	load_routing_pages();
 
-	int find_charger_state = 0;
-
 	if(init_tcp_comm())
 	{
 		fprintf(stderr, "TCP communication initialization failed.\n");
@@ -1248,6 +1298,7 @@ void* main_thread()
 	hwmsg_decim[4] = 4;
 	hwmsg_decim[10] = 2;
 	hwmsg_decim[11] = 2;
+	hwmsg_decim[14] = 2;
 //	hwmsg_decim[14] = 1000;
 //	hwmsg_decim[5] = 1;
 //	hwmsg_decim[6] = 1;
@@ -1666,6 +1717,10 @@ void* main_thread()
 
 						if(s==14)
 						{
+
+							//extern void dummy_test();
+							//dummy_test();
+
 							tof_slam_set_t* tss = &p_data[offs];
 							if(tss->flags & TOF_SLAM_SET_FLAG_VALID)
 								fix_pose(&tss->sets[0].pose);
@@ -1694,6 +1749,8 @@ void* main_thread()
 									//do_something_to_stored_pages(process_new_voxmaps);
 								}
 							}
+
+
 						}
 
 
@@ -1828,7 +1885,8 @@ void* main_thread()
 
 			if(cmd == '.')
 			{
-				finished = 1;
+				//finished = 1;
+				run_search(4000,5000, 0);
 			}
 
 			
@@ -2096,7 +2154,7 @@ void* main_thread()
 			}
 			else if(ret == TCP_CR_MANCTRL_MID)
 			{
-				printf("Manual control %2x\n", msg_cr_manctrl.control);
+				//printf("Manual control %2x\n", msg_cr_manctrl.control);
 				manual_control(msg_cr_manctrl.control);
 			}
 		}
@@ -2408,7 +2466,12 @@ void* main_thread()
 			motor_enable_keepalive(0);
 		}
 		prev_keeppos = state_vect.v.keep_position;
-		
+
+		if(!state_vect.v.keep_position)
+		{
+			do_follow_route = 0;
+			start_route = 0;
+		}
 
 
 		static double prev_sync = 0;
@@ -2425,7 +2488,7 @@ void* main_thread()
 
 			// Writes changed routing pages, if they exist, at most only one at a time.
 			// They are small 2.5kB files.
-			manage_routing_page_saves();
+			//manage_routing_page_saves();
 
 			if(tcp_client_sock >= 0)
 			{
@@ -2437,9 +2500,6 @@ void* main_thread()
 #endif
 
 		
-		manage_routing_page_saves();
-
-
 		if(cmd_send_to_robot)
 		{
 			cmd_send_to_robot = 0;
@@ -2493,10 +2553,18 @@ int main(int argc, char** argv)
 	if(argc >= 2 && argv[1][0] == 't')
 		tracefile = 1;
 
-	if( (ret = pthread_create(&thread_spi, NULL, tracefile?tracefile_comm_thread:spi_comm_thread, NULL)) )
+	int disable_spi = 0;
+	#ifdef DISABLE_SPI
+		disable_spi = 1;
+	#endif
+
+	if(!disable_spi || tracefile)
 	{
-		printf("ERROR: spi access thread creation, ret = %d\n", ret);
-		return -1;
+		if( (ret = pthread_create(&thread_spi, NULL, tracefile?tracefile_comm_thread:spi_comm_thread, NULL)) )
+		{
+			printf("ERROR: spi access thread creation, ret = %d\n", ret);
+			return -1;
+		}
 	}
 
 	if( (ret = pthread_create(&thread_main, NULL, main_thread, NULL)) )

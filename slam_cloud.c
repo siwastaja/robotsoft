@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <errno.h>
 
 #include "slam_config.h"
 #include "slam_cloud.h"
@@ -20,8 +21,8 @@
 #ifdef COMPRESS_CLOUDS
 	#include <zlib.h>
 
-	#define ZLIB_CHUNK (256*1024)
-	#define ZLIB_LEVEL 2  // from 1 to 9, 9 = slowest but best compression
+	#define ZLIB_CHUNK (64*1024*1024)
+	#define ZLIB_LEVEL 3  // from 1 to 9, 9 = slowest but best compression
 #endif
 
 
@@ -63,8 +64,10 @@ void init_cloud(cloud_t* cloud, int flags)
 void alloc_cloud(cloud_t* cloud)
 {
 //	cloud->alloc_srcs = cloud->m.n_srcs;
+	printf("alloc_cloud n_points = %d, n_poses = %d, n_freevects = %d\n", cloud->m.n_points, cloud->m.n_poses, cloud->m.n_freevects);
 	cloud->alloc_points = cloud->m.n_points;
 	cloud->alloc_poses = cloud->m.n_poses;
+	cloud->alloc_freevects = cloud->m.n_freevects;
 
 //	cloud->srcs = malloc(cloud->alloc_srcs * sizeof (cloud_point_t));
 //	assert(cloud->srcs);
@@ -178,15 +181,12 @@ void cloud_print_sources(cloud_t* cloud, int analyze)
 
 void free_cloud(cloud_t* cloud)
 {
-//	free(cloud->srcs);
-	free(cloud->points);
-	free(cloud->poses);
+	if(cloud->points) free(cloud->points);
+	if(cloud->poses) free(cloud->poses);
+	if(cloud->freevects) free(cloud->freevects);
 
-//	cloud->srcs = NULL;
-	cloud->points = NULL;
-	cloud->poses = NULL;
-
-	memset(&cloud->m, 0, sizeof cloud->m);
+	// sets all pointers to NULL, all meta to zero, all sources to zero and so on:
+	memset(cloud, 0, sizeof *cloud);
 }
 
 
@@ -206,8 +206,15 @@ int save_cloud(cloud_t* cloud, int idx)
 
 	assert(fwrite(&cloud->m, sizeof cloud->m, 1, f) == 1);
 
+	assert(fwrite(cloud->srcs, sizeof cloud->srcs[0], cloud->m.n_srcs, f) == cloud->m.n_srcs);
+	assert(fwrite(cloud->poses, sizeof cloud->poses[0], cloud->m.n_poses, f) == cloud->m.n_poses);
+	assert(fwrite(cloud->freevects, sizeof cloud->freevects[0], cloud->m.n_freevects, f) == cloud->m.n_freevects);
+
+
+	int rc = 0;
 	#ifdef COMPRESS_CLOUDS
-		uint8_t outbuf[ZLIB_CHUNK];
+		uint8_t* outbuf = malloc(ZLIB_CHUNK);
+		assert(outbuf);
 		z_stream strm;
 		strm.zalloc = Z_NULL;
 		strm.zfree = Z_NULL;
@@ -218,29 +225,7 @@ int save_cloud(cloud_t* cloud, int idx)
 			abort();
 		}
 
-		strm.avail_in = cloud->m.n_srcs*sizeof *cloud->srcs;
-		strm.next_in = (uint8_t*)cloud->srcs;
-
-		do
-		{
-			strm.avail_out = ZLIB_CHUNK;
-			strm.next_out = outbuf;
-
-			int ret = deflate(&strm, Z_FINISH);
-			assert(ret != Z_STREAM_ERROR);
-
-			int produced = ZLIB_CHUNK - strm.avail_out;
-
-			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
-			{
-				printf("ERROR: fwrite failed\n");
-				abort();
-			}
-		} while(strm.avail_out == 0);
-
-		assert(strm.avail_in == 0);
-
-		strm.avail_in = cloud->m.n_points * sizeof *cloud->points;
+		strm.avail_in = cloud->m.n_points*sizeof *cloud->points;
 		strm.next_in = (uint8_t*)cloud->points;
 
 		do
@@ -248,51 +233,34 @@ int save_cloud(cloud_t* cloud, int idx)
 			strm.avail_out = ZLIB_CHUNK;
 			strm.next_out = outbuf;
 
-			int ret = deflate(&strm, Z_FINISH);
+			int ret = deflate(&strm, Z_NO_FLUSH);
 			assert(ret != Z_STREAM_ERROR);
 
 			int produced = ZLIB_CHUNK - strm.avail_out;
 
-			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
+			//printf("produced=%d\n", produced);
+
+			if(produced > 0)
 			{
-				printf("ERROR: fwrite failed\n");
-				abort();
+				if( (rc=fwrite(outbuf, produced, 1, f)) != 1 || ferror(f))
+				{
+					printf("ERROR: fwrite failed, rc=%d, errno = %s\n", rc, strerror(errno));
+					abort();
+				}
 			}
 		} while(strm.avail_out == 0);
 
 		assert(strm.avail_in == 0);
-
-		strm.avail_in = cloud->m.n_poses * sizeof *cloud->poses;
-		strm.next_in = (uint8_t*)cloud->poses;
-
-		do
-		{
-			strm.avail_out = ZLIB_CHUNK;
-			strm.next_out = outbuf;
-
-			int ret = deflate(&strm, Z_FINISH);
-			assert(ret != Z_STREAM_ERROR);
-
-			int produced = ZLIB_CHUNK - strm.avail_out;
-
-			if(fwrite(outbuf, produced, 1, f) != 1 || ferror(f))
-			{
-				printf("ERROR: fwrite failed\n");
-				abort();
-			}
-		} while(strm.avail_out == 0);
-
-		assert(strm.avail_in == 0);
-
 
 		deflateEnd(&strm);
 
+		free(outbuf);
+
 	#else
 		// untested code:
-		assert(fwrite(cloud->srcs, sizeof *cloud->srcs[0], cloud->m.n_srcs, f) == cloud->m.n_srcs);
-		assert(fwrite(cloud->points, sizeof *cloud->points[0], cloud->m.n_points, f) == cloud->m.n_points);
-		assert(fwrite(cloud->poses, sizeof *cloud->poses[0], cloud->m.n_poses, f) == cloud->m.n_poses);
+		assert(fwrite(cloud->points, sizeof cloud->points[0], cloud->m.n_points, f) == cloud->m.n_points);
 	#endif
+
 
 	fclose(f);
 	return 0;
@@ -303,14 +271,22 @@ int load_cloud(cloud_t* cloud, int idx)
 	char fname[1024];
 	snprintf(fname, 1024, "submap%06u.bin", idx);
 	FILE* f = fopen(fname, "rb");
-	assert(f);
+	if(!f)
+		return -1;
 
 	assert(fread(&cloud->m, sizeof cloud->m, 1, f) == 1);
 
 	alloc_cloud(cloud);
 
+	assert(fread(cloud->srcs, sizeof cloud->srcs[0], cloud->m.n_srcs, f) == cloud->m.n_srcs);
+	assert(fread(cloud->poses, sizeof cloud->poses[0], cloud->m.n_poses, f) == cloud->m.n_poses);
+	assert(fread(cloud->freevects, sizeof cloud->freevects[0], cloud->m.n_freevects, f) == cloud->m.n_freevects);
+
+
 	#ifdef COMPRESS_CLOUDS
-		uint8_t inbuf[ZLIB_CHUNK];
+		uint8_t* inbuf = malloc(ZLIB_CHUNK);
+		assert(inbuf);
+
 		z_stream strm;
 		strm.zalloc = Z_NULL;
 		strm.zfree = Z_NULL;
@@ -325,48 +301,8 @@ int load_cloud(cloud_t* cloud, int idx)
 		}
 
 		int got_bytes = 0;
-		int bytes_left = cloud->m.n_srcs*sizeof cloud->srcs[0];
+		int bytes_left = cloud->m.n_points*sizeof cloud->points[0];
 		int ret = 0;
-		do
-		{
-			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
-			if(ferror(f))
-			{
-				printf("ERROR reading submap input file\n");
-				abort();
-			}
-			if(strm.avail_in == 0)
-				break;
-
-			strm.next_in = inbuf;
-			do
-			{
-				strm.avail_out = bytes_left;
-				strm.next_out = (uint8_t*)cloud->srcs + got_bytes;
-
-				ret = inflate(&strm, Z_FINISH);
-				assert(ret != Z_STREAM_ERROR);
-
-				switch(ret)
-				{
-					case Z_NEED_DICT:
-					case Z_DATA_ERROR:
-					case Z_MEM_ERROR:
-					{
-						printf("ERROR: submap file decompression error, inflate() returned %d\n", ret);
-						abort();
-					}
-					default: break;
-				}
-
-				got_bytes += bytes_left - strm.avail_out;
-
-			} while(strm.avail_out == 0);
-		} while(ret != Z_STREAM_END);
-
-		got_bytes = 0;
-		bytes_left = cloud->m.n_points*sizeof cloud->points[0];
-		ret = 0;
 		do
 		{
 			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
@@ -384,7 +320,7 @@ int load_cloud(cloud_t* cloud, int idx)
 				strm.avail_out = bytes_left;
 				strm.next_out = (uint8_t*)cloud->points + got_bytes;
 
-				ret = inflate(&strm, Z_FINISH);
+				ret = inflate(&strm, Z_NO_FLUSH);
 				assert(ret != Z_STREAM_ERROR);
 
 				switch(ret)
@@ -403,54 +339,13 @@ int load_cloud(cloud_t* cloud, int idx)
 
 			} while(strm.avail_out == 0);
 		} while(ret != Z_STREAM_END);
-
-		got_bytes = 0;
-		bytes_left = cloud->m.n_poses*sizeof cloud->poses[0];
-		ret = 0;
-		do
-		{
-			strm.avail_in = fread(inbuf, 1, ZLIB_CHUNK, f);
-			if(ferror(f))
-			{
-				printf("ERROR reading submap input file\n");
-				abort();
-			}
-			if(strm.avail_in == 0)
-				break;
-
-			strm.next_in = inbuf;
-			do
-			{
-				strm.avail_out = bytes_left;
-				strm.next_out = (uint8_t*)cloud->poses + got_bytes;
-
-				ret = inflate(&strm, Z_FINISH);
-				assert(ret != Z_STREAM_ERROR);
-
-				switch(ret)
-				{
-					case Z_NEED_DICT:
-					case Z_DATA_ERROR:
-					case Z_MEM_ERROR:
-					{
-						printf("ERROR: submap file decompression error, inflate() returned %d\n", ret);
-						abort();
-					}
-					default: break;
-				}
-
-				got_bytes += bytes_left - strm.avail_out;
-
-			} while(strm.avail_out == 0);
-		} while(ret != Z_STREAM_END);
-
 
 		inflateEnd(&strm);
+
+		free(inbuf);
 	#else
 		// untested code
-		assert(fread(cloud->srcs, sizeof *cloud->srcs[0], cloud->m.n_srcs, f) == cloud->m.n_srcs);
-		assert(fread(cloud->points, sizeof *cloud->points[0], cloud->m.n_points, f) == cloud->m.n_points);
-		assert(fread(cloud->poses, sizeof *cloud->poses[0], cloud->m.n_poses, f) == cloud->m.n_poses);
+		assert(fread(cloud->points, sizeof cloud->points[0], cloud->m.n_points, f) == cloud->m.n_points);
 	#endif
 
 	fclose(f);
@@ -894,7 +789,7 @@ void cloud_copy_all_but_points(cloud_t* restrict out, cloud_t* restrict cloud)
 }
 
 
-void freespace_filter_cloud(cloud_t* restrict out, cloud_t* restrict cloud)
+void freespace_filter_cloud(cloud_t* out, cloud_t* cloud)
 {
 //	printf("filter_cloud ref (%d, %d, %d)\n", ref_x, ref_y, ref_z);
 	memset(flt_voxes, 0, sizeof(flt_voxes));
@@ -1325,6 +1220,10 @@ void tof_to_cloud(int is_narrow, int setnum, tof_slam_set_t* tss, int32_t ref_x,
 				int32_t x = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_cos_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_x;
 				int32_t y = (((int64_t)d * (int64_t)lut_cos_from_u16(comb_ver_ang) * (int64_t)lut_sin_from_u16(comb_hor_ang))>>(2*SIN_LUT_RESULT_SHIFT)) + global_sensor_y;
 				int32_t z = (((int64_t)d * (int64_t)lut_sin_from_u16(comb_ver_ang))>>SIN_LUT_RESULT_SHIFT) + global_sensor_z;
+
+
+				//if(z < 250 || z > 500)
+				//	continue;
 
 				if(is_narrow && z < 0)
 					continue;
